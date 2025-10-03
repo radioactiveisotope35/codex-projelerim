@@ -995,10 +995,26 @@
                 }
 
                 tempBox.setFromObject(enemy.mesh);
-                for (const wall of world.walls) {
-                    const wallBox = new THREE.Box3().setFromObject(wall);
-                    if (tempBox.intersectsBox(wallBox)) {
-                        enemy.mesh.position.addScaledVector(toPlayer.normalize().multiplyScalar(-1), delta * enemy.chaseSpeed);
+                const staticColliders = [...world.walls, ...world.obstacles];
+                for (const collider of staticColliders) {
+                    const colliderBox = new THREE.Box3().setFromObject(collider);
+                    if (tempBox.intersectsBox(colliderBox)) {
+                        const enemyPos = enemy.mesh.position;
+                        const closestPoint = colliderBox.clampPoint(enemyPos, new THREE.Vector3());
+                        const pushDir = new THREE.Vector3().subVectors(enemyPos, closestPoint);
+                        if (pushDir.lengthSq() === 0) {
+                            pushDir.subVectors(enemyPos, colliderBox.getCenter(new THREE.Vector3()));
+                        }
+                        if (pushDir.lengthSq() === 0 && toPlayer.lengthSq() > 0) {
+                            pushDir.copy(toPlayer).multiplyScalar(-1);
+                        }
+                        if (pushDir.lengthSq() === 0) {
+                            pushDir.set(Math.random() - 0.5, 0, Math.random() - 0.5);
+                        }
+                        pushDir.y = 0;
+                        pushDir.normalize();
+                        enemy.mesh.position.addScaledVector(pushDir, 0.3);
+                        tempBox.setFromObject(enemy.mesh);
                     }
                 }
             }
