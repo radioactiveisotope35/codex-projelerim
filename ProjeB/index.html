@@ -866,6 +866,7 @@
         }
 
         function updateBullets(delta) {
+            const staticColliders = [...world.walls, ...world.obstacles];
             for (let i = bullets.length - 1; i >= 0; i -= 1) {
                 const bullet = bullets[i];
                 bullet.mesh.position.addScaledVector(bullet.velocity, delta);
@@ -877,13 +878,19 @@
                     continue;
                 }
 
-                for (const wall of world.walls) {
-                    tempBox.setFromObject(wall);
+                let bulletRemoved = false;
+                for (const collider of staticColliders) {
+                    tempBox.setFromObject(collider);
                     if (tempBox.containsPoint(bullet.mesh.position)) {
                         scene.remove(bullet.mesh);
                         bullets.splice(i, 1);
+                        bulletRemoved = true;
                         break;
                     }
+                }
+
+                if (bulletRemoved) {
+                    continue;
                 }
 
                 for (let j = enemies.length - 1; j >= 0; j -= 1) {
@@ -926,13 +933,19 @@
                     continue;
                 }
 
-                for (const wall of world.walls) {
-                    tempBox.setFromObject(wall);
+                let enemyBulletRemoved = false;
+                for (const collider of staticColliders) {
+                    tempBox.setFromObject(collider);
                     if (tempBox.containsPoint(bullet.mesh.position)) {
                         scene.remove(bullet.mesh);
                         enemyBullets.splice(i, 1);
+                        enemyBulletRemoved = true;
                         break;
                     }
+                }
+
+                if (enemyBulletRemoved) {
+                    continue;
                 }
             }
         }
