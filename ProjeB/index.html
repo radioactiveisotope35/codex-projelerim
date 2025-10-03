@@ -573,10 +573,16 @@
             controls.lock();
         });
 
+        let initialLockHandled = false;
+
         controls.addEventListener('lock', () => {
             crosshairEl.style.display = 'block';
             document.getElementById('info').style.display = 'none';
             weaponGroup.visible = true;
+            if (!initialLockHandled && game.state === 'waiting') {
+                startNextRound();
+                initialLockHandled = true;
+            }
         });
 
         controls.addEventListener('unlock', () => {
@@ -625,7 +631,7 @@
             controls.getObject().rotation.set(0, 0, 0);
             camera.rotation.set(0, 0, 0);
 
-            startNextRound();
+            initialLockHandled = false;
         }
 
         function startNextRound() {
