@@ -627,6 +627,14 @@
         const enemyToPlayer = new THREE.Vector3();
         const enemyFlatDirection = new THREE.Vector3();
         const enemyTargetDirection = new THREE.Vector3();
+        const enemyDesiredVelocity = new THREE.Vector3();
+        const enemyFinalVelocity = new THREE.Vector3();
+        const enemyAvoidanceForce = new THREE.Vector3();
+        const enemyAvoidanceTemp = new THREE.Vector3();
+        const enemyClosestPoint = new THREE.Vector3();
+        const enemySlideDirection = new THREE.Vector3();
+        const enemyPushDirection = new THREE.Vector3();
+        const upVector = new THREE.Vector3(0, 1, 0);
 
         function resetGame() {
             enemies.forEach((enemy) => scene.remove(enemy.mesh));
@@ -754,7 +762,11 @@
                 visionCheckTimer: 0,
                 hasLineOfSight: false,
                 lastKnownPlayerPos: new THREE.Vector3(),
-                lastKnownPlayerPosValid: false
+                lastKnownPlayerPosValid: false,
+                velocity: new THREE.Vector3(),
+                desiredDirection: new THREE.Vector3(),
+                collisionCount: 0,
+                timeSinceLastCollision: 0
             };
 
             enemy.targetPoint.set(
@@ -1024,6 +1036,15 @@
                 enemyToPlayer.copy(playerPos).sub(enemy.mesh.position);
                 const distance = enemyToPlayer.length();
 
+                enemy.timeSinceLastCollision += delta;
+                if (enemy.timeSinceLastCollision > 2.5) {
+                    enemy.collisionCount = 0;
+                    enemy.timeSinceLastCollision = 2.5;
+                }
+
+                enemy.desiredDirection.set(0, 0, 0);
+                let desiredSpeed = 0;
+
                 enemy.fireCooldown -= delta;
                 enemy.patrolTimer -= delta;
                 enemy.visionCheckTimer -= delta;
@@ -1066,7 +1087,8 @@
                         enemyFlatDirection.normalize();
                         enemy.mesh.lookAt(enemy.mesh.position.clone().add(enemyFlatDirection));
                         if (distance > 6) {
-                            enemy.mesh.position.addScaledVector(enemyFlatDirection, delta * enemy.chaseSpeed);
+                            enemy.desiredDirection.copy(enemyFlatDirection);
+                            desiredSpeed = enemy.chaseSpeed;
                         }
                     }
 
@@ -1083,7 +1105,8 @@
 
                         if (lastDist > 1) {
                             enemyTargetDirection.normalize();
-                            enemy.mesh.position.addScaledVector(enemyTargetDirection, delta * enemy.chaseSpeed);
+                            enemy.desiredDirection.copy(enemyTargetDirection);
+                            desiredSpeed = enemy.chaseSpeed;
                             enemy.mesh.lookAt(enemy.mesh.position.clone().add(enemyTargetDirection));
                             movedTowardLastKnown = true;
                             enemy.state = 'search';
@@ -1109,36 +1132,129 @@
 
                         if (moveDist > 1) {
                             enemyTargetDirection.normalize();
-                            enemy.mesh.position.addScaledVector(enemyTargetDirection, delta * enemy.patrolSpeed);
+                            enemy.desiredDirection.copy(enemyTargetDirection);
+                            desiredSpeed = enemy.patrolSpeed;
                             enemy.mesh.lookAt(enemy.mesh.position.clone().add(enemyTargetDirection));
                         }
                     }
                 }
+
+                if (enemy.desiredDirection.lengthSq() > 0) {
+                    enemy.desiredDirection.normalize();
+                }
+
+                enemyAvoidanceForce.set(0, 0, 0);
+                const avoidanceRadius = 4;
+                for (const collider of staticColliders) {
+                    tempBox.setFromObject(collider);
+                    const closestPoint = tempBox.clampPoint(enemy.mesh.position, enemyClosestPoint);
+                    enemyAvoidanceTemp.subVectors(enemy.mesh.position, closestPoint);
+                    enemyAvoidanceTemp.y = 0;
+                    const avoidanceDistance = enemyAvoidanceTemp.length();
+                    if (avoidanceDistance > 0 && avoidanceDistance < avoidanceRadius) {
+                        enemyAvoidanceTemp.normalize();
+                        const weight = (avoidanceRadius - avoidanceDistance) / avoidanceRadius;
+                        enemyAvoidanceForce.addScaledVector(enemyAvoidanceTemp, weight);
+                    }
+                }
+
+                enemyDesiredVelocity.copy(enemy.desiredDirection).multiplyScalar(desiredSpeed);
+                enemyFinalVelocity.copy(enemyDesiredVelocity);
+                const hasAvoidance = enemyAvoidanceForce.lengthSq() > 0;
+                if (hasAvoidance) {
+                    enemyAvoidanceForce.normalize();
+                    const avoidanceSpeed = desiredSpeed > 0 ? desiredSpeed : enemy.patrolSpeed;
+                    enemyFinalVelocity.addScaledVector(enemyAvoidanceForce, avoidanceSpeed * 0.9);
+                }
+
+                const smoothing = THREE.MathUtils.clamp(delta * 5, 0, 1);
+                enemy.velocity.lerp(enemyFinalVelocity, smoothing);
+                enemy.velocity.y = 0;
+                const maxSpeed = desiredSpeed > 0 ? desiredSpeed : enemy.patrolSpeed * 0.75;
+                if (maxSpeed > 0 && enemy.velocity.lengthSq() > maxSpeed * maxSpeed) {
+                    enemy.velocity.setLength(maxSpeed);
+                }
+                if (desiredSpeed === 0 && !hasAvoidance) {
+                    enemy.velocity.multiplyScalar(0.85);
+                }
+
+                enemy.mesh.position.addScaledVector(enemy.velocity, delta);
 
                 tempBox.setFromObject(enemy.mesh);
                 for (const collider of staticColliders) {
                     enemyCollider.setFromObject(collider);
                     if (tempBox.intersectsBox(enemyCollider)) {
                         const enemyPos = enemy.mesh.position;
-                        const closestPoint = enemyCollider.clampPoint(enemyPos, new THREE.Vector3());
-                        const pushDir = new THREE.Vector3().subVectors(enemyPos, closestPoint);
-                        if (pushDir.lengthSq() === 0) {
-                            pushDir.subVectors(enemyPos, enemyCollider.getCenter(new THREE.Vector3()));
+                        const closestPoint = enemyCollider.clampPoint(enemyPos, enemyClosestPoint);
+                        enemyPushDirection.subVectors(enemyPos, closestPoint);
+                        if (enemyPushDirection.lengthSq() === 0) {
+                            enemyPushDirection.subVectors(enemyPos, enemyCollider.getCenter(enemyClosestPoint));
                         }
-                        if (pushDir.lengthSq() === 0 && enemyToPlayer.lengthSq() > 0) {
-                            pushDir.copy(enemyToPlayer);
-                            pushDir.y = 0;
-                            if (pushDir.lengthSq() > 0) {
-                                pushDir.normalize();
-                                pushDir.multiplyScalar(-1);
+                        if (enemyPushDirection.lengthSq() === 0 && enemyToPlayer.lengthSq() > 0) {
+                            enemyPushDirection.copy(enemyToPlayer);
+                            enemyPushDirection.y = 0;
+                            if (enemyPushDirection.lengthSq() > 0) {
+                                enemyPushDirection.normalize();
+                                enemyPushDirection.multiplyScalar(-1);
                             }
                         }
-                        if (pushDir.lengthSq() === 0) {
-                            pushDir.set(Math.random() - 0.5, 0, Math.random() - 0.5);
+                        if (enemyPushDirection.lengthSq() === 0) {
+                            enemyPushDirection.set(Math.random() - 0.5, 0, Math.random() - 0.5);
                         }
-                        pushDir.y = 0;
-                        pushDir.normalize();
-                        enemy.mesh.position.addScaledVector(pushDir, 0.3);
+                        enemyPushDirection.y = 0;
+                        enemyPushDirection.normalize();
+
+                        enemy.mesh.position.addScaledVector(enemyPushDirection, 0.3);
+
+                        const normalComponent = enemy.velocity.dot(enemyPushDirection);
+                        if (normalComponent < 0) {
+                            enemy.velocity.addScaledVector(enemyPushDirection, -normalComponent);
+                        }
+
+                        enemySlideDirection.crossVectors(upVector, enemyPushDirection);
+                        if (enemySlideDirection.lengthSq() === 0) {
+                            enemySlideDirection.set(-enemyPushDirection.z, 0, enemyPushDirection.x);
+                        }
+                        enemySlideDirection.normalize();
+
+                        const preferredDirection = enemy.desiredDirection.lengthSq() > 0 ? enemy.desiredDirection : enemy.velocity;
+                        if (preferredDirection.lengthSq() > 0 && enemySlideDirection.dot(preferredDirection) < 0) {
+                            enemySlideDirection.negate();
+                        }
+
+                        enemy.desiredDirection.copy(enemySlideDirection);
+
+                        if (enemy.state === 'patrol' || enemy.state === 'search') {
+                            enemy.targetPoint
+                                .copy(enemy.mesh.position)
+                                .addScaledVector(enemySlideDirection, THREE.MathUtils.randFloat(3, 6));
+                        }
+
+                        enemy.velocity.addScaledVector(enemySlideDirection, enemy.patrolSpeed * 0.5);
+
+                        enemy.collisionCount += 1;
+                        enemy.timeSinceLastCollision = 0;
+
+                        if (enemy.collisionCount >= 4) {
+                            enemy.targetPoint.set(
+                                THREE.MathUtils.randFloatSpread(world.size * 0.6),
+                                0,
+                                THREE.MathUtils.randFloatSpread(world.size * 0.6)
+                            );
+                            enemy.collisionCount = 0;
+                        }
+
+                        const postCollisionMaxSpeed =
+                            enemy.state === 'attack' || enemy.state === 'search'
+                                ? enemy.chaseSpeed
+                                : enemy.patrolSpeed;
+                        if (
+                            postCollisionMaxSpeed > 0 &&
+                            enemy.velocity.lengthSq() > postCollisionMaxSpeed * postCollisionMaxSpeed
+                        ) {
+                            enemy.velocity.setLength(postCollisionMaxSpeed);
+                        }
+
                         tempBox.setFromObject(enemy.mesh);
                     }
                 }
