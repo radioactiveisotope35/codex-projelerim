@@ -259,6 +259,7 @@
             score: 0,
             round: 0,
             state: 'waiting',
+            previousState: null,
             roundTimer: 0,
             enemiesRemaining: 0,
             spawnDelay: 0,
@@ -583,6 +584,10 @@
         let initialLockHandled = false;
 
         controls.addEventListener('lock', () => {
+            if (game.state === 'paused') {
+                game.state = game.previousState || 'inRound';
+            }
+            game.previousState = null;
             crosshairEl.style.display = 'block';
             document.getElementById('info').style.display = 'none';
             weaponGroup.visible = true;
@@ -593,6 +598,10 @@
         });
 
         controls.addEventListener('unlock', () => {
+            if (game.state !== 'paused') {
+                game.previousState = game.state;
+            }
+            game.state = 'paused';
             crosshairEl.style.display = 'none';
             document.getElementById('info').style.display = 'block';
             weaponGroup.visible = false;
@@ -1100,16 +1109,17 @@
         function animate() {
             requestAnimationFrame(animate);
             const delta = Math.min(0.05, clock.getDelta());
+            const isPaused = game.state === 'paused';
 
-            if (player.fireCooldown > 0) {
+            if (!isPaused && player.fireCooldown > 0) {
                 player.fireCooldown -= delta;
             }
 
-            if (shooting && player.fireCooldown <= 0) {
+            if (!isPaused && shooting && player.fireCooldown <= 0) {
                 shoot(false);
             }
 
-            if (game.state !== 'over') {
+            if (game.state !== 'over' && !isPaused) {
                 updatePlayer(delta);
                 updateEnemies(delta);
                 updateBullets(delta);
