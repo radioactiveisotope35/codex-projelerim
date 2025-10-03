@@ -246,7 +246,9 @@
             health: 100,
             ammo: 30,
             reserve: 90,
+            maxHealth: 100,
             maxAmmo: 30,
+            maxReserve: 180,
             fireCooldown: 0,
             reloadTime: 1.6,
             isReloading: false,
@@ -261,6 +263,11 @@
             enemiesRemaining: 0,
             spawnDelay: 0,
             spawnQueue: 0
+        };
+
+        const roundRewards = {
+            health: 25,
+            reserve: 30
         };
 
         const bullets = [];
@@ -608,9 +615,9 @@
             enemyBullets.length = 0;
 
             player.velocity.set(0, 0, 0);
-            player.health = 100;
-            player.ammo = 30;
-            player.reserve = 90;
+            player.health = player.maxHealth;
+            player.ammo = player.maxAmmo;
+            player.reserve = Math.min(90, player.maxReserve);
             player.fireCooldown = 0;
             player.isReloading = false;
             player.alive = true;
@@ -635,6 +642,28 @@
         }
 
         function startNextRound() {
+            let healthGained = 0;
+            let ammoGained = 0;
+            let reserveGained = 0;
+
+            if (player.alive) {
+                const previousHealth = player.health;
+                const previousAmmo = player.ammo;
+                const previousReserve = player.reserve;
+
+                player.health = Math.min(player.maxHealth, player.health + roundRewards.health);
+                player.ammo = player.maxAmmo;
+                player.reserve = Math.min(player.maxReserve, player.reserve + roundRewards.reserve);
+
+                healthGained = player.health - previousHealth;
+                ammoGained = player.ammo - previousAmmo;
+                reserveGained = player.reserve - previousReserve;
+
+                const healthRatio = player.health / player.maxHealth;
+                healthBarEl.style.width = `${healthRatio * 100}%`;
+                updateAmmoDisplay();
+            }
+
             game.round += 1;
             roundEl.textContent = `Round: ${game.round}`;
             const enemiesToSpawn = 4 + Math.floor(game.round * 1.5);
@@ -644,6 +673,17 @@
             game.spawnDelay = 0;
             game.state = 'spawning';
             showRoundBanner(`ROUND ${game.round}`);
+
+            const rewardParts = [];
+            if (healthGained > 0) rewardParts.push(`+${healthGained} CAN`);
+            if (ammoGained > 0) rewardParts.push(`+${ammoGained} MERMİ`);
+            if (reserveGained > 0) rewardParts.push(`+${reserveGained} YEDEK`);
+
+            if (rewardParts.length) {
+                setTimeout(() => {
+                    showRoundBanner(`RAUNT ÖDÜLÜ: ${rewardParts.join(' • ')}`);
+                }, 2000);
+            }
         }
 
         function showRoundBanner(text) {
@@ -763,7 +803,7 @@
         function damagePlayer(amount) {
             if (!player.alive) return;
             player.health = Math.max(0, player.health - amount);
-            const healthRatio = player.health / 100;
+            const healthRatio = player.health / player.maxHealth;
             healthBarEl.style.width = `${healthRatio * 100}%`;
             overlayEl.style.background = 'rgba(255, 0, 0, 0.35)';
             setTimeout(() => {
