@@ -235,6 +235,13 @@
             enemyPatrol: 3.5
         };
 
+        const enemyVisionConfig = {
+            detectionRange: 45,
+            eyeHeight: 1.3,
+            checkInterval: 0.35,
+            occlusionTolerance: 0.25
+        };
+
         const player = {
             velocity: new THREE.Vector3(),
             speed: movementConfig.playerWalk,
@@ -614,6 +621,12 @@
         const tempBox = new THREE.Box3();
         const enemyCollider = new THREE.Box3();
         const muzzleWorldPosition = new THREE.Vector3();
+        const enemyRaycaster = new THREE.Raycaster();
+        const enemyRayOrigin = new THREE.Vector3();
+        const enemyRayDirection = new THREE.Vector3();
+        const enemyToPlayer = new THREE.Vector3();
+        const enemyFlatDirection = new THREE.Vector3();
+        const enemyTargetDirection = new THREE.Vector3();
 
         function resetGame() {
             enemies.forEach((enemy) => scene.remove(enemy.mesh));
@@ -737,7 +750,11 @@
                 targetPoint: new THREE.Vector3(),
                 state: 'search',
                 chaseSpeed: movementConfig.enemyChase,
-                patrolSpeed: movementConfig.enemyPatrol
+                patrolSpeed: movementConfig.enemyPatrol,
+                visionCheckTimer: 0,
+                hasLineOfSight: false,
+                lastKnownPlayerPos: new THREE.Vector3(),
+                lastKnownPlayerPosValid: false
             };
 
             enemy.targetPoint.set(
@@ -1000,62 +1017,121 @@
         }
 
         function updateEnemies(delta) {
+            const staticColliders = [...world.walls, ...world.obstacles];
             for (const enemy of enemies) {
                 const playerPos = controls.getObject().position;
-                const toPlayer = new THREE.Vector3().subVectors(playerPos, enemy.mesh.position);
-                const distance = toPlayer.length();
+
+                enemyToPlayer.copy(playerPos).sub(enemy.mesh.position);
+                const distance = enemyToPlayer.length();
 
                 enemy.fireCooldown -= delta;
                 enemy.patrolTimer -= delta;
+                enemy.visionCheckTimer -= delta;
 
-                if (distance < 45) {
+                let hasLineOfSight = false;
+                if (distance < enemyVisionConfig.detectionRange) {
+                    if (enemy.visionCheckTimer <= 0) {
+                        enemy.visionCheckTimer = enemyVisionConfig.checkInterval;
+                        enemyRayOrigin.copy(enemy.mesh.position);
+                        enemyRayOrigin.y += enemyVisionConfig.eyeHeight;
+                        enemyRayDirection.copy(enemyToPlayer);
+
+                        if (enemyRayDirection.lengthSq() > 0) {
+                            enemyRayDirection.normalize();
+                            enemyRaycaster.set(enemyRayOrigin, enemyRayDirection);
+                            enemyRaycaster.far = distance;
+                            const intersections = enemyRaycaster.intersectObjects(staticColliders, true);
+                            const maxDistance = Math.max(distance - enemyVisionConfig.occlusionTolerance, 0);
+                            const blocked = intersections.length > 0 && intersections[0].distance < maxDistance;
+                            enemy.hasLineOfSight = !blocked;
+                        } else {
+                            enemy.hasLineOfSight = true;
+                        }
+                    }
+                    hasLineOfSight = enemy.hasLineOfSight;
+                } else {
+                    enemy.hasLineOfSight = false;
+                    enemy.lastKnownPlayerPosValid = false;
+                }
+
+                if (hasLineOfSight) {
                     enemy.state = 'attack';
-                    toPlayer.y = 0;
-                    toPlayer.normalize();
-                    enemy.mesh.lookAt(new THREE.Vector3().copy(enemy.mesh.position).add(toPlayer));
+                    enemy.lastKnownPlayerPos.copy(playerPos);
+                    enemy.lastKnownPlayerPosValid = true;
 
-                    if (distance > 6) {
-                        enemy.mesh.position.addScaledVector(toPlayer, delta * enemy.chaseSpeed);
+                    enemyFlatDirection.copy(enemyToPlayer);
+                    enemyFlatDirection.y = 0;
+
+                    if (enemyFlatDirection.lengthSq() > 0) {
+                        enemyFlatDirection.normalize();
+                        enemy.mesh.lookAt(enemy.mesh.position.clone().add(enemyFlatDirection));
+                        if (distance > 6) {
+                            enemy.mesh.position.addScaledVector(enemyFlatDirection, delta * enemy.chaseSpeed);
+                        }
                     }
 
                     if (enemy.fireCooldown <= 0) {
                         shoot(true, enemy);
                     }
                 } else {
-                    if (enemy.state !== 'patrol' || enemy.patrolTimer <= 0) {
-                        enemy.state = 'patrol';
-                        enemy.targetPoint.set(
-                            THREE.MathUtils.randFloatSpread(world.size * 0.6),
-                            0,
-                            THREE.MathUtils.randFloatSpread(world.size * 0.6)
-                        );
-                        enemy.patrolTimer = THREE.MathUtils.randFloat(4, 7);
+                    let movedTowardLastKnown = false;
+
+                    if (enemy.lastKnownPlayerPosValid) {
+                        enemyTargetDirection.copy(enemy.lastKnownPlayerPos).sub(enemy.mesh.position);
+                        enemyTargetDirection.y = 0;
+                        const lastDist = enemyTargetDirection.length();
+
+                        if (lastDist > 1) {
+                            enemyTargetDirection.normalize();
+                            enemy.mesh.position.addScaledVector(enemyTargetDirection, delta * enemy.chaseSpeed);
+                            enemy.mesh.lookAt(enemy.mesh.position.clone().add(enemyTargetDirection));
+                            movedTowardLastKnown = true;
+                            enemy.state = 'search';
+                        } else {
+                            enemy.lastKnownPlayerPosValid = false;
+                        }
                     }
 
-                    const moveDir = new THREE.Vector3().subVectors(enemy.targetPoint, enemy.mesh.position);
-                    moveDir.y = 0;
-                    const moveDist = moveDir.length();
+                    if (!movedTowardLastKnown) {
+                        if (enemy.state !== 'patrol' || enemy.patrolTimer <= 0) {
+                            enemy.state = 'patrol';
+                            enemy.targetPoint.set(
+                                THREE.MathUtils.randFloatSpread(world.size * 0.6),
+                                0,
+                                THREE.MathUtils.randFloatSpread(world.size * 0.6)
+                            );
+                            enemy.patrolTimer = THREE.MathUtils.randFloat(4, 7);
+                        }
 
-                    if (moveDist > 1) {
-                        moveDir.normalize();
-                        enemy.mesh.position.addScaledVector(moveDir, delta * enemy.patrolSpeed);
-                        enemy.mesh.lookAt(enemy.mesh.position.clone().add(moveDir));
+                        enemyTargetDirection.copy(enemy.targetPoint).sub(enemy.mesh.position);
+                        enemyTargetDirection.y = 0;
+                        const moveDist = enemyTargetDirection.length();
+
+                        if (moveDist > 1) {
+                            enemyTargetDirection.normalize();
+                            enemy.mesh.position.addScaledVector(enemyTargetDirection, delta * enemy.patrolSpeed);
+                            enemy.mesh.lookAt(enemy.mesh.position.clone().add(enemyTargetDirection));
+                        }
                     }
                 }
 
                 tempBox.setFromObject(enemy.mesh);
-                const staticColliders = [...world.walls, ...world.obstacles];
                 for (const collider of staticColliders) {
-                    const colliderBox = new THREE.Box3().setFromObject(collider);
-                    if (tempBox.intersectsBox(colliderBox)) {
+                    enemyCollider.setFromObject(collider);
+                    if (tempBox.intersectsBox(enemyCollider)) {
                         const enemyPos = enemy.mesh.position;
-                        const closestPoint = colliderBox.clampPoint(enemyPos, new THREE.Vector3());
+                        const closestPoint = enemyCollider.clampPoint(enemyPos, new THREE.Vector3());
                         const pushDir = new THREE.Vector3().subVectors(enemyPos, closestPoint);
                         if (pushDir.lengthSq() === 0) {
-                            pushDir.subVectors(enemyPos, colliderBox.getCenter(new THREE.Vector3()));
+                            pushDir.subVectors(enemyPos, enemyCollider.getCenter(new THREE.Vector3()));
                         }
-                        if (pushDir.lengthSq() === 0 && toPlayer.lengthSq() > 0) {
-                            pushDir.copy(toPlayer).multiplyScalar(-1);
+                        if (pushDir.lengthSq() === 0 && enemyToPlayer.lengthSq() > 0) {
+                            pushDir.copy(enemyToPlayer);
+                            pushDir.y = 0;
+                            if (pushDir.lengthSq() > 0) {
+                                pushDir.normalize();
+                                pushDir.multiplyScalar(-1);
+                            }
                         }
                         if (pushDir.lengthSq() === 0) {
                             pushDir.set(Math.random() - 0.5, 0, Math.random() - 0.5);
