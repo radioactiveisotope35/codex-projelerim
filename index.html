@@ -595,9 +595,25 @@
         let shooting = false;
 
         const playerCollider = new THREE.Box3();
+        const playerColliderSize = new THREE.Vector3(1, player.height, 1);
         const tempBox = new THREE.Box3();
-        const enemyCollider = new THREE.Box3();
         const muzzleWorldPosition = new THREE.Vector3();
+        const bulletRaycaster = new THREE.Raycaster();
+        const bulletDisplacement = new THREE.Vector3();
+        const bulletDirection = new THREE.Vector3();
+        const bulletPath = new THREE.Line3();
+        const bulletHitPoint = new THREE.Vector3();
+
+        function getEnemyFromObject(object) {
+            let current = object;
+            while (current) {
+                if (current.userData && current.userData.enemy) {
+                    return current.userData.enemy;
+                }
+                current = current.parent;
+            }
+            return null;
+        }
 
         function resetGame() {
             enemies.forEach((enemy) => scene.remove(enemy.mesh));
@@ -693,6 +709,8 @@
                 repositionDirection: new THREE.Vector3()
             };
 
+            enemyMesh.userData.enemy = enemy;
+
             enemy.targetPoint.set(
                 THREE.MathUtils.randFloatSpread(world.size * 0.6),
                 0,
@@ -787,6 +805,7 @@
         function removeEnemy(enemy, giveScore = true) {
             const index = enemies.indexOf(enemy);
             if (index !== -1) {
+                enemy.mesh.userData.enemy = undefined;
                 scene.remove(enemy.mesh);
                 enemies.splice(index, 1);
                 if (giveScore) {
@@ -869,9 +888,13 @@
 
         function updateBullets(delta) {
             const staticColliders = [...world.walls, ...world.obstacles];
+
             for (let i = bullets.length - 1; i >= 0; i -= 1) {
                 const bullet = bullets[i];
-                bullet.mesh.position.addScaledVector(bullet.velocity, delta);
+                const oldPosition = bullet.mesh.position.clone();
+                bulletDisplacement.copy(bullet.velocity).multiplyScalar(delta);
+                const newPosition = oldPosition.clone().add(bulletDisplacement);
+
                 bullet.life -= delta;
 
                 if (bullet.life <= 0) {
@@ -880,45 +903,66 @@
                     continue;
                 }
 
-                let bulletRemoved = false;
-                for (const collider of staticColliders) {
-                    tempBox.setFromObject(collider);
-                    if (tempBox.containsPoint(bullet.mesh.position)) {
-                        scene.remove(bullet.mesh);
-                        bullets.splice(i, 1);
-                        bulletRemoved = true;
-                        break;
+                const travelDistance = bulletDisplacement.length();
+
+                if (travelDistance > 0) {
+                    bulletDirection.copy(bulletDisplacement).normalize();
+                    bulletRaycaster.set(oldPosition, bulletDirection);
+                    bulletRaycaster.far = travelDistance;
+
+                    let closestHit = null;
+
+                    const staticHits = bulletRaycaster.intersectObjects(staticColliders, true);
+                    if (staticHits.length > 0) {
+                        closestHit = { type: 'static', distance: staticHits[0].distance };
                     }
-                }
 
-                if (bulletRemoved) {
-                    continue;
-                }
-
-                for (let j = enemies.length - 1; j >= 0; j -= 1) {
-                    const enemy = enemies[j];
-                    enemyCollider.setFromObject(enemy.mesh);
-                    if (enemyCollider.containsPoint(bullet.mesh.position)) {
-                        scene.remove(bullet.mesh);
-                        bullets.splice(i, 1);
-                        enemy.health -= 35;
-                        const originalEmissive = enemy.mesh.material.emissive.clone();
-                        enemy.mesh.material.emissive.set(0xff3333);
-                        setTimeout(() => {
-                            enemy.mesh.material.emissive.copy(originalEmissive);
-                        }, 120);
-
-                        if (enemy.health <= 0) {
-                            removeEnemy(enemy);
+                    if (enemies.length > 0) {
+                        const enemyMeshes = enemies.map((enemy) => enemy.mesh);
+                        const enemyHits = bulletRaycaster.intersectObjects(enemyMeshes, true);
+                        if (enemyHits.length > 0) {
+                            const enemyHit = enemyHits[0];
+                            const hitEnemy = getEnemyFromObject(enemyHit.object);
+                            if (hitEnemy && (!closestHit || enemyHit.distance < closestHit.distance)) {
+                                closestHit = { type: 'enemy', distance: enemyHit.distance, enemy: hitEnemy };
+                            }
                         }
-                        break;
+                    }
+
+                    if (closestHit) {
+                        scene.remove(bullet.mesh);
+                        bullets.splice(i, 1);
+
+                        if (closestHit.type === 'enemy') {
+                            const enemy = closestHit.enemy;
+                            enemy.health -= 35;
+                            const originalEmissive = enemy.mesh.material.emissive.clone();
+                            enemy.mesh.material.emissive.set(0xff3333);
+                            setTimeout(() => {
+                                enemy.mesh.material.emissive.copy(originalEmissive);
+                            }, 120);
+
+                            if (enemy.health <= 0) {
+                                removeEnemy(enemy);
+                            }
+                        }
+
+                        continue;
                     }
                 }
+
+                bullet.mesh.position.copy(newPosition);
             }
+
+            playerColliderSize.y = player.height;
+            playerCollider.setFromCenterAndSize(controls.getObject().position.clone(), playerColliderSize);
 
             for (let i = enemyBullets.length - 1; i >= 0; i -= 1) {
                 const bullet = enemyBullets[i];
-                bullet.mesh.position.addScaledVector(bullet.velocity, delta);
+                const oldPosition = bullet.mesh.position.clone();
+                bulletDisplacement.copy(bullet.velocity).multiplyScalar(delta);
+                const newPosition = oldPosition.clone().add(bulletDisplacement);
+
                 bullet.life -= delta;
 
                 if (bullet.life <= 0) {
@@ -927,28 +971,46 @@
                     continue;
                 }
 
-                playerCollider.setFromCenterAndSize(controls.getObject().position.clone(), new THREE.Vector3(1, player.height, 1));
-                if (playerCollider.containsPoint(bullet.mesh.position)) {
-                    damagePlayer(15);
-                    scene.remove(bullet.mesh);
-                    enemyBullets.splice(i, 1);
-                    continue;
-                }
+                const travelDistance = bulletDisplacement.length();
 
-                let enemyBulletRemoved = false;
-                for (const collider of staticColliders) {
-                    tempBox.setFromObject(collider);
-                    if (tempBox.containsPoint(bullet.mesh.position)) {
+                if (travelDistance > 0) {
+                    bulletDirection.copy(bulletDisplacement).normalize();
+                    bulletRaycaster.set(oldPosition, bulletDirection);
+                    bulletRaycaster.far = travelDistance;
+
+                    const staticHits = bulletRaycaster.intersectObjects(staticColliders, true);
+                    let staticHitDistance = Infinity;
+                    let hasStaticHit = false;
+
+                    if (staticHits.length > 0) {
+                        staticHitDistance = staticHits[0].distance;
+                        hasStaticHit = true;
+                    }
+
+                    bulletPath.set(oldPosition, newPosition);
+                    const playerIntersection = playerCollider.intersectLine(bulletPath, bulletHitPoint);
+                    let playerHitDistance = Infinity;
+                    const hitPlayer = !!playerIntersection;
+
+                    if (hitPlayer) {
+                        playerHitDistance = bulletHitPoint.distanceTo(oldPosition);
+                    }
+
+                    if (hitPlayer && (!hasStaticHit || playerHitDistance <= staticHitDistance)) {
+                        damagePlayer(15);
                         scene.remove(bullet.mesh);
                         enemyBullets.splice(i, 1);
-                        enemyBulletRemoved = true;
-                        break;
+                        continue;
+                    }
+
+                    if (hasStaticHit) {
+                        scene.remove(bullet.mesh);
+                        enemyBullets.splice(i, 1);
+                        continue;
                     }
                 }
 
-                if (enemyBulletRemoved) {
-                    continue;
-                }
+                bullet.mesh.position.copy(newPosition);
             }
         }
 
