@@ -281,6 +281,10 @@
         const bullets = [];
         const enemyBullets = [];
         const enemies = [];
+        let nextRoundTimeoutId = null;
+        let roundRewardTimeoutId = null;
+        let roundBannerFadeTimeoutId = null;
+        let roundBannerHideTimeoutId = null;
         const bulletSpeed = 240;
         const enemyBulletSpeed = 120;
 
@@ -645,7 +649,33 @@
         const enemyPushDirection = new THREE.Vector3();
         const upVector = new THREE.Vector3(0, 1, 0);
 
+        function clearRoundBannerTimers() {
+            if (roundBannerFadeTimeoutId !== null) {
+                clearTimeout(roundBannerFadeTimeoutId);
+                roundBannerFadeTimeoutId = null;
+            }
+            if (roundBannerHideTimeoutId !== null) {
+                clearTimeout(roundBannerHideTimeoutId);
+                roundBannerHideTimeoutId = null;
+            }
+        }
+
         function resetGame() {
+            if (nextRoundTimeoutId !== null) {
+                clearTimeout(nextRoundTimeoutId);
+                nextRoundTimeoutId = null;
+            }
+
+            if (roundRewardTimeoutId !== null) {
+                clearTimeout(roundRewardTimeoutId);
+                roundRewardTimeoutId = null;
+            }
+
+            clearRoundBannerTimers();
+            roundBannerEl.style.display = 'none';
+            roundBannerEl.style.opacity = '0';
+            roundBannerEl.style.transition = '';
+
             enemies.forEach((enemy) => scene.remove(enemy.mesh));
             bullets.forEach((bullet) => scene.remove(bullet.mesh));
             enemyBullets.forEach((bullet) => scene.remove(bullet.mesh));
@@ -681,6 +711,18 @@
         }
 
         function startNextRound() {
+            if (!player.alive || game.state === 'over') {
+                return;
+            }
+
+            nextRoundTimeoutId = null;
+            const previousRound = game.round;
+
+            if (roundRewardTimeoutId !== null) {
+                clearTimeout(roundRewardTimeoutId);
+                roundRewardTimeoutId = null;
+            }
+
             let healthGained = 0;
             let ammoGained = 0;
             let reserveGained = 0;
@@ -690,9 +732,12 @@
                 const previousAmmo = player.ammo;
                 const previousReserve = player.reserve;
 
-                player.health = Math.min(player.maxHealth, player.health + roundRewards.health);
+                if (previousRound >= 1) {
+                    player.health = Math.min(player.maxHealth, player.health + roundRewards.health);
+                    player.reserve = Math.min(player.maxReserve, player.reserve + roundRewards.reserve);
+                }
+
                 player.ammo = player.maxAmmo;
-                player.reserve = Math.min(player.maxReserve, player.reserve + roundRewards.reserve);
 
                 healthGained = player.health - previousHealth;
                 ammoGained = player.ammo - previousAmmo;
@@ -713,28 +758,39 @@
             game.state = 'spawning';
             showRoundBanner(`ROUND ${game.round}`);
 
-            const rewardParts = [];
-            if (healthGained > 0) rewardParts.push(`+${healthGained} CAN`);
-            if (ammoGained > 0) rewardParts.push(`+${ammoGained} MERMİ`);
-            if (reserveGained > 0) rewardParts.push(`+${reserveGained} YEDEK`);
+            if (previousRound >= 1) {
+                const rewardParts = [];
+                if (healthGained > 0) rewardParts.push(`+${healthGained} CAN`);
+                if (ammoGained > 0) rewardParts.push(`+${ammoGained} MERMİ`);
+                if (reserveGained > 0) rewardParts.push(`+${reserveGained} YEDEK`);
 
-            if (rewardParts.length) {
-                setTimeout(() => {
-                    showRoundBanner(`RAUNT ÖDÜLÜ: ${rewardParts.join(' • ')}`);
-                }, 2000);
+                if (rewardParts.length) {
+                    roundRewardTimeoutId = setTimeout(() => {
+                        if (!player.alive || game.state === 'over') {
+                            roundRewardTimeoutId = null;
+                            return;
+                        }
+                        showRoundBanner(`RAUNT ÖDÜLÜ: ${rewardParts.join(' • ')}`);
+                        roundRewardTimeoutId = null;
+                    }, 2000);
+                }
             }
         }
 
         function showRoundBanner(text) {
+            clearRoundBannerTimers();
             roundBannerEl.textContent = text;
             roundBannerEl.style.display = 'block';
+            roundBannerEl.style.transition = 'none';
             roundBannerEl.style.opacity = '1';
-            setTimeout(() => {
+            roundBannerFadeTimeoutId = setTimeout(() => {
+                roundBannerFadeTimeoutId = null;
                 roundBannerEl.style.transition = 'opacity 0.6s ease';
                 roundBannerEl.style.opacity = '0';
-                setTimeout(() => {
+                roundBannerHideTimeoutId = setTimeout(() => {
                     roundBannerEl.style.display = 'none';
                     roundBannerEl.style.transition = '';
+                    roundBannerHideTimeoutId = null;
                 }, 600);
             }, 1200);
         }
@@ -867,6 +923,15 @@
         function handleGameOver() {
             player.alive = false;
             game.state = 'over';
+            if (nextRoundTimeoutId !== null) {
+                clearTimeout(nextRoundTimeoutId);
+                nextRoundTimeoutId = null;
+            }
+            if (roundRewardTimeoutId !== null) {
+                clearTimeout(roundRewardTimeoutId);
+                roundRewardTimeoutId = null;
+            }
+            clearRoundBannerTimers();
             gameOverEl.style.display = 'grid';
             controls.unlock();
         }
@@ -882,8 +947,23 @@
                 }
                 game.enemiesRemaining -= 1;
                 enemiesEl.textContent = `Hayatta Kalan Düşman: ${Math.max(game.enemiesRemaining, 0)}`;
-                if (game.enemiesRemaining <= 0 && game.spawnQueue <= 0 && enemies.length === 0) {
-                    setTimeout(startNextRound, 2000);
+                if (
+                    game.enemiesRemaining <= 0 &&
+                    game.spawnQueue <= 0 &&
+                    enemies.length === 0 &&
+                    player.alive &&
+                    game.state !== 'over'
+                ) {
+                    if (nextRoundTimeoutId !== null) {
+                        clearTimeout(nextRoundTimeoutId);
+                    }
+                    nextRoundTimeoutId = setTimeout(() => {
+                        if (!player.alive || game.state === 'over') {
+                            nextRoundTimeoutId = null;
+                            return;
+                        }
+                        startNextRound();
+                    }, 2000);
                 }
             }
         }
