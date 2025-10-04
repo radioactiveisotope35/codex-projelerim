@@ -281,6 +281,7 @@
         const bullets = [];
         const enemyBullets = [];
         const enemies = [];
+        let nextRoundTimeoutId = null;
         const bulletSpeed = 240;
         const enemyBulletSpeed = 120;
 
@@ -646,6 +647,11 @@
         const upVector = new THREE.Vector3(0, 1, 0);
 
         function resetGame() {
+            if (nextRoundTimeoutId !== null) {
+                clearTimeout(nextRoundTimeoutId);
+                nextRoundTimeoutId = null;
+            }
+
             enemies.forEach((enemy) => scene.remove(enemy.mesh));
             bullets.forEach((bullet) => scene.remove(bullet.mesh));
             enemyBullets.forEach((bullet) => scene.remove(bullet.mesh));
@@ -681,6 +687,11 @@
         }
 
         function startNextRound() {
+            if (!player.alive || game.state === 'over') {
+                return;
+            }
+
+            nextRoundTimeoutId = null;
             let healthGained = 0;
             let ammoGained = 0;
             let reserveGained = 0;
@@ -867,6 +878,10 @@
         function handleGameOver() {
             player.alive = false;
             game.state = 'over';
+            if (nextRoundTimeoutId !== null) {
+                clearTimeout(nextRoundTimeoutId);
+                nextRoundTimeoutId = null;
+            }
             gameOverEl.style.display = 'grid';
             controls.unlock();
         }
@@ -882,8 +897,23 @@
                 }
                 game.enemiesRemaining -= 1;
                 enemiesEl.textContent = `Hayatta Kalan Düşman: ${Math.max(game.enemiesRemaining, 0)}`;
-                if (game.enemiesRemaining <= 0 && game.spawnQueue <= 0 && enemies.length === 0) {
-                    setTimeout(startNextRound, 2000);
+                if (
+                    game.enemiesRemaining <= 0 &&
+                    game.spawnQueue <= 0 &&
+                    enemies.length === 0 &&
+                    player.alive &&
+                    game.state !== 'over'
+                ) {
+                    if (nextRoundTimeoutId !== null) {
+                        clearTimeout(nextRoundTimeoutId);
+                    }
+                    nextRoundTimeoutId = setTimeout(() => {
+                        if (!player.alive || game.state === 'over') {
+                            nextRoundTimeoutId = null;
+                            return;
+                        }
+                        startNextRound();
+                    }, 2000);
                 }
             }
         }
