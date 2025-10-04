@@ -624,6 +624,15 @@
         const enemyRaycaster = new THREE.Raycaster();
         const enemyRayOrigin = new THREE.Vector3();
         const enemyRayDirection = new THREE.Vector3();
+        const bulletRaycaster = new THREE.Raycaster();
+        const bulletSegment = new THREE.Line3();
+        const bulletNextPosition = new THREE.Vector3();
+        const bulletTravelVector = new THREE.Vector3();
+        const bulletRayDirection = new THREE.Vector3();
+        const bulletClosestHitPoint = new THREE.Vector3();
+        const bulletIntersectionTemp = new THREE.Vector3();
+        const playerColliderCenter = new THREE.Vector3();
+        const playerColliderSize = new THREE.Vector3(1, player.height, 1);
         const enemyToPlayer = new THREE.Vector3();
         const enemyFlatDirection = new THREE.Vector3();
         const enemyTargetDirection = new THREE.Vector3();
@@ -794,7 +803,8 @@
                 enemyBullets.push({
                     mesh: bullet,
                     velocity: direction.multiplyScalar(enemyBulletSpeed),
-                    life: 2.5
+                    life: 2.5,
+                    prevPosition: bullet.position.clone()
                 });
                 enemy.fireCooldown = THREE.MathUtils.randFloat(1.2, 2.2);
             } else {
@@ -819,7 +829,8 @@
                 bullets.push({
                     mesh: bullet,
                     velocity: direction.multiplyScalar(bulletSpeed),
-                    life: 2.2
+                    life: 2.2,
+                    prevPosition: bullet.position.clone()
                 });
 
                 player.ammo -= 1;
@@ -945,9 +956,17 @@
 
         function updateBullets(delta) {
             const staticColliders = [...world.walls, ...world.obstacles];
+            const enemyMeshMap = new Map();
+            const enemyMeshes = [];
+            for (const enemy of enemies) {
+                enemyMeshMap.set(enemy.mesh, enemy);
+                enemyMeshes.push(enemy.mesh);
+            }
+
             for (let i = bullets.length - 1; i >= 0; i -= 1) {
                 const bullet = bullets[i];
-                bullet.mesh.position.addScaledVector(bullet.velocity, delta);
+                bullet.prevPosition.copy(bullet.mesh.position);
+                bulletNextPosition.copy(bullet.mesh.position).addScaledVector(bullet.velocity, delta);
                 bullet.life -= delta;
 
                 if (bullet.life <= 0) {
@@ -956,45 +975,76 @@
                     continue;
                 }
 
-                let bulletRemoved = false;
-                for (const collider of staticColliders) {
-                    tempBox.setFromObject(collider);
-                    if (tempBox.containsPoint(bullet.mesh.position)) {
-                        scene.remove(bullet.mesh);
-                        bullets.splice(i, 1);
-                        bulletRemoved = true;
-                        break;
+                bulletTravelVector.subVectors(bulletNextPosition, bullet.prevPosition);
+                const travelDistance = bulletTravelVector.length();
+
+                let hitType = null;
+                let hitEnemy = null;
+                let closestDistance = Infinity;
+
+                if (travelDistance > 1e-6) {
+                    bulletRayDirection.copy(bulletTravelVector).divideScalar(travelDistance);
+                    bulletRaycaster.set(bullet.prevPosition, bulletRayDirection);
+                    bulletRaycaster.far = travelDistance + 1e-6;
+
+                    const staticHit = bulletRaycaster.intersectObjects(staticColliders, false)[0];
+                    if (staticHit) {
+                        closestDistance = staticHit.distance;
+                        hitType = 'static';
+                        bulletClosestHitPoint.copy(staticHit.point);
                     }
-                }
 
-                if (bulletRemoved) {
-                    continue;
-                }
-
-                for (let j = enemies.length - 1; j >= 0; j -= 1) {
-                    const enemy = enemies[j];
-                    enemyCollider.setFromObject(enemy.mesh);
-                    if (enemyCollider.containsPoint(bullet.mesh.position)) {
-                        scene.remove(bullet.mesh);
-                        bullets.splice(i, 1);
-                        enemy.health -= 35;
-                        const originalEmissive = enemy.mesh.material.emissive.clone();
-                        enemy.mesh.material.emissive.set(0xff3333);
-                        setTimeout(() => {
-                            enemy.mesh.material.emissive.copy(originalEmissive);
-                        }, 120);
-
-                        if (enemy.health <= 0) {
-                            removeEnemy(enemy);
+                    if (enemyMeshes.length > 0) {
+                        const enemyHit = bulletRaycaster.intersectObjects(enemyMeshes, false)[0];
+                        if (enemyHit && enemyHit.distance < closestDistance) {
+                            closestDistance = enemyHit.distance;
+                            hitType = 'enemy';
+                            hitEnemy = enemyMeshMap.get(enemyHit.object);
+                            bulletClosestHitPoint.copy(enemyHit.point);
                         }
-                        break;
                     }
+                }
+
+                if (hitType) {
+                    bullet.mesh.position.copy(bulletClosestHitPoint);
+
+                    if (hitType === 'static') {
+                        scene.remove(bullet.mesh);
+                        bullets.splice(i, 1);
+                        continue;
+                    }
+
+                    if (hitType === 'enemy') {
+                        scene.remove(bullet.mesh);
+                        bullets.splice(i, 1);
+
+                        if (hitEnemy) {
+                            hitEnemy.health -= 35;
+                            const originalEmissive = hitEnemy.mesh.material.emissive.clone();
+                            hitEnemy.mesh.material.emissive.set(0xff3333);
+                            setTimeout(() => {
+                                hitEnemy.mesh.material.emissive.copy(originalEmissive);
+                            }, 120);
+
+                            if (hitEnemy.health <= 0) {
+                                removeEnemy(hitEnemy);
+                            }
+                        }
+
+                        continue;
+                    }
+                } else {
+                    bullet.mesh.position.copy(bulletNextPosition);
                 }
             }
 
+            playerColliderCenter.copy(controls.getObject().position);
+            playerCollider.setFromCenterAndSize(playerColliderCenter, playerColliderSize);
+
             for (let i = enemyBullets.length - 1; i >= 0; i -= 1) {
                 const bullet = enemyBullets[i];
-                bullet.mesh.position.addScaledVector(bullet.velocity, delta);
+                bullet.prevPosition.copy(bullet.mesh.position);
+                bulletNextPosition.copy(bullet.mesh.position).addScaledVector(bullet.velocity, delta);
                 bullet.life -= delta;
 
                 if (bullet.life <= 0) {
@@ -1003,27 +1053,52 @@
                     continue;
                 }
 
-                playerCollider.setFromCenterAndSize(controls.getObject().position.clone(), new THREE.Vector3(1, player.height, 1));
-                if (playerCollider.containsPoint(bullet.mesh.position)) {
-                    damagePlayer(15);
-                    scene.remove(bullet.mesh);
-                    enemyBullets.splice(i, 1);
-                    continue;
-                }
+                bulletTravelVector.subVectors(bulletNextPosition, bullet.prevPosition);
+                const travelDistance = bulletTravelVector.length();
 
-                let enemyBulletRemoved = false;
-                for (const collider of staticColliders) {
-                    tempBox.setFromObject(collider);
-                    if (tempBox.containsPoint(bullet.mesh.position)) {
-                        scene.remove(bullet.mesh);
-                        enemyBullets.splice(i, 1);
-                        enemyBulletRemoved = true;
-                        break;
+                let hitType = null;
+                let closestDistance = Infinity;
+
+                if (travelDistance > 1e-6) {
+                    bulletRayDirection.copy(bulletTravelVector).divideScalar(travelDistance);
+                    bulletRaycaster.set(bullet.prevPosition, bulletRayDirection);
+                    bulletRaycaster.far = travelDistance + 1e-6;
+
+                    bulletSegment.start.copy(bullet.prevPosition);
+                    bulletSegment.end.copy(bulletNextPosition);
+
+                    const playerIntersection = playerCollider.intersectLine(bulletSegment, bulletIntersectionTemp);
+                    if (playerIntersection) {
+                        closestDistance = bullet.prevPosition.distanceTo(bulletIntersectionTemp);
+                        hitType = 'player';
+                        bulletClosestHitPoint.copy(bulletIntersectionTemp);
+                    }
+
+                    const staticHit = bulletRaycaster.intersectObjects(staticColliders, false)[0];
+                    if (staticHit && staticHit.distance < closestDistance) {
+                        closestDistance = staticHit.distance;
+                        hitType = 'static';
+                        bulletClosestHitPoint.copy(staticHit.point);
                     }
                 }
 
-                if (enemyBulletRemoved) {
-                    continue;
+                if (hitType) {
+                    bullet.mesh.position.copy(bulletClosestHitPoint);
+
+                    if (hitType === 'player') {
+                        damagePlayer(15);
+                        scene.remove(bullet.mesh);
+                        enemyBullets.splice(i, 1);
+                        continue;
+                    }
+
+                    if (hitType === 'static') {
+                        scene.remove(bullet.mesh);
+                        enemyBullets.splice(i, 1);
+                        continue;
+                    }
+                } else {
+                    bullet.mesh.position.copy(bulletNextPosition);
                 }
             }
         }
