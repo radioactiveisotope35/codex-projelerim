@@ -688,7 +688,9 @@
                 targetPoint: new THREE.Vector3(),
                 state: 'search',
                 chaseSpeed: movementConfig.enemyChase,
-                patrolSpeed: movementConfig.enemyPatrol
+                patrolSpeed: movementConfig.enemyPatrol,
+                repositionTimer: 0,
+                repositionDirection: new THREE.Vector3()
             };
 
             enemy.targetPoint.set(
@@ -951,16 +953,22 @@
         }
 
         function updateEnemies(delta) {
+            const staticColliders = [...world.walls, ...world.obstacles];
             for (const enemy of enemies) {
-                const playerPos = controls.getObject().position;
+                const playerPos = controls.getObject().position.clone();
                 const toPlayer = new THREE.Vector3().subVectors(playerPos, enemy.mesh.position);
                 const distance = toPlayer.length();
 
                 enemy.fireCooldown -= delta;
                 enemy.patrolTimer -= delta;
+                if (enemy.repositionTimer > 0) {
+                    enemy.repositionTimer -= delta;
+                    if (enemy.repositionTimer <= 0) {
+                        enemy.repositionDirection.set(0, 0, 0);
+                    }
+                }
 
                 if (distance < 45) {
-                    enemy.state = 'attack';
                     toPlayer.y = 0;
                     toPlayer.normalize();
                     enemy.mesh.lookAt(new THREE.Vector3().copy(enemy.mesh.position).add(toPlayer));
@@ -969,9 +977,45 @@
                         enemy.mesh.position.addScaledVector(toPlayer, delta * enemy.chaseSpeed);
                     }
 
-                    if (enemy.fireCooldown <= 0) {
-                        shoot(true, enemy);
+                    let lineOfSightBlocked = false;
+                    if (enemy.fireCooldown <= 0 || enemy.repositionTimer > 0) {
+                        const enemyEye = enemy.mesh.position.clone().add(new THREE.Vector3(0, 1.3, 0));
+                        const playerTarget = playerPos.clone();
+                        playerTarget.y += player.height * 0.5;
+                        const visionVector = new THREE.Vector3().subVectors(playerTarget, enemyEye);
+                        const rayDistance = visionVector.length();
+
+                        if (rayDistance > 0) {
+                            const raycaster = new THREE.Raycaster(
+                                enemyEye,
+                                visionVector.clone().normalize(),
+                                0,
+                                rayDistance
+                            );
+                            const intersections = raycaster.intersectObjects(staticColliders, true);
+                            lineOfSightBlocked = intersections.length > 0;
+
+                            if (!lineOfSightBlocked && enemy.fireCooldown <= 0) {
+                                shoot(true, enemy);
+                            }
+
+                            if (lineOfSightBlocked && enemy.repositionTimer <= 0) {
+                                const horizontalToPlayer = new THREE.Vector3(visionVector.x, 0, visionVector.z);
+                                if (horizontalToPlayer.lengthSq() > 0) {
+                                    horizontalToPlayer.normalize();
+                                    const lateral = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), horizontalToPlayer);
+                                    if (Math.random() > 0.5) {
+                                        lateral.multiplyScalar(-1);
+                                    }
+                                    lateral.normalize();
+                                    enemy.repositionDirection.copy(lateral);
+                                    enemy.repositionTimer = THREE.MathUtils.randFloat(0.8, 1.6);
+                                }
+                            }
+                        }
                     }
+
+                    enemy.state = lineOfSightBlocked ? 'reposition' : 'attack';
                 } else {
                     if (enemy.state !== 'patrol' || enemy.patrolTimer <= 0) {
                         enemy.state = 'patrol';
@@ -994,8 +1038,12 @@
                     }
                 }
 
+                if (enemy.repositionTimer > 0 && enemy.repositionDirection.lengthSq() > 0) {
+                    enemy.mesh.position.addScaledVector(enemy.repositionDirection, delta * enemy.patrolSpeed * 1.4);
+                    enemy.mesh.lookAt(enemy.mesh.position.clone().add(enemy.repositionDirection));
+                }
+
                 tempBox.setFromObject(enemy.mesh);
-                const staticColliders = [...world.walls, ...world.obstacles];
                 for (const collider of staticColliders) {
                     const colliderBox = new THREE.Box3().setFromObject(collider);
                     if (tempBox.intersectsBox(colliderBox)) {
