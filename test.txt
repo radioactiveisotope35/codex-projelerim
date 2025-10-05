@@ -59,6 +59,7 @@
   <script type="module">
     import * as THREE from 'three';
     import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+    import { applyPatch } from './update/update-007.js';
 
     const scene = new THREE.Scene();
     const cubeLoader = new THREE.CubeTextureLoader();
@@ -401,6 +402,94 @@
 
     window.addEventListener('resize',()=>{ camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
 
+    const patchContext = {
+      THREE,
+      scene,
+      camera,
+      renderer,
+      controls,
+      clock,
+      world,
+      movementConfig,
+      player,
+      game,
+      enemies,
+      lootItems,
+      difficulty,
+      keyState,
+      spawnTracer,
+      spawnImpactDecal,
+      showHitmarker,
+      screenShake,
+      crosshairBloom,
+      noteGunshotNoise,
+      muzzleFlash,
+      muzzleWorldPosition,
+      enemyMaterialTemplate,
+      getNoiseInfo: () => ({ lastNoiseAt, noise }),
+      refs: {
+        tempBox,
+        raycaster,
+        playerCollider,
+        getShooting: () => shooting,
+        setShooting: v => { shooting = v; },
+        getAiming: () => aiming,
+        setAiming: v => { aiming = v; },
+        getADS: () => isADS,
+        setADS: v => setADS(v),
+        getAdsT: () => adsT,
+        setAdsT: v => { adsT = v; },
+      },
+      functions: {
+        get updatePlayer(){ return updatePlayer; },
+        set updatePlayer(fn){ updatePlayer = fn; },
+        get hitscanShoot(){ return hitscanShoot; },
+        set hitscanShoot(fn){ hitscanShoot = fn; },
+        get enemyHitscanShoot(){ return enemyHitscanShoot; },
+        set enemyHitscanShoot(fn){ enemyHitscanShoot = fn; },
+        get spawnEnemy(){ return spawnEnemy; },
+        set spawnEnemy(fn){ spawnEnemy = fn; },
+        get updateEnemies(){ return updateEnemies; },
+        set updateEnemies(fn){ updateEnemies = fn; },
+        get moveTowards(){ return moveTowards; },
+        set moveTowards(fn){ moveTowards = fn; },
+        get updateMinimap(){ return updateMinimap; },
+        set updateMinimap(fn){ updateMinimap = fn; },
+        get startNextRound(){ return startNextRound; },
+        set startNextRound(fn){ startNextRound = fn; },
+        get removeEnemy(){ return removeEnemy; },
+        set removeEnemy(fn){ removeEnemy = fn; },
+        get damagePlayer(){ return damagePlayer; },
+        set damagePlayer(fn){ damagePlayer = fn; },
+        get showRoundBanner(){ return showRoundBanner; },
+        set showRoundBanner(fn){ showRoundBanner = fn; },
+        get animate(){ return animate; },
+        set animate(fn){ animate = fn; },
+        get updateWeaponPose(){ return updateWeaponPose; },
+        set updateWeaponPose(fn){ updateWeaponPose = fn; },
+        get updateRegen(){ return updateRegen; },
+        set updateRegen(fn){ updateRegen = fn; },
+        get updateLoot(){ return updateLoot; },
+        set updateLoot(fn){ updateLoot = fn; },
+        get updateTracers(){ return updateTracers; },
+        set updateTracers(fn){ updateTracers = fn; },
+        get updateAmmoDisplay(){ return updateAmmoDisplay; },
+        set updateAmmoDisplay(fn){ updateAmmoDisplay = fn; },
+        get maybeDropLoot(){ return maybeDropLoot; },
+        set maybeDropLoot(fn){ maybeDropLoot = fn; },
+      },
+      ui: {
+        hud: document.getElementById('hud'),
+        roundEl,
+        enemiesEl,
+        scoreEl,
+        ammoEl,
+        healthBarEl,
+        minimapCtx,
+        pickupBannerEl,
+      },
+    };
+    applyPatch(patchContext);
     resetGame(); animate();
   </script>
 </body>
