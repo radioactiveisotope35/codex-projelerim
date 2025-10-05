@@ -59,14 +59,23 @@ export function applyPatch(ctx){
       minSprint: 10,
     },
     RECOIL: {
-      baseKick: 0.018,
-      baseYaw: 0.012,
-      adsMultiplier: 0.72,
-      crouchMultiplier: 0.58,
-      hipMultiplier: 1,
-      recovery: 7.8,
-      returnSpeed: 6.5,
-      horizontalDrift: 0.4,
+      // Recoil tuning expressed in radians; followStrength controls how fast the
+      // applied offset follows the instantaneous targets.
+      kickPitch: 0.012,
+      kickYaw: 0.003,
+      pitchVariance: 0.25,
+      yawJitter: 0.6,
+      adsScale: 0.6,
+      crouchScale: 0.7,
+      hipScale: 1,
+      recoverPitch: 14,
+      recoverYaw: 11,
+      adsRecoverBonus: 1.2,
+      crouchRecoverBonus: 1.1,
+      followStrength: 18,
+      modPitchScale: 0.75,
+      minPitchDeg: -85,
+      maxPitchDeg: 85,
       semiAutoFactor: 0.82,
     },
     WEAPONS: {
@@ -166,11 +175,14 @@ export function applyPatch(ctx){
     staminaDelay: 0,
     staminaCombatDelay: 0,
     staminaVisible: CONFIG.STORE.showStaminaHud,
-    recoilPitch: 0,
-    recoilYaw: 0,
-    recoilReturn: 0,
-    recoilVelocityX: 0,
-    recoilVelocityY: 0,
+    recoil: {
+      pitch: 0,
+      yaw: 0,
+      pitchTarget: 0,
+      yawTarget: 0,
+      appliedPitch: 0,
+      appliedYaw: 0,
+    },
     semiAuto: false,
     semiAutoReady: true,
     lastShotTime: -Infinity,
@@ -195,6 +207,8 @@ export function applyPatch(ctx){
     recoveryAds: CONFIG.WEAPONS.spreadRecoveryADS,
   };
 
+  const recoilState = playerState.recoil;
+
   const coverPoints = [];
   const losCache = new Map();
   const tempBox = refs.tempBox || new THREE.Box3();
@@ -210,6 +224,11 @@ export function applyPatch(ctx){
   const helperRay = new THREE.Raycaster();
   const tempMat3 = new THREE.Matrix3();
   const minimapCtx = ui.minimapCtx;
+
+  const yawObject = typeof controls.getObject === 'function' ? controls.getObject() : controls.object || controls;
+  const pitchObject = findPitchNode(yawObject, camera) || camera;
+  const recoilPitchMin = THREE.MathUtils.degToRad(CONFIG.RECOIL.minPitchDeg);
+  const recoilPitchMax = THREE.MathUtils.degToRad(CONFIG.RECOIL.maxPitchDeg);
 
   const spawnTracer = ctx.spawnTracer || functions.spawnTracer;
   const spawnImpactDecal = ctx.spawnImpactDecal || functions.spawnImpactDecal;
@@ -280,7 +299,11 @@ export function applyPatch(ctx){
   // PLAYER
   // ---------------------------------------------------------------------------
   function patchedUpdatePlayer(delta){
-    if(!controls.isLocked || game.state === 'over') return;
+    const adsBeforeUpdate = !!getADS();
+    if(!controls.isLocked || game.state === 'over'){
+      updateRecoil(delta, adsBeforeUpdate);
+      return;
+    }
 
     const sprintHeld = (keyState['ShiftLeft'] || keyState['ShiftRight']) && !playerState.storeOpen;
     const crouchSpeedFactor = playerState.crouched ? CONFIG.PLAYER.crouchSpeedMultiplier : 1;
@@ -389,17 +412,7 @@ export function applyPatch(ctx){
     const recoverRate = effectiveADS ? weaponState.recoveryAds : weaponState.recoveryHip;
     weaponState.spreadCurrent = Math.max(spreadBase, weaponState.spreadCurrent - recoverRate * delta);
 
-    const recoilReturn = CONFIG.RECOIL.returnSpeed * delta;
-    if(playerState.recoilPitch !== 0){
-      const pitchAdjust = Math.sign(playerState.recoilPitch) * Math.min(Math.abs(playerState.recoilPitch), recoilReturn);
-      playerState.recoilPitch -= pitchAdjust;
-      camera.rotation.x = clampPitch(camera.rotation.x - pitchAdjust);
-    }
-    if(playerState.recoilYaw !== 0){
-      const yawAdjust = Math.sign(playerState.recoilYaw) * Math.min(Math.abs(playerState.recoilYaw), recoilReturn * 0.6);
-      playerState.recoilYaw -= yawAdjust;
-      controls.getObject().rotation.y -= yawAdjust;
-    }
+    updateRecoil(delta, effectiveADS);
 
     if(updateRegen) updateRegen(delta);
     if(functions.updateWeaponPose) functions.updateWeaponPose(delta);
@@ -421,12 +434,87 @@ export function applyPatch(ctx){
     playerState.crouched = !playerState.crouched;
   }
 
-  function clampPitch(v){
-    return THREE.MathUtils.clamp(v, -Math.PI/2 + 0.05, Math.PI/2 - 0.05);
-  }
-
   function damp(current, target, lambda, delta){
     return THREE.MathUtils.damp(current, target, lambda, delta);
+  }
+
+  function findPitchNode(root, cam){
+    if(!root || !root.children) return null;
+    for(let i = 0; i < root.children.length; i++){
+      const child = root.children[i];
+      if(child === cam) return root;
+      const nested = findPitchNode(child, cam);
+      if(nested) return nested;
+    }
+    return null;
+  }
+
+  function updateRecoil(delta, adsActive){
+    if(!yawObject || !pitchObject) return;
+    const stanceRecover = (adsActive ? CONFIG.RECOIL.adsRecoverBonus : 1) *
+      (playerState.crouched ? CONFIG.RECOIL.crouchRecoverBonus : 1);
+    const followRate = 1 - Math.exp(-CONFIG.RECOIL.followStrength * delta);
+    const pitchDecay = Math.exp(-CONFIG.RECOIL.recoverPitch * stanceRecover * delta);
+    const yawDecay = Math.exp(-CONFIG.RECOIL.recoverYaw * stanceRecover * delta);
+
+    recoilState.pitchTarget *= pitchDecay;
+    recoilState.yawTarget *= yawDecay;
+
+    recoilState.pitch += (recoilState.pitchTarget - recoilState.pitch) * followRate;
+    recoilState.yaw += (recoilState.yawTarget - recoilState.yaw) * followRate;
+
+    applyRecoilOffsets();
+  }
+
+  function applyShotRecoil(isADS){
+    const stanceScale = (isADS ? CONFIG.RECOIL.adsScale : CONFIG.RECOIL.hipScale) *
+      (playerState.crouched ? CONFIG.RECOIL.crouchScale : 1);
+    const pitchVariance = 1 + (Math.random() * CONFIG.RECOIL.pitchVariance);
+    const pitchMod = playerState.mods.recoil ? CONFIG.RECOIL.modPitchScale : 1;
+    const pitchKick = CONFIG.RECOIL.kickPitch * stanceScale * pitchVariance * pitchMod;
+
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const yawVariance = 1 + ((Math.random() * 2 - 1) * CONFIG.RECOIL.yawJitter * 0.5);
+    const yawKick = CONFIG.RECOIL.kickYaw * stanceScale * yawVariance * side;
+
+    recoilState.pitchTarget += pitchKick;
+    recoilState.yawTarget += yawKick;
+  }
+
+  function applyRecoilOffsets(){
+    if(!yawObject || !pitchObject) return;
+
+    if(recoilState.appliedYaw !== 0){
+      yawObject.rotation.y += recoilState.appliedYaw;
+    }
+    const newYaw = recoilState.yaw;
+    if(newYaw !== 0){
+      yawObject.rotation.y -= newYaw;
+    }
+    recoilState.appliedYaw = newYaw;
+
+    if(recoilState.appliedPitch !== 0){
+      pitchObject.rotation.x = THREE.MathUtils.clamp(
+        pitchObject.rotation.x + recoilState.appliedPitch,
+        recoilPitchMin,
+        recoilPitchMax,
+      );
+    }
+    const newPitch = recoilState.pitch;
+    if(newPitch !== 0){
+      pitchObject.rotation.x = THREE.MathUtils.clamp(
+        pitchObject.rotation.x - newPitch,
+        recoilPitchMin,
+        recoilPitchMax,
+      );
+    } else {
+      pitchObject.rotation.x = THREE.MathUtils.clamp(
+        pitchObject.rotation.x,
+        recoilPitchMin,
+        recoilPitchMax,
+      );
+    }
+    recoilState.appliedPitch = newPitch;
   }
 
   // ---------------------------------------------------------------------------
@@ -497,14 +585,7 @@ export function applyPatch(ctx){
     player.ammo -= 1;
     updateAmmoDisplay?.();
 
-    const recoilMultiplier = computeRecoilMultiplier(ads);
-    const modReduce = playerState.mods.recoil ? 0.75 : 1;
-    const recoilPitch = CONFIG.RECOIL.baseKick * recoilMultiplier * modReduce * (1 + Math.random()*0.25);
-    const recoilYaw = CONFIG.RECOIL.baseYaw * recoilMultiplier * (Math.random()*2-1) * CONFIG.RECOIL.horizontalDrift;
-    playerState.recoilPitch += recoilPitch;
-    playerState.recoilYaw += recoilYaw;
-    camera.rotation.x = clampPitch(camera.rotation.x - recoilPitch);
-    controls.getObject().rotation.y -= recoilYaw;
+    applyShotRecoil(ads);
 
     weaponState.spreadCurrent = Math.min(stanceMax, weaponState.spreadCurrent + (ads ? 0.08 : 0.18) * (playerState.semiAuto ? CONFIG.RECOIL.semiAutoFactor : 1));
 
@@ -512,12 +593,6 @@ export function applyPatch(ctx){
     player.fireCooldown = fireModeDelay;
     playerState.lastShotTime = now;
     if(playerState.semiAuto){ playerState.semiAutoReady = false; }
-  }
-
-  function computeRecoilMultiplier(ads){
-    if(playerState.crouched) return CONFIG.RECOIL.crouchMultiplier;
-    if(ads) return CONFIG.RECOIL.adsMultiplier;
-    return CONFIG.RECOIL.hipMultiplier;
   }
 
   function computeBaseDamage(localY){
