@@ -413,6 +413,54 @@ export function applyPatch(ctx){
     return clone;
   }
 
+  function ensureEnemyGeometry(){
+    if(PATCH_STATE.enemyGeometry){
+      return PATCH_STATE.enemyGeometry;
+    }
+
+    const cylinderHeight = Math.max(0, ENEMY_HEIGHT - ENEMY_RADIUS * 2);
+    const radialSegments = 12;
+    const heightSegments = 6;
+
+    let geometry = null;
+
+    const tryBuild = (builder, label) => {
+      if(geometry || typeof builder !== 'function'){
+        return;
+      }
+      try{
+        geometry = new builder(ENEMY_RADIUS, cylinderHeight, heightSegments, radialSegments);
+      }catch(err){
+        console.warn(`[patch-001] Failed to create ${label} enemy geometry.`, err);
+        geometry = null;
+      }
+    };
+
+    tryBuild(THREE.CapsuleGeometry, 'CapsuleGeometry');
+    tryBuild(THREE.CapsuleBufferGeometry, 'CapsuleBufferGeometry');
+
+    if(!geometry){
+      try{
+        geometry = new THREE.CylinderGeometry(ENEMY_RADIUS, ENEMY_RADIUS, Math.max(ENEMY_HEIGHT, ENEMY_RADIUS * 2), radialSegments, 1, false);
+        if(!PATCH_STATE.enemyGeometryFallbackLogged){
+          PATCH_STATE.enemyGeometryFallbackLogged = true;
+          console.warn('[patch-001] Falling back to cylinder enemy geometry; capsule geometry unavailable.');
+        }
+      }catch(err){
+        console.error('[patch-001] Failed to create fallback enemy geometry.', err);
+        geometry = null;
+      }
+    }
+
+    if(geometry){
+      geometry.computeBoundingBox?.();
+      geometry.computeBoundingSphere?.();
+      PATCH_STATE.enemyGeometry = geometry;
+    }
+
+    return geometry;
+  }
+
   function getStaticBounds(mesh, forceUpdate = false){
     if(!mesh) return null;
     let entry = staticBoundsCache.get(mesh);
@@ -1728,8 +1776,11 @@ export function applyPatch(ctx){
   }
 
   function patchedSpawnEnemy(){
-    if(!PATCH_STATE.enemyGeometry){
-      PATCH_STATE.enemyGeometry = new THREE.CapsuleGeometry(0.6, 1.2, 6, 12);
+    const bodyGeometry = ensureEnemyGeometry();
+    if(!bodyGeometry){
+      registerSpawnFailure();
+      game.spawnDelay = Math.max(game.spawnDelay, nextSpawnDelay());
+      return false;
     }
 
     if(enemies.length >= CONFIG.PERF.maxActiveEnemies){
@@ -1807,7 +1858,6 @@ export function applyPatch(ctx){
     }
 
     const spawnHeight = spawnPoint.y;
-    const bodyGeometry = PATCH_STATE.enemyGeometry;
     const enemyMaterial = instantiateEnemyMaterial();
     const enemyMesh = new THREE.Mesh(bodyGeometry, enemyMaterial);
     enemyMesh.position.set(spawnPoint.x, spawnHeight + ENEMY_HALF_HEIGHT, spawnPoint.z);

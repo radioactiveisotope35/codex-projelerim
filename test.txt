@@ -62,10 +62,46 @@
     import { applyPatch } from './update/update-001.js';
 
     const scene = new THREE.Scene();
-    const cubeLoader = new THREE.CubeTextureLoader();
-    const skyTexture = cubeLoader.setPath('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/cube/skyboxsun25/').load(['px.jpg','nx.jpg','py.jpg','ny.jpg','pz.jpg','nz.jpg']);
-    scene.background = skyTexture; scene.fog = new THREE.Fog(0x0b101a, 40, 180);
+    scene.background = new THREE.Color(0x0d1624);
+    scene.fog = new THREE.Fog(0x0d1624, 60, 260);
+
     const textureLoader = new THREE.TextureLoader();
+    textureLoader.setCrossOrigin('anonymous');
+
+    function createSkyGradient(){
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 512;
+      const ctx = canvas.getContext('2d');
+      const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      gradient.addColorStop(0, '#1f3559');
+      gradient.addColorStop(0.55, '#3d5f8b');
+      gradient.addColorStop(1, '#7fb3d6');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.needsUpdate = true;
+      return texture;
+    }
+
+    const fallbackSky = createSkyGradient();
+    scene.background = fallbackSky;
+    scene.environment = null;
+
+    textureLoader.load(
+      'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/equirectangular/venice_sunset_1k.jpg',
+      tex => {
+        tex.mapping = THREE.EquirectangularReflectionMapping;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        scene.background = tex;
+        scene.environment = tex;
+      },
+      undefined,
+      () => {
+        scene.background = fallbackSky;
+        scene.environment = null;
+      }
+    );
 
     const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, .1, 1000);
     camera.position.set(0,1.6,12);
@@ -74,6 +110,147 @@
     const renderer = new THREE.WebGLRenderer({ antialias:true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled=true; document.body.appendChild(renderer.domElement);
+
+    const maxAnisotropy = renderer.capabilities.getMaxAnisotropy ? renderer.capabilities.getMaxAnisotropy() : 1;
+
+    function createCanvasTexture(drawFn, repeatX = 1, repeatY = 1, colorSpace = THREE.SRGBColorSpace){
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 512;
+      const ctx = canvas.getContext('2d');
+      drawFn(ctx, canvas.width, canvas.height);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+      texture.repeat.set(repeatX, repeatY);
+      texture.anisotropy = maxAnisotropy;
+      texture.colorSpace = colorSpace;
+      texture.needsUpdate = true;
+      return texture;
+    }
+
+    function createConcreteTexture(repeatX, repeatY){
+      return createCanvasTexture((ctx, w, h) => {
+        const gradient = ctx.createLinearGradient(0, 0, w, h);
+        gradient.addColorStop(0, '#414751');
+        gradient.addColorStop(1, '#252b33');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, w, h);
+        const speckles = Math.floor(w * h * 0.08);
+        for(let i = 0; i < speckles; i++){
+          const shade = 75 + Math.random() * 70;
+          ctx.fillStyle = `rgba(${shade},${shade + 6},${shade + 12},${0.05 + Math.random() * 0.15})`;
+          ctx.fillRect(Math.random() * w, Math.random() * h, 1, 1);
+        }
+        ctx.strokeStyle = 'rgba(18, 20, 26, 0.08)';
+        for(let i = 0; i < 120; i++){
+          ctx.beginPath();
+          ctx.moveTo(Math.random() * w, Math.random() * h);
+          ctx.lineTo(Math.random() * w, Math.random() * h);
+          ctx.lineWidth = Math.random() * 0.8 + 0.2;
+          ctx.stroke();
+        }
+      }, repeatX, repeatY);
+    }
+
+    function createConcreteRoughness(repeatX, repeatY){
+      return createCanvasTexture((ctx, w, h) => {
+        ctx.fillStyle = '#7a7d80';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = '#4c4f52';
+        const speckles = Math.floor(w * h * 0.06);
+        for(let i = 0; i < speckles; i++){
+          const size = Math.random() * 2 + 0.6;
+          ctx.globalAlpha = 0.4 + Math.random() * 0.3;
+          ctx.fillRect(Math.random() * w, Math.random() * h, size, size);
+        }
+        ctx.globalAlpha = 1;
+      }, repeatX, repeatY, THREE.NoColorSpace);
+    }
+
+    function createWallTileTexture(){
+      return createCanvasTexture((ctx, w, h) => {
+        ctx.fillStyle = '#5d6674';
+        ctx.fillRect(0, 0, w, h);
+        const rows = 6;
+        const cols = 12;
+        const mortar = 'rgba(26, 30, 38, 0.55)';
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = mortar;
+        for(let row = 0; row <= rows; row++){
+          const y = (row / rows) * h;
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(w, y);
+          ctx.stroke();
+        }
+        for(let row = 0; row < rows; row++){
+          const offset = (row % 2) * 0.5;
+          for(let col = -1; col < cols + 1; col++){
+            const x = ((col + offset) / cols) * w;
+            ctx.beginPath();
+            ctx.moveTo(x, (row / rows) * h);
+            ctx.lineTo(x, ((row + 1) / rows) * h);
+            ctx.stroke();
+          }
+        }
+        ctx.fillStyle = 'rgba(255,255,255,0.04)';
+        ctx.fillRect(0, 0, w, h * 0.45);
+        ctx.fillStyle = 'rgba(0,0,0,0.08)';
+        ctx.fillRect(0, h * 0.45, w, h * 0.55);
+      });
+    }
+
+    function createPlanterTexture(){
+      return createCanvasTexture((ctx, w, h) => {
+        ctx.fillStyle = '#3f4654';
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = 'rgba(16, 18, 24, 0.45)';
+        ctx.lineWidth = h * 0.08;
+        ctx.strokeRect(h * 0.05, h * 0.05, w - h * 0.1, h - h * 0.1);
+        ctx.strokeStyle = 'rgba(98, 112, 136, 0.35)';
+        ctx.lineWidth = h * 0.05;
+        ctx.strokeRect(h * 0.12, h * 0.12, w - h * 0.24, h - h * 0.24);
+      }, 2.5, 1.4);
+    }
+
+    function createFacadeTexture(repeatX, repeatY, variant = 0){
+      return createCanvasTexture((ctx, w, h) => {
+        ctx.fillStyle = variant ? '#414c5d' : '#2f3a4b';
+        ctx.fillRect(0, 0, w, h);
+        const cols = 4;
+        const rows = 6;
+        for(let row = 0; row < rows; row++){
+          for(let col = 0; col < cols; col++){
+            const margin = 0.1;
+            const cellW = w / cols;
+            const cellH = h / rows;
+            const px = col * cellW + cellW * margin;
+            const py = row * cellH + cellH * margin;
+            const winW = cellW * (1 - margin * 2);
+            const winH = cellH * (1 - margin * 2);
+            const glass = ctx.createLinearGradient(px, py, px, py + winH);
+            if(variant){
+              glass.addColorStop(0, '#7fa8ce');
+              glass.addColorStop(1, '#335171');
+            } else {
+              glass.addColorStop(0, '#5f8ab6');
+              glass.addColorStop(1, '#243f5d');
+            }
+            ctx.fillStyle = glass;
+            ctx.fillRect(px, py, winW, winH);
+            ctx.strokeStyle = 'rgba(12, 18, 26, 0.65)';
+            ctx.lineWidth = Math.max(2, winW * 0.04);
+            ctx.strokeRect(px, py, winW, winH);
+            ctx.strokeStyle = 'rgba(200, 220, 255, 0.2)';
+            ctx.lineWidth = Math.max(1, winW * 0.015);
+            ctx.beginPath();
+            ctx.moveTo(px + winW * 0.08, py + winH * 0.2);
+            ctx.lineTo(px + winW * 0.42, py + winH * 0.12);
+            ctx.lineTo(px + winW * 0.8, py + winH * 0.4);
+            ctx.stroke();
+          }
+        }
+      }, repeatX, repeatY);
+    }
 
     const controls = new PointerLockControls(camera, renderer.domElement);
     scene.add(controls.getObject());
@@ -106,31 +283,153 @@
     dirLight.shadow.mapSize.set(2048,2048); dirLight.shadow.camera.near=1; dirLight.shadow.camera.far=220;
     scene.add(dirLight);
 
-    // Floor & grid
-    const floorGeo=new THREE.PlaneGeometry(world.size,world.size,20,20); floorGeo.rotateX(-Math.PI/2);
-    const floorColorMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/floors/FloorsCheckerboard_S_Diffuse.jpg'); floorColorMap.wrapS=floorColorMap.wrapT=THREE.RepeatWrapping; floorColorMap.repeat.set(world.size/6,world.size/6); floorColorMap.colorSpace=THREE.SRGBColorSpace;
-    const floorNormalMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/floors/FloorsCheckerboard_S_Normal.jpg'); floorNormalMap.wrapS=floorNormalMap.wrapT=THREE.RepeatWrapping; floorNormalMap.repeat.copy(floorColorMap.repeat);
-    const floorRoughnessMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/floors/FloorsCheckerboard_S_Roughness.jpg'); floorRoughnessMap.wrapS=floorRoughnessMap.wrapT=THREE.RepeatWrapping; floorRoughnessMap.repeat.copy(floorColorMap.repeat);
-    const floorMat=new THREE.MeshStandardMaterial({ map:floorColorMap, normalMap:floorNormalMap, roughnessMap:floorRoughnessMap, metalness:.15, roughness:.9 });
+    // Floor & plaza detailing
+    const floorGeo=new THREE.PlaneGeometry(world.size,world.size,1,1); floorGeo.rotateX(-Math.PI/2);
+    const floorMap=createConcreteTexture(world.size/18,world.size/18);
+    const floorRoughnessMap=createConcreteRoughness(world.size/18,world.size/18);
+    const floorMat=new THREE.MeshStandardMaterial({ map:floorMap, roughnessMap:floorRoughnessMap, metalness:.12, roughness:.86 });
     const floor=new THREE.Mesh(floorGeo,floorMat); floor.receiveShadow=true; scene.add(floor);
-    scene.add(new THREE.GridHelper(world.size,24,0x334050,0x1a2530));
+
+    const plazaSize=world.size*0.86;
+    const plazaGeo=new THREE.PlaneGeometry(plazaSize,plazaSize,1,1); plazaGeo.rotateX(-Math.PI/2);
+    const plazaTexture=createCanvasTexture((ctx,w,h)=>{
+      ctx.fillStyle='#474d57';
+      ctx.fillRect(0,0,w,h);
+      const tiles=8;
+      ctx.lineWidth=8;
+      ctx.strokeStyle='rgba(20,24,32,0.55)';
+      for(let i=1;i<tiles;i++){
+        const pos=(i/tiles)*w;
+        ctx.beginPath(); ctx.moveTo(pos,0); ctx.lineTo(pos,h); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0,pos); ctx.lineTo(w,pos); ctx.stroke();
+      }
+      ctx.strokeStyle='rgba(255,255,255,0.05)';
+      ctx.lineWidth=5;
+      ctx.strokeRect(14,14,w-28,h-28);
+    },Math.max(1,plazaSize/14),Math.max(1,plazaSize/14));
+    const plaza=new THREE.Mesh(plazaGeo,new THREE.MeshStandardMaterial({ map:plazaTexture, metalness:.1, roughness:.82 }));
+    plaza.position.y=0.02; plaza.receiveShadow=true; scene.add(plaza);
 
     // Walls
-    const wallColorMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/brick_diffuse.jpg'); wallColorMap.wrapS=wallColorMap.wrapT=THREE.RepeatWrapping; wallColorMap.colorSpace=THREE.SRGBColorSpace;
-    const wallNormalMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/brick_normal.jpg'); wallNormalMap.wrapS=wallNormalMap.wrapT=THREE.RepeatWrapping;
-    const wallRoughnessMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/brick_roughness.jpg'); wallRoughnessMap.wrapS=wallRoughnessMap.wrapT=THREE.RepeatWrapping;
-    const baseWallMaterial=new THREE.MeshStandardMaterial({ map:wallColorMap, normalMap:wallNormalMap, roughnessMap:wallRoughnessMap, metalness:.25, roughness:.85 });
+    const wallTileTexture=createWallTileTexture();
+    const baseWallMaterial=new THREE.MeshStandardMaterial({ map:wallTileTexture, metalness:.18, roughness:.88 });
     const wallHeight=6, wallThickness=2, arenaSize=world.size/2;
-    function createWall(x,z,w,d){ const g=new THREE.BoxGeometry(w,wallHeight,d); const m=baseWallMaterial.clone(); m.map=baseWallMaterial.map.clone(); m.normalMap=baseWallMaterial.normalMap.clone(); m.roughnessMap=baseWallMaterial.roughnessMap.clone(); const rx=Math.max(1,w/6), ry=Math.max(1,wallHeight/2); m.map.repeat.set(rx,ry); m.normalMap.repeat.copy(m.map.repeat); m.roughnessMap.repeat.copy(m.map.repeat); const mesh=new THREE.Mesh(g,m); mesh.position.set(x,wallHeight/2,z); mesh.castShadow=mesh.receiveShadow=true; scene.add(mesh); world.walls.push(mesh); }
+    function createWall(x,z,w,d){ const g=new THREE.BoxGeometry(w,wallHeight,d); const m=baseWallMaterial.clone(); m.map=baseWallMaterial.map.clone(); const rx=Math.max(1,w/6), ry=Math.max(1,wallHeight/2); m.map.repeat.set(rx,ry); m.map.wrapS=m.map.wrapT=THREE.RepeatWrapping; m.map.anisotropy=maxAnisotropy; m.map.needsUpdate=true; const mesh=new THREE.Mesh(g,m); mesh.position.set(x,wallHeight/2,z); mesh.castShadow=mesh.receiveShadow=true; scene.add(mesh); world.walls.push(mesh); }
     createWall(0,-arenaSize+wallThickness/2,world.size,wallThickness); createWall(0,arenaSize-wallThickness/2,world.size,wallThickness); createWall(-arenaSize+wallThickness/2,0,wallThickness,world.size); createWall(arenaSize-wallThickness/2,0,wallThickness,world.size);
 
-    // Obstacles
-    const obstacleMaterial=new THREE.MeshStandardMaterial({ color:0x253246, metalness:.15, roughness:.7 });
-    [{x:-18,z:-10},{x:12,z:-15},{x:-8,z:16},{x:18,z:12},{x:0,z:0},{x:-20,z:22},{x:20,z:-22}].forEach(({x,z})=>{
-      const h=THREE.MathUtils.randFloat(2.2,4.4), w=THREE.MathUtils.randFloat(4,10), d=THREE.MathUtils.randFloat(3,8);
-      const g=new THREE.BoxGeometry(w,h,d); const m=new THREE.Mesh(g, obstacleMaterial.clone());
-      m.material.color.offsetHSL(Math.random()*0.05,0,0); m.position.set(x,h/2,z); m.castShadow=m.receiveShadow=true; scene.add(m); world.obstacles.push(m);
-    });
+    // Obstacles & cover
+    const planterTexture=createPlanterTexture();
+    const planterMaterial=new THREE.MeshStandardMaterial({ map:planterTexture, metalness:.12, roughness:.85 });
+    const coverTexture=createCanvasTexture((ctx,w,h)=>{
+      ctx.fillStyle='#3d4654';
+      ctx.fillRect(0,0,w,h);
+      ctx.fillStyle='rgba(255,255,255,0.06)';
+      ctx.fillRect(0,h*0.35,w,h*0.08);
+      ctx.fillStyle='rgba(0,0,0,0.18)';
+      ctx.fillRect(0,h*0.75,w,h*0.12);
+    },3,1.2);
+    const coverMaterial=new THREE.MeshStandardMaterial({ map:coverTexture, metalness:.18, roughness:.78 });
+
+    function createLowCover(x,z,w,d,height=1){
+      const mesh=new THREE.Mesh(new THREE.BoxGeometry(w,height,d),coverMaterial.clone());
+      mesh.position.set(x,height/2,z);
+      mesh.castShadow=mesh.receiveShadow=true;
+      scene.add(mesh);
+      world.obstacles.push(mesh);
+      return mesh;
+    }
+
+    function createPlanter(x,z,w,d,height=1.1){
+      const group=new THREE.Group();
+      group.position.set(x,0,z);
+      const base=new THREE.Mesh(new THREE.BoxGeometry(w,height,d),planterMaterial.clone());
+      base.position.y=height/2; base.castShadow=base.receiveShadow=true; group.add(base);
+      const soil=new THREE.Mesh(new THREE.BoxGeometry(w*0.92,0.32,d*0.92),new THREE.MeshStandardMaterial({ color:0x2a3523, roughness:.95 }));
+      soil.position.y=height+0.16; soil.receiveShadow=true; group.add(soil);
+      const shrubCount=Math.max(2,Math.round((w+d)*0.4));
+      for(let i=0;i<shrubCount;i++){
+        const shrub=new THREE.Mesh(new THREE.ConeGeometry(Math.min(w,d)*0.18+Math.random()*0.1,1.35,7),new THREE.MeshStandardMaterial({ color:0x3a8d55, roughness:.78 }));
+        shrub.position.set((Math.random()-.5)*w*0.45,height+0.75+Math.random()*0.25,(Math.random()-.5)*d*0.45);
+        shrub.castShadow=true; group.add(shrub);
+      }
+      scene.add(group);
+      world.obstacles.push(group);
+      return group;
+    }
+
+    function createShop(x,z,width,depth,rotationY=0){
+      const height=3.6;
+      const group=new THREE.Group();
+      group.position.set(x,0,z);
+      group.rotation.y=rotationY;
+      const facadeTex=createFacadeTexture(Math.max(1,width/4),Math.max(1,height/2.5),1);
+      const body=new THREE.Mesh(new THREE.BoxGeometry(width,height,depth),new THREE.MeshStandardMaterial({ map:facadeTex, metalness:.08, roughness:.78, emissive:new THREE.Color(0x121a28), emissiveIntensity:.35 }));
+      body.position.y=height/2; body.castShadow=body.receiveShadow=true; group.add(body);
+      const awningTex=createCanvasTexture((ctx,w,h)=>{
+        ctx.fillStyle='#c6463f';
+        ctx.fillRect(0,0,w,h);
+        ctx.fillStyle='#f3f0e5';
+        const stripes=6;
+        for(let i=0;i<stripes;i++) ctx.fillRect(i*w/stripes,0,w/(stripes*2),h);
+      },Math.max(1,width/3),1);
+      const awning=new THREE.Mesh(new THREE.BoxGeometry(width*.98,0.28,depth*.9),new THREE.MeshStandardMaterial({ map:awningTex, roughness:.62, metalness:.05, transparent:true, opacity:.92 }));
+      awning.position.set(0,height+.12,depth*.1); awning.castShadow=true; group.add(awning);
+      scene.add(group);
+      world.obstacles.push(group);
+      return group;
+    }
+
+    createShop(-26,-34,18,6,0);
+    createShop(26,-34,18,6,0);
+    createShop(-26,34,18,6,Math.PI);
+    createShop(26,34,18,6,Math.PI);
+
+    createPlanter(-18,-18,8,4.5);
+    createPlanter(18,-18,8,4.5);
+    createPlanter(-18,18,8,4.5);
+    createPlanter(18,18,8,4.5);
+    createPlanter(0,-26,12,4.2);
+    createPlanter(0,26,12,4.2);
+
+    createLowCover(0,-6,14,2.4,1.05);
+    createLowCover(0,6,14,2.4,1.05);
+    createLowCover(-22,0,3,11,1.1);
+    createLowCover(22,0,3,11,1.1);
+
+    // Background structures
+    const backdropGroup=new THREE.Group();
+    scene.add(backdropGroup);
+
+    function createBackdropBuilding(x,z,width,height,depth,variant=0,rotationY=0){
+      const group=new THREE.Group();
+      group.position.set(x,0,z);
+      group.rotation.y=rotationY;
+      const facadeTex=createFacadeTexture(Math.max(1,width/6),Math.max(1,height/4),variant);
+      const building=new THREE.Mesh(new THREE.BoxGeometry(width,height,depth),new THREE.MeshStandardMaterial({ map:facadeTex, metalness:.12, roughness:.7, emissive:new THREE.Color(0x0a1018), emissiveIntensity:.28 }));
+      building.position.y=height/2; group.add(building);
+      const roofTex=createCanvasTexture((ctx,w,h)=>{
+        ctx.fillStyle='#2f333a';
+        ctx.fillRect(0,0,w,h);
+        ctx.strokeStyle='rgba(255,255,255,0.05)';
+        ctx.lineWidth=h*0.12;
+        ctx.strokeRect(h*0.12,h*0.12,w-h*0.24,h-h*0.24);
+      },Math.max(1,width/8),Math.max(1,depth/8));
+      const roof=new THREE.Mesh(new THREE.BoxGeometry(width*1.02,0.4,depth*1.02),new THREE.MeshStandardMaterial({ map:roofTex, roughness:.92 }));
+      roof.position.y=height+.2; group.add(roof);
+      backdropGroup.add(group);
+      return group;
+    }
+
+    const ring=world.size*0.6;
+    createBackdropBuilding(-ring,0,22,16,10,0,Math.PI/2);
+    createBackdropBuilding(ring,0,24,18,10,1,-Math.PI/2);
+    createBackdropBuilding(0,ring,30,20,12,1,Math.PI);
+    createBackdropBuilding(0,-ring,28,19,12,0,0);
+    const diag=world.size*0.52;
+    createBackdropBuilding(-diag,diag,18,14,9,1,Math.PI*0.75);
+    createBackdropBuilding(diag,diag,18,13,9,0,-Math.PI*0.75);
+    createBackdropBuilding(-diag,-diag,18,14,9,1,Math.PI*0.25);
+    createBackdropBuilding(diag,-diag,18,15,9,0,-Math.PI*0.25);
 
     // Enemy visual
     function createEnemyUniformTexture(){ const c=document.createElement('canvas'); c.width=128; c.height=256; const ctx=c.getContext('2d'); const gr=ctx.createLinearGradient(0,0,0,c.height); gr.addColorStop(0,'#18273d'); gr.addColorStop(.4,'#1f3553'); gr.addColorStop(1,'#101c2e'); ctx.fillStyle=gr; ctx.fillRect(0,0,c.width,c.height); ctx.fillStyle='rgba(90,180,255,.3)'; ctx.fillRect(0,c.height*.15,c.width,18); ctx.fillRect(0,c.height*.45,c.width,10); ctx.fillStyle='rgba(12,18,28,.7)'; for(let i=0;i<6;i++) ctx.fillRect(18,24+i*38,c.width-36,6); ctx.fillStyle='rgba(255,255,255,.08)'; ctx.fillRect(0,c.height*.05,c.width,10); ctx.fillRect(0,c.height*.75,c.width,6); return new THREE.CanvasTexture(c); }
