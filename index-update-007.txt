@@ -62,10 +62,46 @@
     import { applyPatch } from './update/update-001.js';
 
     const scene = new THREE.Scene();
-    const cubeLoader = new THREE.CubeTextureLoader();
-    const skyTexture = cubeLoader.setPath('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/cube/skyboxsun25/').load(['px.jpg','nx.jpg','py.jpg','ny.jpg','pz.jpg','nz.jpg']);
-    scene.background = skyTexture; scene.fog = new THREE.Fog(0x0b101a, 40, 180);
+    scene.background = new THREE.Color(0x0d1624);
+    scene.fog = new THREE.Fog(0x0d1624, 60, 260);
+
     const textureLoader = new THREE.TextureLoader();
+    textureLoader.setCrossOrigin('anonymous');
+
+    function createSkyGradient(){
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 512;
+      const ctx = canvas.getContext('2d');
+      const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      gradient.addColorStop(0, '#1f3559');
+      gradient.addColorStop(0.55, '#3d5f8b');
+      gradient.addColorStop(1, '#7fb3d6');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.needsUpdate = true;
+      return texture;
+    }
+
+    const fallbackSky = createSkyGradient();
+    scene.background = fallbackSky;
+    scene.environment = null;
+
+    textureLoader.load(
+      'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/equirectangular/venice_sunset_1k.jpg',
+      tex => {
+        tex.mapping = THREE.EquirectangularReflectionMapping;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        scene.background = tex;
+        scene.environment = tex;
+      },
+      undefined,
+      () => {
+        scene.background = fallbackSky;
+        scene.environment = null;
+      }
+    );
 
     const camera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, .1, 1000);
     camera.position.set(0,1.6,12);
@@ -74,6 +110,147 @@
     const renderer = new THREE.WebGLRenderer({ antialias:true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.shadowMap.enabled=true; document.body.appendChild(renderer.domElement);
+
+    const maxAnisotropy = renderer.capabilities.getMaxAnisotropy ? renderer.capabilities.getMaxAnisotropy() : 1;
+
+    function createCanvasTexture(drawFn, repeatX = 1, repeatY = 1, colorSpace = THREE.SRGBColorSpace){
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 512;
+      const ctx = canvas.getContext('2d');
+      drawFn(ctx, canvas.width, canvas.height);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+      texture.repeat.set(repeatX, repeatY);
+      texture.anisotropy = maxAnisotropy;
+      texture.colorSpace = colorSpace;
+      texture.needsUpdate = true;
+      return texture;
+    }
+
+    function createConcreteTexture(repeatX, repeatY){
+      return createCanvasTexture((ctx, w, h) => {
+        const gradient = ctx.createLinearGradient(0, 0, w, h);
+        gradient.addColorStop(0, '#414751');
+        gradient.addColorStop(1, '#252b33');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, w, h);
+        const speckles = Math.floor(w * h * 0.08);
+        for(let i = 0; i < speckles; i++){
+          const shade = 75 + Math.random() * 70;
+          ctx.fillStyle = `rgba(${shade},${shade + 6},${shade + 12},${0.05 + Math.random() * 0.15})`;
+          ctx.fillRect(Math.random() * w, Math.random() * h, 1, 1);
+        }
+        ctx.strokeStyle = 'rgba(18, 20, 26, 0.08)';
+        for(let i = 0; i < 120; i++){
+          ctx.beginPath();
+          ctx.moveTo(Math.random() * w, Math.random() * h);
+          ctx.lineTo(Math.random() * w, Math.random() * h);
+          ctx.lineWidth = Math.random() * 0.8 + 0.2;
+          ctx.stroke();
+        }
+      }, repeatX, repeatY);
+    }
+
+    function createConcreteRoughness(repeatX, repeatY){
+      return createCanvasTexture((ctx, w, h) => {
+        ctx.fillStyle = '#7a7d80';
+        ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = '#4c4f52';
+        const speckles = Math.floor(w * h * 0.06);
+        for(let i = 0; i < speckles; i++){
+          const size = Math.random() * 2 + 0.6;
+          ctx.globalAlpha = 0.4 + Math.random() * 0.3;
+          ctx.fillRect(Math.random() * w, Math.random() * h, size, size);
+        }
+        ctx.globalAlpha = 1;
+      }, repeatX, repeatY, THREE.NoColorSpace);
+    }
+
+    function createWallTileTexture(){
+      return createCanvasTexture((ctx, w, h) => {
+        ctx.fillStyle = '#5d6674';
+        ctx.fillRect(0, 0, w, h);
+        const rows = 6;
+        const cols = 12;
+        const mortar = 'rgba(26, 30, 38, 0.55)';
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = mortar;
+        for(let row = 0; row <= rows; row++){
+          const y = (row / rows) * h;
+          ctx.beginPath();
+          ctx.moveTo(0, y);
+          ctx.lineTo(w, y);
+          ctx.stroke();
+        }
+        for(let row = 0; row < rows; row++){
+          const offset = (row % 2) * 0.5;
+          for(let col = -1; col < cols + 1; col++){
+            const x = ((col + offset) / cols) * w;
+            ctx.beginPath();
+            ctx.moveTo(x, (row / rows) * h);
+            ctx.lineTo(x, ((row + 1) / rows) * h);
+            ctx.stroke();
+          }
+        }
+        ctx.fillStyle = 'rgba(255,255,255,0.04)';
+        ctx.fillRect(0, 0, w, h * 0.45);
+        ctx.fillStyle = 'rgba(0,0,0,0.08)';
+        ctx.fillRect(0, h * 0.45, w, h * 0.55);
+      });
+    }
+
+    function createPlanterTexture(){
+      return createCanvasTexture((ctx, w, h) => {
+        ctx.fillStyle = '#3f4654';
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = 'rgba(16, 18, 24, 0.45)';
+        ctx.lineWidth = h * 0.08;
+        ctx.strokeRect(h * 0.05, h * 0.05, w - h * 0.1, h - h * 0.1);
+        ctx.strokeStyle = 'rgba(98, 112, 136, 0.35)';
+        ctx.lineWidth = h * 0.05;
+        ctx.strokeRect(h * 0.12, h * 0.12, w - h * 0.24, h - h * 0.24);
+      }, 2.5, 1.4);
+    }
+
+    function createFacadeTexture(repeatX, repeatY, variant = 0){
+      return createCanvasTexture((ctx, w, h) => {
+        ctx.fillStyle = variant ? '#414c5d' : '#2f3a4b';
+        ctx.fillRect(0, 0, w, h);
+        const cols = 4;
+        const rows = 6;
+        for(let row = 0; row < rows; row++){
+          for(let col = 0; col < cols; col++){
+            const margin = 0.1;
+            const cellW = w / cols;
+            const cellH = h / rows;
+            const px = col * cellW + cellW * margin;
+            const py = row * cellH + cellH * margin;
+            const winW = cellW * (1 - margin * 2);
+            const winH = cellH * (1 - margin * 2);
+            const glass = ctx.createLinearGradient(px, py, px, py + winH);
+            if(variant){
+              glass.addColorStop(0, '#7fa8ce');
+              glass.addColorStop(1, '#335171');
+            } else {
+              glass.addColorStop(0, '#5f8ab6');
+              glass.addColorStop(1, '#243f5d');
+            }
+            ctx.fillStyle = glass;
+            ctx.fillRect(px, py, winW, winH);
+            ctx.strokeStyle = 'rgba(12, 18, 26, 0.65)';
+            ctx.lineWidth = Math.max(2, winW * 0.04);
+            ctx.strokeRect(px, py, winW, winH);
+            ctx.strokeStyle = 'rgba(200, 220, 255, 0.2)';
+            ctx.lineWidth = Math.max(1, winW * 0.015);
+            ctx.beginPath();
+            ctx.moveTo(px + winW * 0.08, py + winH * 0.2);
+            ctx.lineTo(px + winW * 0.42, py + winH * 0.12);
+            ctx.lineTo(px + winW * 0.8, py + winH * 0.4);
+            ctx.stroke();
+          }
+        }
+      }, repeatX, repeatY);
+    }
 
     const controls = new PointerLockControls(camera, renderer.domElement);
     scene.add(controls.getObject());
@@ -106,36 +283,159 @@
     dirLight.shadow.mapSize.set(2048,2048); dirLight.shadow.camera.near=1; dirLight.shadow.camera.far=220;
     scene.add(dirLight);
 
-    // Floor & grid
-    const floorGeo=new THREE.PlaneGeometry(world.size,world.size,20,20); floorGeo.rotateX(-Math.PI/2);
-    const floorColorMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/floors/FloorsCheckerboard_S_Diffuse.jpg'); floorColorMap.wrapS=floorColorMap.wrapT=THREE.RepeatWrapping; floorColorMap.repeat.set(world.size/6,world.size/6); floorColorMap.colorSpace=THREE.SRGBColorSpace;
-    const floorNormalMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/floors/FloorsCheckerboard_S_Normal.jpg'); floorNormalMap.wrapS=floorNormalMap.wrapT=THREE.RepeatWrapping; floorNormalMap.repeat.copy(floorColorMap.repeat);
-    const floorRoughnessMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/floors/FloorsCheckerboard_S_Roughness.jpg'); floorRoughnessMap.wrapS=floorRoughnessMap.wrapT=THREE.RepeatWrapping; floorRoughnessMap.repeat.copy(floorColorMap.repeat);
-    const floorMat=new THREE.MeshStandardMaterial({ map:floorColorMap, normalMap:floorNormalMap, roughnessMap:floorRoughnessMap, metalness:.15, roughness:.9 });
+    // Floor & plaza detailing
+    const floorGeo=new THREE.PlaneGeometry(world.size,world.size,1,1); floorGeo.rotateX(-Math.PI/2);
+    const floorMap=createConcreteTexture(world.size/18,world.size/18);
+    const floorRoughnessMap=createConcreteRoughness(world.size/18,world.size/18);
+    const floorMat=new THREE.MeshStandardMaterial({ map:floorMap, roughnessMap:floorRoughnessMap, metalness:.12, roughness:.86 });
     const floor=new THREE.Mesh(floorGeo,floorMat); floor.receiveShadow=true; scene.add(floor);
-    scene.add(new THREE.GridHelper(world.size,24,0x334050,0x1a2530));
+
+    const plazaSize=world.size*0.86;
+    const plazaGeo=new THREE.PlaneGeometry(plazaSize,plazaSize,1,1); plazaGeo.rotateX(-Math.PI/2);
+    const plazaTexture=createCanvasTexture((ctx,w,h)=>{
+      ctx.fillStyle='#474d57';
+      ctx.fillRect(0,0,w,h);
+      const tiles=8;
+      ctx.lineWidth=8;
+      ctx.strokeStyle='rgba(20,24,32,0.55)';
+      for(let i=1;i<tiles;i++){
+        const pos=(i/tiles)*w;
+        ctx.beginPath(); ctx.moveTo(pos,0); ctx.lineTo(pos,h); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0,pos); ctx.lineTo(w,pos); ctx.stroke();
+      }
+      ctx.strokeStyle='rgba(255,255,255,0.05)';
+      ctx.lineWidth=5;
+      ctx.strokeRect(14,14,w-28,h-28);
+    },Math.max(1,plazaSize/14),Math.max(1,plazaSize/14));
+    const plaza=new THREE.Mesh(plazaGeo,new THREE.MeshStandardMaterial({ map:plazaTexture, metalness:.1, roughness:.82 }));
+    plaza.position.y=0.02; plaza.receiveShadow=true; scene.add(plaza);
 
     // Walls
-    const wallColorMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/brick_diffuse.jpg'); wallColorMap.wrapS=wallColorMap.wrapT=THREE.RepeatWrapping; wallColorMap.colorSpace=THREE.SRGBColorSpace;
-    const wallNormalMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/brick_normal.jpg'); wallNormalMap.wrapS=wallNormalMap.wrapT=THREE.RepeatWrapping;
-    const wallRoughnessMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/brick_roughness.jpg'); wallRoughnessMap.wrapS=wallRoughnessMap.wrapT=THREE.RepeatWrapping;
-    const baseWallMaterial=new THREE.MeshStandardMaterial({ map:wallColorMap, normalMap:wallNormalMap, roughnessMap:wallRoughnessMap, metalness:.25, roughness:.85 });
+    const wallTileTexture=createWallTileTexture();
+    const baseWallMaterial=new THREE.MeshStandardMaterial({ map:wallTileTexture, metalness:.18, roughness:.88 });
     const wallHeight=6, wallThickness=2, arenaSize=world.size/2;
-    function createWall(x,z,w,d){ const g=new THREE.BoxGeometry(w,wallHeight,d); const m=baseWallMaterial.clone(); m.map=baseWallMaterial.map.clone(); m.normalMap=baseWallMaterial.normalMap.clone(); m.roughnessMap=baseWallMaterial.roughnessMap.clone(); const rx=Math.max(1,w/6), ry=Math.max(1,wallHeight/2); m.map.repeat.set(rx,ry); m.normalMap.repeat.copy(m.map.repeat); m.roughnessMap.repeat.copy(m.map.repeat); const mesh=new THREE.Mesh(g,m); mesh.position.set(x,wallHeight/2,z); mesh.castShadow=mesh.receiveShadow=true; scene.add(mesh); world.walls.push(mesh); }
+    function createWall(x,z,w,d){ const g=new THREE.BoxGeometry(w,wallHeight,d); const m=baseWallMaterial.clone(); m.map=baseWallMaterial.map.clone(); const rx=Math.max(1,w/6), ry=Math.max(1,wallHeight/2); m.map.repeat.set(rx,ry); m.map.wrapS=m.map.wrapT=THREE.RepeatWrapping; m.map.anisotropy=maxAnisotropy; m.map.needsUpdate=true; const mesh=new THREE.Mesh(g,m); mesh.position.set(x,wallHeight/2,z); mesh.castShadow=mesh.receiveShadow=true; scene.add(mesh); world.walls.push(mesh); }
     createWall(0,-arenaSize+wallThickness/2,world.size,wallThickness); createWall(0,arenaSize-wallThickness/2,world.size,wallThickness); createWall(-arenaSize+wallThickness/2,0,wallThickness,world.size); createWall(arenaSize-wallThickness/2,0,wallThickness,world.size);
 
-    // Obstacles
-    const obstacleMaterial=new THREE.MeshStandardMaterial({ color:0x253246, metalness:.15, roughness:.7 });
-    [{x:-18,z:-10},{x:12,z:-15},{x:-8,z:16},{x:18,z:12},{x:0,z:0},{x:-20,z:22},{x:20,z:-22}].forEach(({x,z})=>{
-      const h=THREE.MathUtils.randFloat(2.2,4.4), w=THREE.MathUtils.randFloat(4,10), d=THREE.MathUtils.randFloat(3,8);
-      const g=new THREE.BoxGeometry(w,h,d); const m=new THREE.Mesh(g, obstacleMaterial.clone());
-      m.material.color.offsetHSL(Math.random()*0.05,0,0); m.position.set(x,h/2,z); m.castShadow=m.receiveShadow=true; scene.add(m); world.obstacles.push(m);
-    });
+    // Obstacles & cover
+    const planterTexture=createPlanterTexture();
+    const planterMaterial=new THREE.MeshStandardMaterial({ map:planterTexture, metalness:.12, roughness:.85 });
+    const coverTexture=createCanvasTexture((ctx,w,h)=>{
+      ctx.fillStyle='#3d4654';
+      ctx.fillRect(0,0,w,h);
+      ctx.fillStyle='rgba(255,255,255,0.06)';
+      ctx.fillRect(0,h*0.35,w,h*0.08);
+      ctx.fillStyle='rgba(0,0,0,0.18)';
+      ctx.fillRect(0,h*0.75,w,h*0.12);
+    },3,1.2);
+    const coverMaterial=new THREE.MeshStandardMaterial({ map:coverTexture, metalness:.18, roughness:.78 });
+
+    function createLowCover(x,z,w,d,height=1){
+      const mesh=new THREE.Mesh(new THREE.BoxGeometry(w,height,d),coverMaterial.clone());
+      mesh.position.set(x,height/2,z);
+      mesh.castShadow=mesh.receiveShadow=true;
+      scene.add(mesh);
+      world.obstacles.push(mesh);
+      return mesh;
+    }
+
+    function createPlanter(x,z,w,d,height=1.1){
+      const group=new THREE.Group();
+      group.position.set(x,0,z);
+      const base=new THREE.Mesh(new THREE.BoxGeometry(w,height,d),planterMaterial.clone());
+      base.position.y=height/2; base.castShadow=base.receiveShadow=true; group.add(base);
+      const soil=new THREE.Mesh(new THREE.BoxGeometry(w*0.92,0.32,d*0.92),new THREE.MeshStandardMaterial({ color:0x2a3523, roughness:.95 }));
+      soil.position.y=height+0.16; soil.receiveShadow=true; group.add(soil);
+      const shrubCount=Math.max(2,Math.round((w+d)*0.4));
+      for(let i=0;i<shrubCount;i++){
+        const shrub=new THREE.Mesh(new THREE.ConeGeometry(Math.min(w,d)*0.18+Math.random()*0.1,1.35,7),new THREE.MeshStandardMaterial({ color:0x3a8d55, roughness:.78 }));
+        shrub.position.set((Math.random()-.5)*w*0.45,height+0.75+Math.random()*0.25,(Math.random()-.5)*d*0.45);
+        shrub.castShadow=true; group.add(shrub);
+      }
+      scene.add(group);
+      world.obstacles.push(group);
+      return group;
+    }
+
+    function createShop(x,z,width,depth,rotationY=0){
+      const height=3.6;
+      const group=new THREE.Group();
+      group.position.set(x,0,z);
+      group.rotation.y=rotationY;
+      const facadeTex=createFacadeTexture(Math.max(1,width/4),Math.max(1,height/2.5),1);
+      const body=new THREE.Mesh(new THREE.BoxGeometry(width,height,depth),new THREE.MeshStandardMaterial({ map:facadeTex, metalness:.08, roughness:.78, emissive:new THREE.Color(0x121a28), emissiveIntensity:.35 }));
+      body.position.y=height/2; body.castShadow=body.receiveShadow=true; group.add(body);
+      const awningTex=createCanvasTexture((ctx,w,h)=>{
+        ctx.fillStyle='#c6463f';
+        ctx.fillRect(0,0,w,h);
+        ctx.fillStyle='#f3f0e5';
+        const stripes=6;
+        for(let i=0;i<stripes;i++) ctx.fillRect(i*w/stripes,0,w/(stripes*2),h);
+      },Math.max(1,width/3),1);
+      const awning=new THREE.Mesh(new THREE.BoxGeometry(width*.98,0.28,depth*.9),new THREE.MeshStandardMaterial({ map:awningTex, roughness:.62, metalness:.05, transparent:true, opacity:.92 }));
+      awning.position.set(0,height+.12,depth*.1); awning.castShadow=true; group.add(awning);
+      scene.add(group);
+      world.obstacles.push(group);
+      return group;
+    }
+
+    createShop(-26,-34,18,6,0);
+    createShop(26,-34,18,6,0);
+    createShop(-26,34,18,6,Math.PI);
+    createShop(26,34,18,6,Math.PI);
+
+    createPlanter(-18,-18,8,4.5);
+    createPlanter(18,-18,8,4.5);
+    createPlanter(-18,18,8,4.5);
+    createPlanter(18,18,8,4.5);
+    createPlanter(0,-26,12,4.2);
+    createPlanter(0,26,12,4.2);
+
+    createLowCover(0,-6,14,2.4,1.05);
+    createLowCover(0,6,14,2.4,1.05);
+    createLowCover(-22,0,3,11,1.1);
+    createLowCover(22,0,3,11,1.1);
+
+    // Background structures
+    const backdropGroup=new THREE.Group();
+    scene.add(backdropGroup);
+
+    function createBackdropBuilding(x,z,width,height,depth,variant=0,rotationY=0){
+      const group=new THREE.Group();
+      group.position.set(x,0,z);
+      group.rotation.y=rotationY;
+      const facadeTex=createFacadeTexture(Math.max(1,width/6),Math.max(1,height/4),variant);
+      const building=new THREE.Mesh(new THREE.BoxGeometry(width,height,depth),new THREE.MeshStandardMaterial({ map:facadeTex, metalness:.12, roughness:.7, emissive:new THREE.Color(0x0a1018), emissiveIntensity:.28 }));
+      building.position.y=height/2; group.add(building);
+      const roofTex=createCanvasTexture((ctx,w,h)=>{
+        ctx.fillStyle='#2f333a';
+        ctx.fillRect(0,0,w,h);
+        ctx.strokeStyle='rgba(255,255,255,0.05)';
+        ctx.lineWidth=h*0.12;
+        ctx.strokeRect(h*0.12,h*0.12,w-h*0.24,h-h*0.24);
+      },Math.max(1,width/8),Math.max(1,depth/8));
+      const roof=new THREE.Mesh(new THREE.BoxGeometry(width*1.02,0.4,depth*1.02),new THREE.MeshStandardMaterial({ map:roofTex, roughness:.92 }));
+      roof.position.y=height+.2; group.add(roof);
+      backdropGroup.add(group);
+      return group;
+    }
+
+    const ring=world.size*0.6;
+    createBackdropBuilding(-ring,0,22,16,10,0,Math.PI/2);
+    createBackdropBuilding(ring,0,24,18,10,1,-Math.PI/2);
+    createBackdropBuilding(0,ring,30,20,12,1,Math.PI);
+    createBackdropBuilding(0,-ring,28,19,12,0,0);
+    const diag=world.size*0.52;
+    createBackdropBuilding(-diag,diag,18,14,9,1,Math.PI*0.75);
+    createBackdropBuilding(diag,diag,18,13,9,0,-Math.PI*0.75);
+    createBackdropBuilding(-diag,-diag,18,14,9,1,Math.PI*0.25);
+    createBackdropBuilding(diag,-diag,18,15,9,0,-Math.PI*0.25);
 
     // Enemy visual
     function createEnemyUniformTexture(){ const c=document.createElement('canvas'); c.width=128; c.height=256; const ctx=c.getContext('2d'); const gr=ctx.createLinearGradient(0,0,0,c.height); gr.addColorStop(0,'#18273d'); gr.addColorStop(.4,'#1f3553'); gr.addColorStop(1,'#101c2e'); ctx.fillStyle=gr; ctx.fillRect(0,0,c.width,c.height); ctx.fillStyle='rgba(90,180,255,.3)'; ctx.fillRect(0,c.height*.15,c.width,18); ctx.fillRect(0,c.height*.45,c.width,10); ctx.fillStyle='rgba(12,18,28,.7)'; for(let i=0;i<6;i++) ctx.fillRect(18,24+i*38,c.width-36,6); ctx.fillStyle='rgba(255,255,255,.08)'; ctx.fillRect(0,c.height*.05,c.width,10); ctx.fillRect(0,c.height*.75,c.width,6); return new THREE.CanvasTexture(c); }
     const enemyUniformTexture=createEnemyUniformTexture(); enemyUniformTexture.wrapS=enemyUniformTexture.wrapT=THREE.RepeatWrapping; enemyUniformTexture.colorSpace=THREE.SRGBColorSpace; enemyUniformTexture.needsUpdate=true;
     const enemyMaterialTemplate=new THREE.MeshStandardMaterial({ map:enemyUniformTexture, metalness:.2, roughness:.65, emissive:new THREE.Color(0x050b14), emissiveIntensity:.25 });
+    const enemyGeometry=new THREE.CapsuleGeometry(.6,1.2,6,12);
 
     // Decorative light
     const pointLight=new THREE.PointLight(0x5ab9ff,1.3,65,2); pointLight.position.set(0,4.5,0); scene.add(pointLight);
@@ -171,11 +471,13 @@
     renderer.domElement.addEventListener('click',()=>{ if(!player.alive) return; controls.lock(); });
     let initialLockHandled=false;
     controls.addEventListener('lock',()=>{ crosshairEl.style.display='block'; document.getElementById('info').style.display='none'; weaponGroup.visible=true; if(!initialLockHandled && game.state==='waiting'){ startNextRound(); initialLockHandled=true; } });
-    controls.addEventListener('unlock',()=>{ crosshairEl.style.display='none'; document.getElementById('info').style.display='block'; weaponGroup.visible=false; muzzleFlash.visible=false; aiming=false; });
+    controls.addEventListener('unlock',()=>{ crosshairEl.style.display='none'; document.getElementById('info').style.display='block'; weaponGroup.visible=false; muzzleFlash.visible=false; aiming=false; shooting=false; setADS(false); });
 
     // Helpers
     const playerCollider=new THREE.Box3(), tempBox=new THREE.Box3(), enemyCollider=new THREE.Box3(), muzzleWorldPosition=new THREE.Vector3();
     const raycaster=new THREE.Raycaster(), tmpVec=new THREE.Vector3(), tmpDir=new THREE.Vector3(), tmpQuat=new THREE.Quaternion(), tmpEuler=new THREE.Euler(0,0,0,'YXZ');
+    const spawnCandidate=new THREE.Vector3();
+    const spawnFallback=new THREE.Vector3();
 
     // Spread
     let spreadBaseHip=THREE.MathUtils.degToRad(.35), spreadBaseADS=THREE.MathUtils.degToRad(.14);
@@ -189,7 +491,8 @@
     // Tracers & effects
     const tracers=[]; function spawnTracer(from,to,opacity=.8){ const g=new THREE.BufferGeometry().setFromPoints([from.clone(),to.clone()]); const m=new THREE.LineBasicMaterial({transparent:true,opacity}); const line=new THREE.Line(g,m); scene.add(line); tracers.push({line,life:.06}); }
     function showHitmarker(){ hitmarkerEl.classList.remove('hitmarker--show'); void hitmarkerEl.offsetWidth; hitmarkerEl.classList.add('hitmarker--show'); }
-    function screenShake(intensity=.02,time=.08){ shake.time=time; shake.intensity=intensity; } const shake={time:0,intensity:0};
+    function screenShake(intensity=.02,time=.08){ shake.time=time; shake.intensity=intensity; shake.duration=time; }
+    const shake={ time:0, intensity:0, duration:0, offset:new THREE.Vector3() };
     function crosshairBloom(){ crosshairEl.style.transform='translate(-50%,-50%) scale(1.25)'; setTimeout(()=>{ crosshairEl.style.transform='translate(-50%,-50%) scale(1)'; },70); }
 
     // Noise/hearing
@@ -217,23 +520,151 @@
 
     // Enemies (same AI as D)
     function spawnEnemy(){
-      const spawnRadius=world.size/2 - 6; const angle=Math.random()*Math.PI*2; const distance=THREE.MathUtils.randFloat(spawnRadius*.5,spawnRadius); const x=Math.cos(angle)*distance, z=Math.sin(angle)*distance;
-      const bodyGeometry=new THREE.CapsuleGeometry(.6,1.2,6,12); const mat=enemyMaterialTemplate.clone(); mat.map=enemyUniformTexture.clone(); mat.color.setHSL(THREE.MathUtils.randFloat(.55,.62),.45,.55);
-      const enemyMesh=new THREE.Mesh(bodyGeometry,mat); enemyMesh.position.set(x,1.5,z); enemyMesh.castShadow=enemyMesh.receiveShadow=true; scene.add(enemyMesh);
+      const spawnRadius=world.size/2 - 6;
+      const statics=[...world.walls,...world.obstacles];
+      const playerPos=controls.getObject().position;
+      const minPlayerDistSq=14*14;
+      const minEnemyBase=3.4;
+      const clearance=0.9;
+      const enemySpacingSteps=[
+        minEnemyBase,
+        Math.max(2.6, minEnemyBase*0.85),
+        Math.max(2.2, minEnemyBase*0.7)
+      ].map(v=>v*v);
+
+      const candidateIsValid=(pos, enemySpacingSq)=>{
+        const dx=playerPos.x-pos.x;
+        const dz=playerPos.z-pos.z;
+        if(dx*dx+dz*dz<minPlayerDistSq) return false;
+        for(const obj of statics){
+          tempBox.setFromObject(obj);
+          if(pos.x>tempBox.min.x-clearance && pos.x<tempBox.max.x+clearance && pos.z>tempBox.min.z-clearance && pos.z<tempBox.max.z+clearance){
+            return false;
+          }
+        }
+        if(enemySpacingSq>0){
+          for(const other of enemies){
+            const mesh=other.mesh; if(!mesh) continue;
+            const ox=mesh.position.x-pos.x;
+            const oz=mesh.position.z-pos.z;
+            if(ox*ox+oz*oz<enemySpacingSq) return false;
+          }
+        }
+        return true;
+      };
+
+      let found=false;
+      for(const enemySpacingSq of enemySpacingSteps){
+        for(let attempt=0; attempt<28 && !found; attempt++){
+          const angle=Math.random()*Math.PI*2;
+          const distance=THREE.MathUtils.randFloat(spawnRadius*.5,spawnRadius);
+          spawnCandidate.set(Math.cos(angle)*distance,0,Math.sin(angle)*distance);
+          if(candidateIsValid(spawnCandidate, enemySpacingSq)){
+            found=true;
+          }
+        }
+        if(found) break;
+      }
+
+      const relaxedSpacingSq=enemySpacingSteps[enemySpacingSteps.length-1];
+      if(!found){
+        const minOffset=Math.sqrt(minPlayerDistSq)+2;
+        const radialStep=Math.max(2.5, Math.sqrt(relaxedSpacingSq)*0.9);
+        for(let dirIdx=0; dirIdx<12 && !found; dirIdx++){
+          const angleBase=(Math.PI*2*dirIdx)/12;
+          const angle=angleBase+THREE.MathUtils.randFloatSpread(.25);
+          const dirX=Math.cos(angle);
+          const dirZ=Math.sin(angle);
+          for(let dist=minOffset; dist<=spawnRadius && !found; dist+=radialStep){
+            spawnFallback.set(
+              THREE.MathUtils.clamp(playerPos.x+dirX*dist,-spawnRadius,spawnRadius),
+              0,
+              THREE.MathUtils.clamp(playerPos.z+dirZ*dist,-spawnRadius,spawnRadius)
+            );
+            if(candidateIsValid(spawnFallback, relaxedSpacingSq)){
+              spawnCandidate.copy(spawnFallback);
+              found=true;
+            }
+          }
+        }
+      }
+
+      if(!found){
+        const minOffset=Math.sqrt(minPlayerDistSq)+1;
+        for(let attempt=0; attempt<32 && !found; attempt++){
+          const angle=Math.random()*Math.PI*2;
+          const dist=THREE.MathUtils.randFloat(minOffset, spawnRadius);
+          spawnFallback.set(
+            THREE.MathUtils.clamp(playerPos.x+Math.cos(angle)*dist,-spawnRadius,spawnRadius),
+            0,
+            THREE.MathUtils.clamp(playerPos.z+Math.sin(angle)*dist,-spawnRadius,spawnRadius)
+          );
+          if(candidateIsValid(spawnFallback, relaxedSpacingSq)){
+            spawnCandidate.copy(spawnFallback);
+            found=true;
+          }
+        }
+      }
+
+      if(!found){
+        const angle=Math.random()*Math.PI*2;
+        const dist=Math.max(spawnRadius-2, Math.sqrt(minPlayerDistSq));
+        spawnCandidate.set(Math.cos(angle)*dist,0,Math.sin(angle)*dist);
+        if(!candidateIsValid(spawnCandidate, relaxedSpacingSq)){
+          const relaxedFallbackSq=Math.max(relaxedSpacingSq*0.64, 1.8*1.8);
+          let placed=false;
+          for(let attempt=0; attempt<24 && !placed; attempt++){
+            const altAngle=Math.random()*Math.PI*2;
+            const altDist=THREE.MathUtils.randFloat(Math.sqrt(minPlayerDistSq)+1, spawnRadius);
+            spawnFallback.set(Math.cos(altAngle)*altDist,0,Math.sin(altAngle)*altDist);
+            if(candidateIsValid(spawnFallback, relaxedFallbackSq)){
+              spawnCandidate.copy(spawnFallback);
+              placed=true;
+            }
+          }
+          if(!placed){
+            for(let attempt=0; attempt<24 && !placed; attempt++){
+              const altAngle=Math.random()*Math.PI*2;
+              const altDist=THREE.MathUtils.randFloat(Math.sqrt(minPlayerDistSq)+1, spawnRadius);
+              spawnFallback.set(Math.cos(altAngle)*altDist,0,Math.sin(altAngle)*altDist);
+              if(candidateIsValid(spawnFallback, 0)){
+                spawnCandidate.copy(spawnFallback);
+                placed=true;
+              }
+            }
+          }
+          if(!placed){
+            spawnCandidate.set(
+              THREE.MathUtils.clamp(-playerPos.x, -spawnRadius, spawnRadius),
+              0,
+              THREE.MathUtils.clamp(-playerPos.z, -spawnRadius, spawnRadius)
+            );
+          }
+        }
+      }
+      const mat=enemyMaterialTemplate.clone();
+      const clonedMap=mat.map;
+      mat.map=enemyUniformTexture;
+      if(clonedMap && clonedMap!==enemyUniformTexture && typeof clonedMap.dispose==='function'){
+        clonedMap.dispose();
+      }
+      mat.color.setHSL(THREE.MathUtils.randFloat(.55,.62),.45,.55);
+      const enemyMesh=new THREE.Mesh(enemyGeometry,mat); enemyMesh.position.set(spawnCandidate.x,1.5,spawnCandidate.z); enemyMesh.castShadow=enemyMesh.receiveShadow=true; scene.add(enemyMesh);
       const p = difficulty.params;
       const enemy={ mesh:enemyMesh, health:85+game.round*6, maxHealth:85+game.round*6, state:'patrol', subTimer:0, targetPoint:new THREE.Vector3(), chaseSpeed:movementConfig.enemyChase, patrolSpeed:movementConfig.enemyPatrol, lastSeenPlayerAt:new THREE.Vector3(), fireCooldown:THREE.MathUtils.randFloat(.8,1.4), burstShotsLeft:0, burstSize:THREE.MathUtils.randInt(p.burstSize[0], p.burstSize[1]), burstGap:.14, restAfterBurst:p.restAfterBurst, aimSpread:p.aimSpread, strafeTimer:0, strafeDir:(Math.random()<.5?-1:1), firstShotArm:THREE.MathUtils.randFloat(p.firstShotDelay[0], p.firstShotDelay[1]), suppressedUntil:0 };
       pickNewPatrolPoint(enemy); enemies.push(enemy);
+      return true;
     }
     function pickNewPatrolPoint(enemy){ enemy.targetPoint.set(THREE.MathUtils.randFloatSpread(world.size*.6),0,THREE.MathUtils.randFloatSpread(world.size*.6)); enemy.subTimer=THREE.MathUtils.randFloat(3,7); }
     const raycaster2=new THREE.Raycaster();
     function hasLineOfSight(from,to){ const dir=tmpDir.subVectors(to,from).normalize(); raycaster2.set(from.clone().add(new THREE.Vector3(0,1.3,0)),dir); const statics=[...world.walls,...world.obstacles]; const hits=raycaster2.intersectObjects(statics,false); if(!hits.length) return true; const dist=from.distanceTo(to); return hits[0].distance > dist-0.5; }
     function nearestCoverPoint(enemy){ const epos=enemy.mesh.position, ppos=controls.getObject().position; let best=null, bestDist=Infinity; for(const ob of world.obstacles){ const b=new THREE.Box3().setFromObject(ob); const c=b.getCenter(new THREE.Vector3()); const d=epos.distanceTo(c); if(d<bestDist){ bestDist=d; best={box:b, center:c, mesh:ob}; } } if(!best) return null; const away=new THREE.Vector3().subVectors(best.center,ppos).setY(0).normalize(); const half=best.box.getSize(new THREE.Vector3()).multiplyScalar(.5); const offset=new THREE.Vector3(away.x*half.x,0,away.z*half.z); return best.center.clone().add(offset.multiplyScalar(1.1)); }
 
-    function enemyHitscanShoot(enemy){
+    function enemyHitscanShoot(enemy, delta){
       const p = difficulty.params;
       const now = performance.now();
       if(now - game.roundStartAt < 1200) return;
-      if(enemy.firstShotArm>0){ enemy.firstShotArm -= clock.getDelta(); return; }
+      const dt = Number.isFinite(delta) ? delta : 0.016;
       const origin=enemy.mesh.position.clone().add(new THREE.Vector3(0,1.3,0));
       let toPlayer=controls.getObject().position.clone().add(new THREE.Vector3(0,1,0)).sub(origin).normalize();
       const extraSpread = now < enemy.suppressedUntil ? THREE.MathUtils.degToRad(2.2) : 0;
@@ -282,7 +713,7 @@
     function spawnImpactDecal(point, normal=new THREE.Vector3(0,1,0)){ const s=new THREE.Sprite(new THREE.SpriteMaterial({ map:muzzleFlashTexture, color:0xddddff, blending:THREE.AdditiveBlending, transparent:true, opacity:.7 })); s.scale.set(.5,.5,.5); s.position.copy(point); if(normal){ const q=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1), normal.clone().normalize()); s.quaternion.copy(q);} scene.add(s); setTimeout(()=>{ scene.remove(s); },80); }
 
     // Loot
-    function maybeDropLoot(pos){ const roll=Math.random(); if(roll>0.6) return; const type=roll<0.18?'med':'ammo'; const amount=type==='med'?THREE.MathUtils.randInt(20,35):THREE.MathUtils.randInt(20,60); const mesh=buildLootMesh(type); mesh.position.copy(pos).add(new THREE.Vector3(0,.5,0)); mesh.rotation.y=Math.random()*Math.PI*2; scene.add(mesh); lootItems.push({mesh,type,amount,bob:Math.random()*Math.PI*2}); }
+    function maybeDropLoot(pos){ const roll=Math.random(); if(roll>0.6) return; const type=roll<0.18?'med':'ammo'; const amount=type==='med'?THREE.MathUtils.randInt(20,35):THREE.MathUtils.randInt(20,60); const mesh=buildLootMesh(type); mesh.position.copy(pos).add(new THREE.Vector3(0,.5,0)); mesh.rotation.y=Math.random()*Math.PI*2; scene.add(mesh); lootItems.push({mesh,type,amount,bob:Math.random()*Math.PI*2,baseY:mesh.position.y}); }
     function buildLootMesh(type){ const g=type==='med'? new THREE.TorusGeometry(.35,.12,12,24) : new THREE.BoxGeometry(.7,.4,.5); const m=new THREE.MeshStandardMaterial({ color:type==='med'?0x4ef58f:0xffd24d, emissive:type==='med'?0x0a3318:0x332508, metalness:.2, roughness:.35 }); const mesh=new THREE.Mesh(g,m); mesh.castShadow=mesh.receiveShadow=true; const icon=new THREE.Sprite(new THREE.SpriteMaterial({ map:null, color:type==='med'?0x9fffe0:0xfff1b3, transparent:true, opacity:.9 })); icon.scale.set(.45,.45,.45); icon.position.set(0,.5,0); mesh.add(icon); return mesh; }
     function tryPickupLoot(){ const p=controls.getObject().position; for(let i=lootItems.length-1;i>=0;i--){ const l=lootItems[i]; if(l.mesh.position.distanceTo(p)<1.7){ if(l.type==='ammo'){ const old=player.reserve; player.reserve=Math.min(player.reserveMax, player.reserve+l.amount); if(player.isReloading===false && player.ammo===0) reloadWeapon(); updateAmmoDisplay(); showPickup(`+${player.reserve-old} mermi`); } else { const old=player.health; player.health=Math.min(100, player.health+l.amount); const r=player.health/100; healthBarEl.style.width=`${r*100}%`; showPickup(`+${player.health-old} can`);} scene.remove(l.mesh); lootItems.splice(i,1);} } }
     function showPickup(text){ pickupBannerEl.textContent=text; pickupBannerEl.classList.add('show-pickup'); setTimeout(()=>pickupBannerEl.classList.remove('show-pickup'),600); }
@@ -323,9 +754,10 @@
     function updatePlayer(delta){
       if(!controls.isLocked) return;
       const sprinting=keyState['ShiftLeft']||keyState['ShiftRight'];
-      // sprint yaparken nişan iptal
-      if(sprinting) aiming=false;
-      setADS(aiming);
+      // ADS only if the input is held and player is free to aim
+      const wantsADS = aiming && player.alive && !player.isReloading;
+      const effectiveADS = wantsADS && !sprinting;
+      setADS(effectiveADS);
 
       // ADS transition
       const target = isADS ? 1 : 0;
@@ -354,14 +786,28 @@
       // recovery
       const recRate = isADS ? THREE.MathUtils.degToRad(1.7) : spreadRecoverRate;
       spreadCur = Math.max(base, spreadCur - recRate*delta);
-      if(shake.time>0){ shake.time-=delta; const i=shake.intensity; camera.position.x += (Math.random()*2-1)*i*.2; camera.position.y += (Math.random()*2-1)*i*.1; }
+      if(shake.offset.lengthSq()>0){
+        camera.position.sub(shake.offset);
+        shake.offset.set(0,0,0);
+      }
+      if(shake.time>0){
+        shake.time=Math.max(0, shake.time-delta);
+        const falloff = shake.duration>0 ? shake.time/shake.duration : 0;
+        const intensity = shake.intensity * (0.6 + 0.4 * falloff);
+        shake.offset.set(
+          (Math.random()*2-1)*intensity,
+          (Math.random()*2-1)*intensity*0.6,
+          (Math.random()*2-1)*intensity*0.4
+        );
+        camera.position.add(shake.offset);
+      }
       updateRegen(delta);
       updateWeaponPose(delta);
     }
 
     function updateTracers(delta){ for(let i=tracers.length-1;i>=0;i--){ const t=tracers[i]; t.life-=delta; if(t.life<=0){ scene.remove(t.line); tracers.splice(i,1);} else t.line.material.opacity=Math.max(0, t.life/.06); } }
 
-    function updateLoot(delta){ const t=performance.now()/1000; for(const l of lootItems){ l.mesh.rotation.y += delta*1.6; const baseY=l.mesh.position.y; l.mesh.position.y = Math.max(.3, baseY + Math.sin(t + l.bob)*.003); } tryPickupLoot(); }
+    function updateLoot(delta){ const t=performance.now()/1000; for(const l of lootItems){ l.mesh.rotation.y += delta*1.6; const anchor = Number.isFinite(l.baseY) ? l.baseY : l.mesh.position.y; l.mesh.position.y = Math.max(.3, anchor + Math.sin(t + l.bob)*.12); } tryPickupLoot(); }
 
     // Enemy update copied from D
     function updateEnemies(delta){
@@ -382,10 +828,17 @@
           if(distance < p.retreat){ enemy.mesh.position.addScaledVector(lookDir, -enemy.chaseSpeed*delta*1.05); }
           else if(distance > p.engage){ enemy.mesh.position.addScaledVector(lookDir, enemy.chaseSpeed*delta); }
           else { enemy.strafeTimer-=delta; if(enemy.strafeTimer<=0){ enemy.strafeTimer=THREE.MathUtils.randFloat(.3,.8); enemy.strafeDir=(Math.random()<.5?-1:1);} const strafe=new THREE.Vector3(-lookDir.z,0,lookDir.x).multiplyScalar(enemy.chaseSpeed*.7*enemy.strafeDir*delta); enemy.mesh.position.add(strafe); }
+          if(enemy.firstShotArm>0){
+            enemy.firstShotArm=Math.max(0, enemy.firstShotArm-delta);
+          }
           enemy.fireCooldown -= delta;
           if(enemy.fireCooldown<=0){
-            if(enemy.burstShotsLeft<=0){ enemy.burstShotsLeft=THREE.MathUtils.randInt(p.burstSize[0], p.burstSize[1]); enemy.fireCooldown=0; }
-            if(enemy.burstShotsLeft>0){ enemyHitscanShoot(enemy); enemy.burstShotsLeft-=1; enemy.fireCooldown = enemy.burstShotsLeft>0 ? 0.14 : p.restAfterBurst + THREE.MathUtils.randFloat(-0.2,0.2); }
+            if(enemy.firstShotArm>0){
+              enemy.fireCooldown = enemy.firstShotArm;
+            } else {
+              if(enemy.burstShotsLeft<=0){ enemy.burstShotsLeft=THREE.MathUtils.randInt(p.burstSize[0], p.burstSize[1]); enemy.fireCooldown=0; }
+              if(enemy.burstShotsLeft>0){ enemyHitscanShoot(enemy, delta); enemy.burstShotsLeft-=1; enemy.fireCooldown = enemy.burstShotsLeft>0 ? 0.14 : p.restAfterBurst + THREE.MathUtils.randFloat(-0.2,0.2); }
+            }
           }
         }
 
@@ -396,9 +849,9 @@
 
     function moveTowards(enemy,target,speed,delta){ const dir=tmpVec.subVectors(target,enemy.mesh.position); dir.y=0; const d=dir.length(); if(d>.5){ dir.normalize(); enemy.mesh.position.addScaledVector(dir, speed*delta); enemy.mesh.lookAt(enemy.mesh.position.clone().add(dir)); } }
 
-    function updateMinimap(){ const ctx=minimapCtx, size=minimapCanvas.width, scale=size/world.size; ctx.clearRect(0,0,size,size); ctx.fillStyle='rgba(10,18,28,.9)'; ctx.fillRect(0,0,size,size); ctx.strokeStyle='rgba(255,255,255,.15)'; ctx.strokeRect(2,2,size-4,size-4); const playerPos=controls.getObject().position; const yaw=camera.rotation.y; function project(pos){ return {x:size/2+pos.x*scale, y:size/2+pos.z*scale}; } ctx.fillStyle='#50c8ff'; const p=project(playerPos); ctx.beginPath(); ctx.arc(p.x,p.y,6,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.moveTo(p.x,p.y); const r=18; ctx.lineTo(p.x+Math.sin(yaw-.35)*r, p.y+Math.cos(yaw-.35)*r); ctx.lineTo(p.x+Math.sin(yaw+.35)*r, p.y+Math.cos(yaw+.35)*r); ctx.closePath(); ctx.fillStyle='rgba(80,200,255,.25)'; ctx.fill(); ctx.fillStyle='#ff5c3b'; enemies.forEach(e=>{ const ep=project(e.mesh.position); ctx.beginPath(); ctx.arc(ep.x,ep.y,5,0,Math.PI*2); ctx.fill(); }); }
+    function updateMinimap(){ const ctx=minimapCtx, size=minimapCanvas.width, scale=size/world.size; ctx.clearRect(0,0,size,size); ctx.fillStyle='rgba(10,18,28,.9)'; ctx.fillRect(0,0,size,size); ctx.strokeStyle='rgba(255,255,255,.15)'; ctx.strokeRect(2,2,size-4,size-4); const playerPos=controls.getObject().position; const yaw=controls.getObject().rotation.y; function project(pos){ return {x:size/2+pos.x*scale, y:size/2+pos.z*scale}; } ctx.fillStyle='#50c8ff'; const p=project(playerPos); ctx.beginPath(); ctx.arc(p.x,p.y,6,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.moveTo(p.x,p.y); const r=18; ctx.lineTo(p.x+Math.sin(yaw-.35)*r, p.y+Math.cos(yaw-.35)*r); ctx.lineTo(p.x+Math.sin(yaw+.35)*r, p.y+Math.cos(yaw+.35)*r); ctx.closePath(); ctx.fillStyle='rgba(80,200,255,.25)'; ctx.fill(); ctx.fillStyle='#ff5c3b'; enemies.forEach(e=>{ const ep=project(e.mesh.position); ctx.beginPath(); ctx.arc(ep.x,ep.y,5,0,Math.PI*2); ctx.fill(); }); }
 
-    function animate(){ requestAnimationFrame(animate); const delta=Math.min(.05, clock.getDelta()); if(player.fireCooldown>0) player.fireCooldown-=delta; if(shooting && player.fireCooldown<=0) hitscanShoot(); if(game.state!=='over'){ updatePlayer(delta); updateEnemies(delta); updateTracers(delta); updateLoot(delta); updateMinimap(); if(game.state==='spawning'){ game.spawnDelay-=delta; if(game.spawnDelay<=0 && game.spawnQueue>0){ spawnEnemy(); game.spawnQueue-=1; game.spawnDelay=THREE.MathUtils.randFloat(.6,1.2);} else if(game.spawnQueue<=0){ game.state='inRound'; } } } renderer.render(scene,camera); }
+    function animate(){ requestAnimationFrame(animate); const delta=Math.min(.05, clock.getDelta()); if(player.fireCooldown>0) player.fireCooldown-=delta; if(shooting && player.fireCooldown<=0) hitscanShoot(); if(game.state!=='over'){ updatePlayer(delta); updateEnemies(delta); updateTracers(delta); updateLoot(delta); updateMinimap(); if(game.state==='spawning'){ game.spawnDelay-=delta; if(game.spawnDelay<=0 && game.spawnQueue>0){ const spawned=spawnEnemy(); if(spawned){ game.spawnQueue-=1; game.spawnDelay=THREE.MathUtils.randFloat(.6,1.2);} else { game.spawnDelay=Math.max(game.spawnDelay,0.45); } } else if(game.spawnQueue<=0){ game.state='inRound'; } } } renderer.render(scene,camera); }
 
     window.addEventListener('resize',()=>{ camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
 
