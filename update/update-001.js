@@ -240,6 +240,10 @@ export function applyPatch(ctx){
       damageScale: [0.9, 1.22],
       fireCadence: [0.08, 0.16],
       flinchSuppression: 0.55,
+      reactionFloor: 0.05,
+      reactionCeil: 0.16,
+      awarenessMemory: 0.9,
+      alertDistance: 11,
     },
     PERF: {
       fixedStep: 1 / 60,
@@ -743,167 +747,6 @@ export function applyPatch(ctx){
       }
       geometry.computeVertexNormals?.();
       pos.needsUpdate = true;
-    }
-
-    if(geometry){
-      geometry.computeBoundingBox?.();
-      geometry.computeBoundingSphere?.();
-      PATCH_STATE.enemyGeometry = geometry;
-    }
-
-    return geometry;
-  }
-
-  function getStaticBounds(mesh, forceUpdate = false){
-    if(!mesh) return null;
-    let entry = staticBoundsCache.get(mesh);
-    if(!entry){
-      entry = { box: new THREE.Box3(), frame: -1 };
-      staticBoundsCache.set(mesh, entry);
-      forceUpdate = true;
-    }
-    const frameId = PATCH_STATE.frameId || 0;
-    if(forceUpdate || entry.frame !== frameId){
-      mesh.updateWorldMatrix?.(true, false);
-      const geometry = mesh.geometry;
-      if(geometry && geometry.boundingBox){
-        entry.box.copy(geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
-      } else if(geometry && geometry.computeBoundingBox){
-        geometry.computeBoundingBox();
-        entry.box.copy(geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
-      } else {
-        entry.box.setFromObject(mesh);
-      }
-      entry.frame = frameId;
-    }
-    return entry.box;
-  }
-
-  function applySharedEnemyTexture(material){
-    if(!material || !baseEnemyTexture) return material;
-    const previous = material.map;
-    if(previous && previous !== baseEnemyTexture && typeof previous.dispose === 'function' && !sharedTextures.has(previous)){
-      try{
-        previous.dispose();
-      }catch(err){
-        console.warn('[patch-001] Failed to dispose previous enemy material map.', err);
-      }
-    }
-    material.map = baseEnemyTexture;
-    material.needsUpdate = true;
-    return material;
-  }
-
-  function createDefaultEnemyMaterial(){
-    const material = new THREE.MeshStandardMaterial({ color:0x223344 });
-    return applySharedEnemyTexture(material);
-  }
-
-  function instantiateEnemyMaterial(){
-    const template = ctx.enemyMaterialTemplate;
-    if(!template){
-      return createDefaultEnemyMaterial();
-    }
-
-    if(Array.isArray(template)){
-      const materials = [];
-      for(let i=0;i<template.length;i++){
-        const src = template[i];
-        let clone = null;
-        if(src && typeof src.clone === 'function'){
-          try{
-            clone = src.clone();
-          }catch(err){
-            console.warn('[patch-001] Failed to clone enemy material template entry.', err);
-            clone = null;
-          }
-        }
-        if((!clone || clone === src) && src && src.isMaterial){
-          try{
-            clone = new src.constructor();
-            if(clone && clone.copy){
-              clone.copy(src);
-            }
-          }catch(err){
-            console.warn('[patch-001] Failed to copy enemy material template entry.', err);
-            clone = null;
-          }
-        }
-        if(!clone || clone === src){
-          clone = createDefaultEnemyMaterial();
-        } else {
-          applySharedEnemyTexture(clone);
-        }
-        materials.push(clone);
-      }
-      return materials;
-    }
-
-    let clone = null;
-    if(template && typeof template.clone === 'function'){
-      try{
-        clone = template.clone();
-      }catch(err){
-        console.warn('[patch-001] Failed to clone enemy material template.', err);
-        clone = null;
-      }
-    }
-    if((!clone || clone === template) && template && template.isMaterial){
-      try{
-        clone = new template.constructor();
-        if(clone && clone.copy){
-          clone.copy(template);
-        }
-      }catch(err){
-        console.warn('[patch-001] Failed to copy enemy material template.', err);
-        clone = null;
-      }
-    }
-    if(!clone || clone === template){
-      clone = createDefaultEnemyMaterial();
-    } else {
-      applySharedEnemyTexture(clone);
-    }
-    return clone;
-  }
-
-  function ensureEnemyGeometry(){
-    if(PATCH_STATE.enemyGeometry){
-      return PATCH_STATE.enemyGeometry;
-    }
-
-    const cylinderHeight = Math.max(0, ENEMY_HEIGHT - ENEMY_RADIUS * 2);
-    const radialSegments = 12;
-    const heightSegments = 6;
-
-    let geometry = null;
-
-    const tryBuild = (builder, label) => {
-      if(geometry || typeof builder !== 'function'){
-        return;
-      }
-      try{
-        geometry = new builder(ENEMY_RADIUS, cylinderHeight, heightSegments, radialSegments);
-      }catch(err){
-        console.warn(`[patch-001] Failed to create ${label} enemy geometry.`, err);
-        geometry = null;
-      }
-    };
-
-    tryBuild(THREE.CapsuleGeometry, 'CapsuleGeometry');
-    tryBuild(THREE.CapsuleBufferGeometry, 'CapsuleBufferGeometry');
-
-    if(!geometry){
-      try{
-        geometry = new THREE.CylinderGeometry(ENEMY_RADIUS, ENEMY_RADIUS, Math.max(ENEMY_HEIGHT, ENEMY_RADIUS * 2), radialSegments, 1, false);
-        if(!PATCH_STATE.enemyGeometryFallbackLogged){
-          PATCH_STATE.enemyGeometryFallbackLogged = true;
-          console.warn('[patch-001] Falling back to cylinder enemy geometry; capsule geometry unavailable.');
-        }
-      }catch(err){
-        console.error('[patch-001] Failed to create fallback enemy geometry.', err);
-        geometry = null;
-      }
     }
 
     if(geometry){
@@ -2445,6 +2288,9 @@ export function applyPatch(ctx){
       hasCoverTarget: false,
       lastKnownPlayerPos: new THREE.Vector3(),
       lastHitAt: -Infinity,
+      alertUntil: 0,
+      seeingPlayer: false,
+      lastSeenAt: -Infinity,
     };
   }
 
@@ -2595,6 +2441,37 @@ export function applyPatch(ctx){
       const strafeAggression = THREE.MathUtils.clamp(profile.aggression * 0.8 + profile.accuracy * 0.2, 0, 1);
       const retreatAggression = THREE.MathUtils.clamp(1 - profile.resilience * 0.6, 0, 1);
       const suppressionResist = profile.suppressionResist || 1;
+      const detectionSkill = THREE.MathUtils.clamp(profile.accuracy * 0.6 + profile.aggression * 0.4, 0, 1);
+      const reactionFloor = Number.isFinite(CONFIG.AI.reactionFloor) ? CONFIG.AI.reactionFloor : 0.05;
+      const reactionCeil = Number.isFinite(CONFIG.AI.reactionCeil) ? CONFIG.AI.reactionCeil : 0.16;
+      const awarenessMemorySec = Number.isFinite(CONFIG.AI.awarenessMemory) ? CONFIG.AI.awarenessMemory : 0.9;
+      const awarenessMemoryMs = Math.max(awarenessMemorySec * 1000, 200);
+      const alertDistance = Number.isFinite(CONFIG.AI.alertDistance) ? CONFIG.AI.alertDistance : engageRange;
+      const previouslySeeing = brain.seeingPlayer === true;
+      if(hasLine){
+        brain.lastSeenAt = now;
+        brain.seeingPlayer = true;
+        const reactionTarget = THREE.MathUtils.lerp(reactionCeil, reactionFloor, detectionSkill);
+        if(!previouslySeeing){
+          enemy.fireCooldown = Math.min(enemy.fireCooldown, reactionTarget);
+        }
+        const alertExtension = awarenessMemoryMs * THREE.MathUtils.lerp(0.7, 1.2, detectionSkill);
+        brain.alertUntil = Math.max(brain.alertUntil || 0, now + alertExtension);
+      } else if(previouslySeeing && now - brain.lastSeenAt > 180){
+        brain.seeingPlayer = false;
+      }
+
+      if(distance < alertDistance){
+        const closeBonus = THREE.MathUtils.lerp(520, 320, detectionSkill);
+        brain.alertUntil = Math.max(brain.alertUntil || 0, now + closeBonus);
+      } else if(brain.alertUntil && now > brain.alertUntil && brain.lastSeenAt > 0){
+        const memoryHold = awarenessMemoryMs * THREE.MathUtils.lerp(0.35, 0.75, detectionSkill);
+        if(now - brain.lastSeenAt < memoryHold){
+          brain.alertUntil = now + memoryHold * 0.35;
+        }
+      }
+
+      const alertActive = hasLine || (brain.alertUntil || 0) > now;
 
       switch(brain.state){
         case 'patrol': {
@@ -2623,7 +2500,7 @@ export function applyPatch(ctx){
           moveEnemyTowards(enemy, brain.wanderTarget, patrolSpeed, delta, statics);
           mesh.lookAt(playerPos.x, mesh.position.y, playerPos.z);
           const engageThreshold = engageRange * THREE.MathUtils.lerp(1.35, 1.75, profile.aggression);
-          if((hasLine && distance < engageThreshold) || suppressed){
+          if(((alertActive && distance < engageThreshold) || (hasLine && distance < engageThreshold * 1.05)) || suppressed){
             brain.state = 'attack';
             const strafeWindow = THREE.MathUtils.randFloat(500, 1400) * THREE.MathUtils.lerp(0.85, 1.2, strafeAggression);
             brain.strafeUntil = now + strafeWindow;
@@ -2654,7 +2531,7 @@ export function applyPatch(ctx){
             }
           }
           applyEnemyVelocity(enemy, tempVecF, delta, statics);
-          if(!hasLine || suppressed){
+          if((!hasLine && !(brain.alertUntil && brain.alertUntil > now)) || suppressed){
             brain.state = 'flank';
             const flankDelay = CONFIG.STIM.flankLoSBlock * 1000 * THREE.MathUtils.lerp(0.85, 1.25, strafeAggression);
             brain.flankUntil = now + flankDelay;
@@ -2696,11 +2573,11 @@ export function applyPatch(ctx){
           const relocateSpeed = enemy.chaseSpeed * THREE.MathUtils.lerp(0.78, 1.08, profile.aggression);
           const distToCover = moveEnemyTowards(enemy, brain.coverTarget, relocateSpeed, delta, statics);
           mesh.lookAt(playerPos.x, mesh.position.y, playerPos.z);
-          if(hasLine && now > brain.flankUntil){
+          if((alertActive && now > brain.flankUntil) || (hasLine && now > brain.flankUntil)){
             brain.state = 'attack';
             brain.hasCoverTarget = false;
           } else if(distToCover < THREE.MathUtils.lerp(0.9, 0.55, profile.accuracy) || now > brain.repositionUntil){
-            brain.state = hasLine ? 'attack' : 'patrol';
+            brain.state = alertActive || hasLine ? 'attack' : 'patrol';
             brain.hasCoverTarget = false;
           }
           break;
