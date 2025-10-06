@@ -1690,6 +1690,20 @@ export function applyPatch(ctx){
     }
 
     tempVecC.set(point.x, resolved + ENEMY_HALF_HEIGHT, point.z);
+    const minEnemyGap = ENEMY_RADIUS * 2.6;
+    const minEnemyGapSq = minEnemyGap * minEnemyGap;
+    for(let i=0;i<enemies.length;i++){
+      const other = enemies[i];
+      const mesh = other?.mesh;
+      if(!mesh) continue;
+      tempVecD.copy(mesh.position);
+      tempVecD.y = tempVecC.y;
+      const dx = tempVecD.x - tempVecC.x;
+      const dz = tempVecD.z - tempVecC.z;
+      if(dx*dx + dz*dz < minEnemyGapSq){
+        return false;
+      }
+    }
     tempVecA.subVectors(playerPos, tempVecC);
     const distance = tempVecA.length();
     if(distance < 1e-3){
