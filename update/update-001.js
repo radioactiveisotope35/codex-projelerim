@@ -1816,7 +1816,7 @@ export function applyPatch(ctx){
             if(enemy.burstShotsLeft <= 0){
               enemy.burstShotsLeft = THREE.MathUtils.randInt(2, 4);
             }
-            patchedEnemyHitscanShoot(enemy);
+            patchedEnemyHitscanShoot(enemy, delta);
             enemy.burstShotsLeft -= 1;
             enemy.fireCooldown = enemy.burstShotsLeft > 0
               ? THREE.MathUtils.randFloat(CONFIG.AI.focusBurstOffset[0], CONFIG.AI.focusBurstOffset[1])
@@ -1878,7 +1878,7 @@ export function applyPatch(ctx){
     mesh.position.addScaledVector(tempVecA, speed * delta);
   }
 
-  function patchedEnemyHitscanShoot(enemy){
+  function patchedEnemyHitscanShoot(enemy, delta = 0){
     const origin = borrowVec3().copy(enemy.mesh.position);
     const forward = borrowVec3();
     enemy.mesh.getWorldDirection(forward);
