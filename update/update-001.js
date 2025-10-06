@@ -154,6 +154,11 @@ export function applyPatch(ctx){
     Object.assign(CONFIG.PERF, config.PERF || {});
   }
 
+  const SPAWN_FAILURE_LIMIT = Math.max(
+    3,
+    Math.min(12, Math.round(((CONFIG.SPAWN?.maxAttempts) || 10) * 0.3))
+  );
+
   if(renderer.shadowMap){
     renderer.shadowMap.enabled = CONFIG.PERF.shadows;
   }
@@ -187,6 +192,8 @@ export function applyPatch(ctx){
     muzzleAnchor: null,
     enemySpawnZones: null,
     playerSpawn: null,
+    spawnFailureStreak: 0,
+    lastSpawnFailureAt: 0,
   };
 
   globalNS.enableDebug = (flag) => {
@@ -1541,6 +1548,7 @@ export function applyPatch(ctx){
 
     if(!pointFound){
       game.spawnDelay = Math.max(game.spawnDelay, nextSpawnDelay());
+      registerSpawnFailure();
       return false;
     }
 
@@ -1589,6 +1597,7 @@ export function applyPatch(ctx){
     enemy.spawnZone = chosenZone || null;
     enemyMesh.userData.enemy = enemy;
     enemies.push(enemy);
+    resetSpawnFailureCounters();
     return true;
   }
 
@@ -1924,10 +1933,40 @@ export function applyPatch(ctx){
   // ---------------------------------------------------------------------------
   // SPAWN / ROUNDS
   // ---------------------------------------------------------------------------
+  function resetSpawnFailureCounters(){
+    PATCH_STATE.spawnFailureStreak = 0;
+    PATCH_STATE.lastSpawnFailureAt = 0;
+  }
+
+  function registerSpawnFailure(){
+    PATCH_STATE.spawnFailureStreak = (PATCH_STATE.spawnFailureStreak || 0) + 1;
+    PATCH_STATE.lastSpawnFailureAt = performance.now();
+    if(PATCH_STATE.spawnFailureStreak < SPAWN_FAILURE_LIMIT){
+      return;
+    }
+
+    PATCH_STATE.spawnFailureStreak = 0;
+    if(game.spawnQueue > 0){
+      game.spawnQueue = Math.max(0, game.spawnQueue - 1);
+    }
+    if(game.enemiesRemaining > 0){
+      game.enemiesRemaining = Math.max(0, game.enemiesRemaining - 1);
+      updateEnemiesHud();
+    }
+    if(game.spawnQueue <= 0){
+      game.spawnQueue = 0;
+      if(game.state === 'spawning'){
+        game.state = 'inRound';
+      }
+      maybeEndRound();
+    }
+  }
+
   function patchedStartNextRound(){
     if(playerState.buyPhase){
       endBuyPhase();
     }
+    resetSpawnFailureCounters();
     const params = difficulty.params;
     const previousRound = Number.isFinite(game.round) ? game.round : 0;
     game.round = previousRound + 1;
@@ -1956,6 +1995,9 @@ export function applyPatch(ctx){
   function handleSpawning(delta){
     if(game.state !== 'spawning') return;
     if(enemies.length >= CONFIG.SPAWN.concurrentCap) return;
+    if(game.spawnQueue < 0){
+      game.spawnQueue = 0;
+    }
     game.spawnDelay -= delta;
     if(game.spawnDelay <= 0 && game.spawnQueue > 0){
       if(patchedSpawnEnemy()){
@@ -1966,13 +2008,19 @@ export function applyPatch(ctx){
       }
     }
     if(game.spawnQueue <= 0){
+      game.spawnQueue = 0;
       game.state = 'inRound';
     }
   }
 
   function beginBuyPhase(){
+    if(playerState.buyPhase){
+      return;
+    }
+    resetSpawnFailureCounters();
     playerState.buyPhase = true;
     game.state = 'buyPhase';
+    game.spawnQueue = 0;
     game.buyTimer = CONFIG.SPAWN.buyDuration;
     showBuyBanner();
     openStore(true);
@@ -1985,6 +2033,15 @@ export function applyPatch(ctx){
       closeStore();
     }
     hideBuyBanner();
+  }
+
+  function maybeEndRound(){
+    if(game.state === 'over' || playerState.buyPhase){
+      return;
+    }
+    if(game.enemiesRemaining <= 0 && game.spawnQueue <= 0 && enemies.length === 0){
+      beginBuyPhase();
+    }
   }
 
   function updateBuyPhase(delta){
@@ -2034,9 +2091,7 @@ export function applyPatch(ctx){
       updateCreditLine();
       game.enemiesRemaining = Math.max(0, game.enemiesRemaining - 1);
       updateEnemiesHud();
-      if(game.enemiesRemaining <= 0 && game.spawnQueue <= 0 && enemies.length === 0){
-        beginBuyPhase();
-      }
+      maybeEndRound();
     }
   }
 
