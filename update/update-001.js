@@ -1540,7 +1540,6 @@ export function applyPatch(ctx){
     }
 
     if(!pointFound){
-      game.spawnQueue += 1;
       game.spawnDelay = Math.max(game.spawnDelay, nextSpawnDelay());
       return false;
     }
@@ -1930,7 +1929,8 @@ export function applyPatch(ctx){
       endBuyPhase();
     }
     const params = difficulty.params;
-    game.round += 1;
+    const previousRound = Number.isFinite(game.round) ? game.round : 0;
+    game.round = previousRound + 1;
     ui.roundEl && (ui.roundEl.textContent = `Round: ${game.round}`);
     const toSpawn = params.spawnBase + Math.floor(game.round * params.spawnScale);
     game.enemiesRemaining = toSpawn;
