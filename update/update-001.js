@@ -178,6 +178,7 @@ export function applyPatch(ctx){
 
   const PATCH_STATE = {
     debug: false,
+    weaponParts: null,
   };
 
   globalNS.enableDebug = (flag) => {
@@ -188,6 +189,60 @@ export function applyPatch(ctx){
       perfOverlay.style.display = 'block';
     }
   };
+
+  function ensureWeaponModel(){
+    if(PATCH_STATE.weaponParts){
+      return;
+    }
+    if(!ctx.muzzleFlash){
+      return;
+    }
+    const weaponGroup = ctx.muzzleFlash.parent?.parent || ctx.muzzleFlash.parent;
+    if(!weaponGroup){
+      return;
+    }
+    const bodyMaterial = new THREE.MeshStandardMaterial({
+      color: 0x1b2839,
+      metalness: 0.55,
+      roughness: 0.35,
+      emissive: new THREE.Color(0x0b121d),
+      emissiveIntensity: 0.25,
+    });
+    const accentMaterial = new THREE.MeshStandardMaterial({
+      color: 0x3b86ff,
+      emissive: new THREE.Color(0x162b45),
+      emissiveIntensity: 0.45,
+      metalness: 0.4,
+      roughness: 0.4,
+    });
+
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.11, 0.82), bodyMaterial);
+    body.position.set(0.02, -0.05, -0.52);
+    body.castShadow = body.receiveShadow = true;
+
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.22, 0.24), bodyMaterial.clone());
+    grip.position.set(-0.08, -0.16, -0.26);
+    grip.rotation.x = THREE.MathUtils.degToRad(12);
+
+    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.10, 0.35), bodyMaterial.clone());
+    stock.position.set(-0.12, -0.04, 0.05);
+
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.58, 12, 1, true), new THREE.MeshStandardMaterial({
+      color: 0x1f1f24,
+      metalness: 0.75,
+      roughness: 0.2,
+    }));
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(0.09, 0.0, -0.96);
+
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 0.38), accentMaterial);
+    rail.position.set(0.05, 0.02, -0.42);
+
+    weaponGroup.add(body, grip, stock, barrel, rail);
+    PATCH_STATE.weaponParts = [body, grip, stock, barrel, rail];
+  }
+
+  ensureWeaponModel();
 
   const fallbackCanvas = globalNS.fallbackCanvas || (() => {
     const canvas = document.createElement('canvas');
@@ -329,6 +384,7 @@ export function applyPatch(ctx){
   const tempQuat = shared.tempQuat || (shared.tempQuat = new THREE.Quaternion());
   const tempEuler = shared.tempEuler || (shared.tempEuler = new THREE.Euler(0, 0, 0, 'YXZ'));
   const tempMat3 = shared.tempMat3 || (shared.tempMat3 = new THREE.Matrix3());
+  const playerCollider = refs.playerCollider || shared.playerCollider || (shared.playerCollider = new THREE.Box3());
   const tempRaycaster = refs.raycaster || shared.tempRaycaster || new THREE.Raycaster();
   if(!refs.raycaster) shared.tempRaycaster = tempRaycaster;
   const helperRay = shared.helperRay || (shared.helperRay = new THREE.Raycaster());
@@ -645,90 +701,127 @@ export function applyPatch(ctx){
       return;
     }
 
-    const sprintHeld = (keyState['ShiftLeft'] || keyState['ShiftRight']) && !playerState.storeOpen;
-    const crouchSpeedFactor = playerState.crouched ? CONFIG.PLAYER.crouchSpeedMultiplier : 1;
+    if(ctx.muzzleFlash?.getWorldPosition && ctx.muzzleWorldPosition?.isVector3){
+      ctx.muzzleFlash.getWorldPosition(ctx.muzzleWorldPosition);
+    }
 
-    const staminaMax = CONFIG.STAMINA.max;
-    playerState.staminaDelay = Math.max(0, playerState.staminaDelay - delta);
-    playerState.staminaCombatDelay = Math.max(0, playerState.staminaCombatDelay - delta);
+    const previousPosition = borrowVec3();
+    previousPosition.copy(controls.getObject().position);
 
-    const moving = (keyState['KeyW']||keyState['KeyA']||keyState['KeyS']||keyState['KeyD']);
-    let sprinting = sprintHeld && moving && playerState.stamina > CONFIG.STAMINA.minSprint && !playerState.crouched;
+    try {
+      const sprintHeld = (keyState['ShiftLeft'] || keyState['ShiftRight']) && !playerState.storeOpen;
+      const crouchSpeedFactor = playerState.crouched ? CONFIG.PLAYER.crouchSpeedMultiplier : 1;
+      const playerHeight = player.height || CONFIG.PLAYER.baseHeight;
 
-    if(sprinting){
-      playerState.stamina = Math.max(0, playerState.stamina - CONFIG.STAMINA.sprintDrain * delta);
-      if(playerState.stamina <= 0){
-        sprinting = false;
-        playerState.staminaDelay = CONFIG.STAMINA.regenDelay;
+      const staminaMax = CONFIG.STAMINA.max;
+      playerState.staminaDelay = Math.max(0, playerState.staminaDelay - delta);
+      playerState.staminaCombatDelay = Math.max(0, playerState.staminaCombatDelay - delta);
+
+      const moving = (keyState['KeyW']||keyState['KeyA']||keyState['KeyS']||keyState['KeyD']);
+      let sprinting = sprintHeld && moving && playerState.stamina > CONFIG.STAMINA.minSprint && !playerState.crouched;
+
+      if(sprinting){
+        playerState.stamina = Math.max(0, playerState.stamina - CONFIG.STAMINA.sprintDrain * delta);
+        if(playerState.stamina <= 0){
+          sprinting = false;
+          playerState.staminaDelay = CONFIG.STAMINA.regenDelay;
+        } else {
+          playerState.staminaDelay = CONFIG.STAMINA.regenDelay;
+        }
       } else {
-        playerState.staminaDelay = CONFIG.STAMINA.regenDelay;
+        if(playerState.staminaDelay <= 0 && playerState.staminaCombatDelay <= 0){
+          playerState.stamina = Math.min(staminaMax, playerState.stamina + CONFIG.STAMINA.regenRate * delta);
+        }
       }
-    } else {
-      if(playerState.staminaDelay <= 0 && playerState.staminaCombatDelay <= 0){
-        playerState.stamina = Math.min(staminaMax, playerState.stamina + CONFIG.STAMINA.regenRate * delta);
+      updateStaminaIcon();
+
+      const effectiveADS = getAiming() && !sprinting;
+      setADSFlag(effectiveADS);
+
+      const adsTarget = effectiveADS ? 1 : 0;
+      const adsSpeed = playerState.crouched ? CONFIG.PLAYER.crouchAdsAcceleration : CONFIG.STANCE.adsSpeed;
+      const newAds = damp(getADSTransition(), adsTarget, adsSpeed, delta);
+      setADSTransition(newAds);
+
+      const targetFov = sprinting ? CONFIG.STANCE.sprintFov : THREE.MathUtils.lerp(CONFIG.STANCE.baseFov, CONFIG.STANCE.adsFov, newAds);
+      camera.fov = damp(camera.fov, playerState.crouched ? Math.min(targetFov, CONFIG.STANCE.crouchFov) : targetFov, CONFIG.STANCE.sprintCamDamp, delta);
+      camera.updateProjectionMatrix();
+
+      const baseHip = getSpreadBase(false);
+      const baseAds = getSpreadBase(true);
+      const spreadBase = effectiveADS ? baseAds : baseHip;
+      const spreadMax = effectiveADS ? weaponState.spreadMaxAds : weaponState.spreadMaxHip;
+      weaponState.spreadCurrent = THREE.MathUtils.clamp(weaponState.spreadCurrent, spreadBase, spreadMax);
+
+      const moveSpeed = (player.walkSpeed || movementConfig.playerWalk || 7.5) * crouchSpeedFactor * (sprinting ? (player.sprintMultiplier || 1.5) : 1);
+      let forward = 0; let strafe = 0;
+      if(keyState['KeyW']) forward += 1;
+      if(keyState['KeyS']) forward -= 1;
+      if(keyState['KeyD']) strafe += 1;
+      if(keyState['KeyA']) strafe -= 1;
+
+      tempVecA.set(strafe, 0, -forward).normalize();
+      if(tempVecA.lengthSq() > 0){
+        tempVecA.applyQuaternion(controls.getObject().quaternion);
+        tempVecA.multiplyScalar(moveSpeed * delta);
+        controls.getObject().position.add(tempVecA);
       }
-    }
-    updateStaminaIcon();
 
-    const effectiveADS = getAiming() && !sprinting;
-    setADSFlag(effectiveADS);
-
-    const adsTarget = effectiveADS ? 1 : 0;
-    const adsSpeed = playerState.crouched ? CONFIG.PLAYER.crouchAdsAcceleration : CONFIG.STANCE.adsSpeed;
-    const newAds = damp(getADSTransition(), adsTarget, adsSpeed, delta);
-    setADSTransition(newAds);
-
-    const targetFov = sprinting ? CONFIG.STANCE.sprintFov : THREE.MathUtils.lerp(CONFIG.STANCE.baseFov, CONFIG.STANCE.adsFov, newAds);
-    camera.fov = damp(camera.fov, playerState.crouched ? Math.min(targetFov, CONFIG.STANCE.crouchFov) : targetFov, CONFIG.STANCE.sprintCamDamp, delta);
-    camera.updateProjectionMatrix();
-
-    const baseHip = getSpreadBase(false);
-    const baseAds = getSpreadBase(true);
-    const spreadBase = effectiveADS ? baseAds : baseHip;
-    const spreadMax = effectiveADS ? weaponState.spreadMaxAds : weaponState.spreadMaxHip;
-    weaponState.spreadCurrent = THREE.MathUtils.clamp(weaponState.spreadCurrent, spreadBase, spreadMax);
-
-    const moveSpeed = (player.walkSpeed || movementConfig.playerWalk || 7.5) * crouchSpeedFactor * (sprinting ? (player.sprintMultiplier || 1.5) : 1);
-    let forward = 0; let strafe = 0;
-    if(keyState['KeyW']) forward += 1;
-    if(keyState['KeyS']) forward -= 1;
-    if(keyState['KeyD']) strafe += 1;
-    if(keyState['KeyA']) strafe -= 1;
-
-    tempVecA.set(strafe, 0, forward).normalize();
-    if(tempVecA.lengthSq() > 0){
-      tempVecA.applyQuaternion(controls.getObject().quaternion);
-      tempVecA.multiplyScalar(moveSpeed * delta);
-      controls.getObject().position.add(tempVecA);
-    }
-
-    if(player.velocity){
-      player.velocity.y -= player.gravity * delta;
-      controls.getObject().position.y += player.velocity.y * delta;
-      if(controls.getObject().position.y < CONFIG.PLAYER.baseHeight){
-        controls.getObject().position.y = CONFIG.PLAYER.baseHeight;
-        player.velocity.y = 0;
-        player.onGround = true;
+      if(player.velocity){
+        player.velocity.y -= player.gravity * delta;
+        controls.getObject().position.y += player.velocity.y * delta;
+        if(controls.getObject().position.y < playerHeight){
+          controls.getObject().position.y = playerHeight;
+          player.velocity.y = 0;
+          player.onGround = true;
+        } else if(player.velocity.y < 0){
+          player.onGround = false;
+        }
       }
-    }
 
-    if(player.isReloading){
-      player.reloadTimer -= delta;
-      if(player.reloadTimer <= 0){
-        const need = player.maxAmmo - player.ammo;
-        const toLoad = Math.min(need, player.reserve);
-        player.ammo += toLoad;
-        player.reserve -= toLoad;
-        updateAmmoDisplay();
-        player.isReloading = false;
+      if(playerCollider){
+        const colliderSize = tempVecD.set(1, playerHeight, 1);
+        playerCollider.setFromCenterAndSize(controls.getObject().position, colliderSize);
+        const statics = gatherStaticMeshes();
+        for(let i = 0; i < statics.length; i++){
+          const mesh = statics[i];
+          if(!mesh) continue;
+          tempBox.setFromObject(mesh);
+          if(playerCollider.intersectsBox(tempBox)){
+            controls.getObject().position.copy(previousPosition);
+            if(player.velocity){
+              if(previousPosition.y <= playerHeight + 0.001){
+                player.velocity.y = 0;
+                player.onGround = true;
+              } else {
+                player.velocity.y = Math.min(0, player.velocity.y);
+              }
+            }
+            break;
+          }
+        }
       }
+
+      if(player.isReloading){
+        player.reloadTimer -= delta;
+        if(player.reloadTimer <= 0){
+          const need = player.maxAmmo - player.ammo;
+          const toLoad = Math.min(need, player.reserve);
+          player.ammo += toLoad;
+          player.reserve -= toLoad;
+          updateAmmoDisplay();
+          player.isReloading = false;
+        }
+      }
+
+      const recoverRate = effectiveADS ? weaponState.recoveryAds : weaponState.recoveryHip;
+      weaponState.spreadCurrent = Math.max(spreadBase, weaponState.spreadCurrent - recoverRate * delta);
+
+      if(functions.updateWeaponPose) functions.updateWeaponPose(delta);
+      if(functions.updateRegen) functions.updateRegen(delta);
+    } finally {
+      releaseVec3(previousPosition);
     }
-
-    const recoverRate = effectiveADS ? weaponState.recoveryAds : weaponState.recoveryHip;
-    weaponState.spreadCurrent = Math.max(spreadBase, weaponState.spreadCurrent - recoverRate * delta);
-
-    if(functions.updateWeaponPose) functions.updateWeaponPose(delta);
-    if(functions.updateRegen) functions.updateRegen(delta);
   }
 
   function getSpreadBase(ads){
@@ -788,13 +881,20 @@ export function applyPatch(ctx){
     const origin = borrowVec3();
     camera.getWorldPosition(origin);
     const muzzlePos = borrowVec3();
-    if(ctx.muzzleWorldPosition){
+    const flash = ctx.muzzleFlash;
+    if(flash?.getWorldPosition){
+      flash.getWorldPosition(muzzlePos);
+      if(ctx.muzzleWorldPosition?.isVector3){
+        ctx.muzzleWorldPosition.copy(muzzlePos);
+      }
+    } else if(ctx.muzzleWorldPosition?.isVector3){
       muzzlePos.copy(ctx.muzzleWorldPosition);
     } else {
       muzzlePos.copy(origin);
     }
-    if(ctx.muzzleFlash){
-      ctx.muzzleFlash.visible = true;
+
+    if(flash){
+      flash.visible = true;
       setTimeout(()=>{ if(ctx.muzzleFlash) ctx.muzzleFlash.visible = false; }, 45);
     }
 
@@ -1019,7 +1119,8 @@ export function applyPatch(ctx){
 
   function validateSpawnPoint(point){
     const playerPos = controls.getObject().position;
-    if(point.distanceTo(playerPos) < CONFIG.SPAWN.safeRadius){
+    const distance = point.distanceTo(playerPos);
+    if(distance < CONFIG.SPAWN.safeRadius){
       return false;
     }
     tempVecC.copy(point).setY(CONFIG.PLAYER.baseHeight);
@@ -1031,7 +1132,7 @@ export function applyPatch(ctx){
         return true;
       }
     }
-    return false;
+    return distance >= CONFIG.SPAWN.safeRadius * 1.75;
   }
 
   function patchedUpdateEnemies(delta){
@@ -1732,6 +1833,22 @@ export function applyPatch(ctx){
         ui.contextOverlay.remove();
       }
       delete ui.contextOverlay;
+    }
+
+    if(Array.isArray(PATCH_STATE.weaponParts)){
+      for(const part of PATCH_STATE.weaponParts){
+        if(!part) continue;
+        part.parent?.remove(part);
+        part.geometry?.dispose?.();
+        if(part.material){
+          if(Array.isArray(part.material)){
+            part.material.forEach(disposeMaterial);
+          } else {
+            disposeMaterial(part.material);
+          }
+        }
+      }
+      PATCH_STATE.weaponParts = null;
     }
 
     for(const [key, value] of Object.entries(originalBindings)){
