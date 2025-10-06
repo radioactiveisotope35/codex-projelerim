@@ -227,8 +227,71 @@ export function applyPatch(ctx){
 
   const yawObject = typeof controls.getObject === 'function' ? controls.getObject() : controls.object || controls;
   const pitchObject = findPitchNode(yawObject, camera) || camera;
+  if(yawObject?.rotation){
+    yawObject.rotation.order = 'YXZ';
+    yawObject.rotation.z = 0;
+  }
+  if(pitchObject?.rotation){
+    pitchObject.rotation.order = 'YXZ';
+    pitchObject.rotation.z = 0;
+  }
   const recoilPitchMin = THREE.MathUtils.degToRad(CONFIG.RECOIL.minPitchDeg);
   const recoilPitchMax = THREE.MathUtils.degToRad(CONFIG.RECOIL.maxPitchDeg);
+  const LOOK_SPEED = 0.002;
+  const MAX_MOUSE_DELTA = 120;
+  const TWO_PI = Math.PI * 2;
+  const minPitchClamp = THREE.MathUtils.degToRad(-85);
+  const maxPitchClamp = THREE.MathUtils.degToRad(85);
+  let lastYaw = yawObject?.rotation?.y ?? 0;
+  let lastPitch = pitchObject?.rotation?.x ?? 0;
+
+  if(yawObject){
+    yawObject.rotation.y = normalizeYaw(yawObject.rotation.y);
+    lastYaw = yawObject.rotation.y;
+  }
+  if(pitchObject){
+    pitchObject.rotation.x = THREE.MathUtils.clamp(pitchObject.rotation.x, minPitchClamp, maxPitchClamp);
+    lastPitch = pitchObject.rotation.x;
+  }
+
+  function wrapPositive(angle){
+    let wrapped = (angle + Math.PI) % TWO_PI;
+    if(wrapped < 0) wrapped += TWO_PI;
+    return wrapped;
+  }
+
+  function normalizeYaw(angle){
+    return wrapPositive(angle) - Math.PI;
+  }
+
+  function shortestAngleDiff(a, b){
+    let diff = a - b;
+    diff = (diff + Math.PI) % TWO_PI;
+    if(diff < 0) diff += TWO_PI;
+    return diff - Math.PI;
+  }
+
+  function enforceLookConsistency(){
+    if(!yawObject || !pitchObject) return;
+    const pointerSpeed = typeof controls.pointerSpeed === 'number' ? controls.pointerSpeed : 1;
+    const maxStep = MAX_MOUSE_DELTA * LOOK_SPEED * pointerSpeed;
+
+    const currentYaw = yawObject.rotation.y;
+    const yawDiff = shortestAngleDiff(currentYaw, lastYaw);
+    const clampedYaw = normalizeYaw(lastYaw + THREE.MathUtils.clamp(yawDiff, -maxStep, maxStep));
+
+    const currentPitch = pitchObject.rotation.x;
+    const pitchDiff = THREE.MathUtils.clamp(currentPitch - lastPitch, -maxStep, maxStep);
+    const clampedPitch = THREE.MathUtils.clamp(lastPitch + pitchDiff, minPitchClamp, maxPitchClamp);
+
+    yawObject.rotation.y = clampedYaw;
+    yawObject.rotation.z = 0;
+    pitchObject.rotation.x = clampedPitch;
+    pitchObject.rotation.z = 0;
+
+    lastYaw = clampedYaw;
+    lastPitch = clampedPitch;
+  }
 
   const spawnTracer = ctx.spawnTracer || functions.spawnTracer;
   const spawnImpactDecal = ctx.spawnImpactDecal || functions.spawnImpactDecal;
@@ -299,6 +362,7 @@ export function applyPatch(ctx){
   // PLAYER
   // ---------------------------------------------------------------------------
   function patchedUpdatePlayer(delta){
+    enforceLookConsistency();
     const adsBeforeUpdate = !!getADS();
     if(!controls.isLocked || game.state === 'over'){
       updateRecoil(delta, adsBeforeUpdate);
@@ -1026,6 +1090,7 @@ export function applyPatch(ctx){
 
   function patchedAnimate(){
     requestAnimationFrame(patchedAnimate);
+    enforceLookConsistency();
     const delta = Math.min(0.05, clock.getDelta());
     if(player.fireCooldown > 0) player.fireCooldown -= delta;
     if(getShooting() && player.fireCooldown <= 0){
@@ -1146,7 +1211,9 @@ export function applyPatch(ctx){
     minimapCtx.strokeRect(2,2,size-4,size-4);
 
     const playerPos = controls.getObject().position;
-    const yaw = camera.rotation.y;
+    const yawNode = yawObject || (typeof controls.getObject === 'function' ? controls.getObject() : controls);
+    const yaw = yawNode?.rotation?.y ?? 0;
+    const hdg = ((yaw % (Math.PI*2)) + Math.PI*2) % (Math.PI*2);
     const project = (pos) => ({ x: size/2 + pos.x*scale, y: size/2 + pos.z*scale });
     const p = project(playerPos);
     minimapCtx.fillStyle = '#50c8ff';
@@ -1155,8 +1222,8 @@ export function applyPatch(ctx){
     minimapCtx.fill();
 
     const coneLength = 26;
-    const left = yaw - 0.35;
-    const right = yaw + 0.35;
+    const left = hdg - 0.35;
+    const right = hdg + 0.35;
     minimapCtx.beginPath();
     minimapCtx.moveTo(p.x, p.y);
     minimapCtx.lineTo(p.x + Math.sin(left)*coneLength, p.y + Math.cos(left)*coneLength);
