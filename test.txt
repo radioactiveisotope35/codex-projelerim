@@ -220,6 +220,83 @@
     function showRoundBanner(text){ roundBannerEl.textContent=text; roundBannerEl.style.display='block'; roundBannerEl.style.opacity='1'; setTimeout(()=>{ roundBannerEl.style.transition='opacity .6s ease'; roundBannerEl.style.opacity='0'; setTimeout(()=>{ roundBannerEl.style.display='none'; roundBannerEl.style.transition=''; },600); },1200); }
 
     // Enemies (same AI as D)
+    function applyEnemyUniformMap(material){
+      if(!material) return material;
+      const prev = material.map;
+      material.map = enemyUniformTexture;
+      if(prev && prev !== enemyUniformTexture && typeof prev.dispose === 'function'){
+        try{
+          prev.dispose();
+        }catch(err){
+          console.warn('[arena] Failed to dispose cloned enemy texture.', err);
+        }
+      }
+      material.needsUpdate = true;
+      return material;
+    }
+
+    function createEnemyMaterialInstance(){
+      if(!enemyMaterialTemplate){
+        return applyEnemyUniformMap(new THREE.MeshStandardMaterial({ color:0x223344 }));
+      }
+      if(Array.isArray(enemyMaterialTemplate)){
+        return enemyMaterialTemplate.map(src => {
+          let clone = null;
+          if(src && typeof src.clone === 'function'){
+            try{
+              clone = src.clone();
+            }catch(err){
+              console.warn('[arena] Failed to clone enemy material entry.', err);
+              clone = null;
+            }
+          }
+          if((!clone || clone === src) && src && src.isMaterial){
+            try{
+              clone = new src.constructor();
+              if(clone && clone.copy){
+                clone.copy(src);
+              }
+            }catch(err){
+              console.warn('[arena] Failed to copy enemy material entry.', err);
+              clone = null;
+            }
+          }
+          if(!clone || clone === src){
+            clone = applyEnemyUniformMap(new THREE.MeshStandardMaterial({ color:0x223344 }));
+          } else {
+            applyEnemyUniformMap(clone);
+          }
+          return clone;
+        });
+      }
+      let clone = null;
+      if(typeof enemyMaterialTemplate.clone === 'function'){
+        try{
+          clone = enemyMaterialTemplate.clone();
+        }catch(err){
+          console.warn('[arena] Failed to clone enemy material.', err);
+          clone = null;
+        }
+      }
+      if((!clone || clone === enemyMaterialTemplate) && enemyMaterialTemplate.isMaterial){
+        try{
+          clone = new enemyMaterialTemplate.constructor();
+          if(clone && clone.copy){
+            clone.copy(enemyMaterialTemplate);
+          }
+        }catch(err){
+          console.warn('[arena] Failed to copy enemy material.', err);
+          clone = null;
+        }
+      }
+      if(!clone || clone === enemyMaterialTemplate){
+        clone = applyEnemyUniformMap(new THREE.MeshStandardMaterial({ color:0x223344 }));
+      } else {
+        applyEnemyUniformMap(clone);
+      }
+      return clone;
+    }
+
     function spawnEnemy(){
       const spawnRadius=world.size/2 - 6;
       const statics=[...world.walls,...world.obstacles];
@@ -343,14 +420,20 @@
           }
         }
       }
-      const mat=enemyMaterialTemplate.clone();
-      const clonedMap=mat.map;
-      mat.map=enemyUniformTexture;
-      if(clonedMap && clonedMap!==enemyUniformTexture && typeof clonedMap.dispose==='function'){
-        clonedMap.dispose();
+      const enemyMaterial=createEnemyMaterialInstance();
+      const tintHue=THREE.MathUtils.randFloat(.55,.62);
+      const tintSat=.45;
+      const tintLight=.55;
+      if(Array.isArray(enemyMaterial)){
+        enemyMaterial.forEach(mat=>{
+          if(mat && mat.color && typeof mat.color.setHSL==='function'){
+            mat.color.setHSL(tintHue,tintSat,tintLight);
+          }
+        });
+      }else if(enemyMaterial && enemyMaterial.color && typeof enemyMaterial.color.setHSL==='function'){
+        enemyMaterial.color.setHSL(tintHue,tintSat,tintLight);
       }
-      mat.color.setHSL(THREE.MathUtils.randFloat(.55,.62),.45,.55);
-      const enemyMesh=new THREE.Mesh(enemyGeometry,mat); enemyMesh.position.set(spawnCandidate.x,1.5,spawnCandidate.z); enemyMesh.castShadow=enemyMesh.receiveShadow=true; scene.add(enemyMesh);
+      const enemyMesh=new THREE.Mesh(enemyGeometry,enemyMaterial); enemyMesh.position.set(spawnCandidate.x,1.5,spawnCandidate.z); enemyMesh.castShadow=enemyMesh.receiveShadow=true; scene.add(enemyMesh);
       const p = difficulty.params;
       const enemy={ mesh:enemyMesh, health:85+game.round*6, maxHealth:85+game.round*6, state:'patrol', subTimer:0, targetPoint:new THREE.Vector3(), chaseSpeed:movementConfig.enemyChase, patrolSpeed:movementConfig.enemyPatrol, lastSeenPlayerAt:new THREE.Vector3(), fireCooldown:THREE.MathUtils.randFloat(.8,1.4), burstShotsLeft:0, burstSize:THREE.MathUtils.randInt(p.burstSize[0], p.burstSize[1]), burstGap:.14, restAfterBurst:p.restAfterBurst, aimSpread:p.aimSpread, strafeTimer:0, strafeDir:(Math.random()<.5?-1:1), firstShotArm:THREE.MathUtils.randFloat(p.firstShotDelay[0], p.firstShotDelay[1]), suppressedUntil:0 };
       pickNewPatrolPoint(enemy); enemies.push(enemy);

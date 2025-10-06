@@ -325,6 +325,94 @@ export function applyPatch(ctx){
   const ENEMY_HEIGHT = 2.4;
   const ENEMY_HALF_HEIGHT = ENEMY_HEIGHT * 0.5;
 
+  function applySharedEnemyTexture(material){
+    if(!material || !baseEnemyTexture) return material;
+    const previous = material.map;
+    if(previous && previous !== baseEnemyTexture && typeof previous.dispose === 'function' && !sharedTextures.has(previous)){
+      try{
+        previous.dispose();
+      }catch(err){
+        console.warn('[patch-001] Failed to dispose previous enemy material map.', err);
+      }
+    }
+    material.map = baseEnemyTexture;
+    material.needsUpdate = true;
+    return material;
+  }
+
+  function createDefaultEnemyMaterial(){
+    const material = new THREE.MeshStandardMaterial({ color:0x223344 });
+    return applySharedEnemyTexture(material);
+  }
+
+  function instantiateEnemyMaterial(){
+    const template = ctx.enemyMaterialTemplate;
+    if(!template){
+      return createDefaultEnemyMaterial();
+    }
+
+    if(Array.isArray(template)){
+      const materials = [];
+      for(let i=0;i<template.length;i++){
+        const src = template[i];
+        let clone = null;
+        if(src && typeof src.clone === 'function'){
+          try{
+            clone = src.clone();
+          }catch(err){
+            console.warn('[patch-001] Failed to clone enemy material template entry.', err);
+            clone = null;
+          }
+        }
+        if((!clone || clone === src) && src && src.isMaterial){
+          try{
+            clone = new src.constructor();
+            if(clone && clone.copy){
+              clone.copy(src);
+            }
+          }catch(err){
+            console.warn('[patch-001] Failed to copy enemy material template entry.', err);
+            clone = null;
+          }
+        }
+        if(!clone || clone === src){
+          clone = createDefaultEnemyMaterial();
+        } else {
+          applySharedEnemyTexture(clone);
+        }
+        materials.push(clone);
+      }
+      return materials;
+    }
+
+    let clone = null;
+    if(template && typeof template.clone === 'function'){
+      try{
+        clone = template.clone();
+      }catch(err){
+        console.warn('[patch-001] Failed to clone enemy material template.', err);
+        clone = null;
+      }
+    }
+    if((!clone || clone === template) && template && template.isMaterial){
+      try{
+        clone = new template.constructor();
+        if(clone && clone.copy){
+          clone.copy(template);
+        }
+      }catch(err){
+        console.warn('[patch-001] Failed to copy enemy material template.', err);
+        clone = null;
+      }
+    }
+    if(!clone || clone === template){
+      clone = createDefaultEnemyMaterial();
+    } else {
+      applySharedEnemyTexture(clone);
+    }
+    return clone;
+  }
+
   function getStaticBounds(mesh, forceUpdate = false){
     if(!mesh) return null;
     let entry = staticBoundsCache.get(mesh);
@@ -1720,15 +1808,8 @@ export function applyPatch(ctx){
 
     const spawnHeight = spawnPoint.y;
     const bodyGeometry = PATCH_STATE.enemyGeometry;
-    const mat = ctx.enemyMaterialTemplate ? ctx.enemyMaterialTemplate.clone() : new THREE.MeshStandardMaterial({ color:0x223344 });
-    const clonedMap = mat.map;
-    if(baseEnemyTexture){
-      mat.map = baseEnemyTexture;
-    }
-    if(clonedMap && clonedMap !== mat.map && typeof clonedMap.dispose === 'function'){
-      clonedMap.dispose();
-    }
-    const enemyMesh = new THREE.Mesh(bodyGeometry, mat);
+    const enemyMaterial = instantiateEnemyMaterial();
+    const enemyMesh = new THREE.Mesh(bodyGeometry, enemyMaterial);
     enemyMesh.position.set(spawnPoint.x, spawnHeight + ENEMY_HALF_HEIGHT, spawnPoint.z);
     enemyMesh.castShadow = enemyMesh.receiveShadow = true;
     scene.add(enemyMesh);
