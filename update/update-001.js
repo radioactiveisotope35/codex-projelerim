@@ -896,6 +896,39 @@ export function applyPatch(ctx){
 
   const coverPoints = [];
   const losCache = new Map();
+  const losCacheScratch = [];
+  const LOS_CACHE_MAX_ENTRIES = 256;
+  const LOS_CACHE_MAX_AGE = 240;
+  const LOS_CACHE_PRUNE_INTERVAL = 120;
+  let lastLosPrune = 0;
+
+  function pruneLosCache(now){
+    if(!losCache.size) return;
+    const needsAggressivePrune = losCache.size > LOS_CACHE_MAX_ENTRIES;
+    if(!needsAggressivePrune && now - lastLosPrune < LOS_CACHE_PRUNE_INTERVAL){
+      return;
+    }
+    lastLosPrune = now;
+    const cutoff = now - LOS_CACHE_MAX_AGE;
+    for(const [key, entry] of losCache){
+      if(!entry || entry.time < cutoff){
+        losCache.delete(key);
+      }
+    }
+    if(losCache.size <= LOS_CACHE_MAX_ENTRIES){
+      return;
+    }
+    losCacheScratch.length = 0;
+    for(const [key, entry] of losCache){
+      losCacheScratch.push([key, entry?.time ?? 0]);
+    }
+    losCacheScratch.sort((a, b) => a[1] - b[1]);
+    const excess = Math.max(0, losCache.size - LOS_CACHE_MAX_ENTRIES);
+    for(let i = 0; i < excess && i < losCacheScratch.length; i++){
+      losCache.delete(losCacheScratch[i][0]);
+    }
+    losCacheScratch.length = 0;
+  }
 
   // ---------------------------------------------------------------------------
   // ORIG REFS
@@ -1834,6 +1867,7 @@ export function applyPatch(ctx){
 
   function patchedUpdateEnemies(delta){
     const now = performance.now();
+    pruneLosCache(now);
     const playerPos = controls.getObject().position;
     const statics = gatherStaticMeshes();
     const engageClamp = Number.isFinite(CONFIG.AI.engageDelay) ? CONFIG.AI.engageDelay : 0.3;
