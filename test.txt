@@ -59,11 +59,13 @@
   <script type="module">
     import * as THREE from 'three';
     import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
-    import { applyPatch } from './update/update-007.js';
+    // --- DÜZELTME: Eski ve hatalı 007.js yerine en güncel 001.js dosyası çağırılıyor. ---
+    import { applyPatch } from './update/update-001.js';
 
     const scene = new THREE.Scene();
     const cubeLoader = new THREE.CubeTextureLoader();
-    const skyTexture = cubeLoader.setPath('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/cube/skyboxsun25/').load(['px.jpg','nx.jpg','py.jpg','ny.jpg','pz.jpg','nz.jpg']);
+    // --- DÜZELTME: Kırık URL güncel ve çalışan URL ile değiştirildi. ---
+    const skyTexture = cubeLoader.setPath('https://threejs.org/examples/textures/cube/skyboxsun25/').load(['px.jpg','nx.jpg','py.jpg','ny.jpg','pz.jpg','nz.jpg']);
     scene.background = skyTexture; scene.fog = new THREE.Fog(0x0b101a, 40, 180);
     const textureLoader = new THREE.TextureLoader();
 
@@ -108,17 +110,19 @@
 
     // Floor & grid
     const floorGeo=new THREE.PlaneGeometry(world.size,world.size,20,20); floorGeo.rotateX(-Math.PI/2);
-    const floorColorMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/floors/FloorsCheckerboard_S_Diffuse.jpg'); floorColorMap.wrapS=floorColorMap.wrapT=THREE.RepeatWrapping; floorColorMap.repeat.set(world.size/6,world.size/6); floorColorMap.colorSpace=THREE.SRGBColorSpace;
-    const floorNormalMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/floors/FloorsCheckerboard_S_Normal.jpg'); floorNormalMap.wrapS=floorNormalMap.wrapT=THREE.RepeatWrapping; floorNormalMap.repeat.copy(floorColorMap.repeat);
-    const floorRoughnessMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/floors/FloorsCheckerboard_S_Roughness.jpg'); floorRoughnessMap.wrapS=floorRoughnessMap.wrapT=THREE.RepeatWrapping; floorRoughnessMap.repeat.copy(floorColorMap.repeat);
+    // --- DÜZELTME: Kırık URL'ler güncel ve çalışan URL'ler ile değiştirildi. ---
+    const floorColorMap=textureLoader.load('https://threejs.org/examples/textures/floors/FloorsCheckerboard_S_Diffuse.jpg'); floorColorMap.wrapS=floorColorMap.wrapT=THREE.RepeatWrapping; floorColorMap.repeat.set(world.size/6,world.size/6); floorColorMap.colorSpace=THREE.SRGBColorSpace;
+    const floorNormalMap=textureLoader.load('https://threejs.org/examples/textures/floors/FloorsCheckerboard_S_Normal.jpg'); floorNormalMap.wrapS=floorNormalMap.wrapT=THREE.RepeatWrapping; floorNormalMap.repeat.copy(floorColorMap.repeat);
+    const floorRoughnessMap=textureLoader.load('https://threejs.org/examples/textures/floors/FloorsCheckerboard_S_Roughness.jpg'); floorRoughnessMap.wrapS=floorRoughnessMap.wrapT=THREE.RepeatWrapping; floorRoughnessMap.repeat.copy(floorColorMap.repeat);
     const floorMat=new THREE.MeshStandardMaterial({ map:floorColorMap, normalMap:floorNormalMap, roughnessMap:floorRoughnessMap, metalness:.15, roughness:.9 });
     const floor=new THREE.Mesh(floorGeo,floorMat); floor.receiveShadow=true; scene.add(floor);
     scene.add(new THREE.GridHelper(world.size,24,0x334050,0x1a2530));
 
     // Walls
-    const wallColorMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/brick_diffuse.jpg'); wallColorMap.wrapS=wallColorMap.wrapT=THREE.RepeatWrapping; wallColorMap.colorSpace=THREE.SRGBColorSpace;
-    const wallNormalMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/brick_normal.jpg'); wallNormalMap.wrapS=wallNormalMap.wrapT=THREE.RepeatWrapping;
-    const wallRoughnessMap=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/brick_roughness.jpg'); wallRoughnessMap.wrapS=wallRoughnessMap.wrapT=THREE.RepeatWrapping;
+    // --- DÜZELTME: Kırık URL'ler güncel ve çalışan URL'ler ile değiştirildi. ---
+    const wallColorMap=textureLoader.load('https://threejs.org/examples/textures/brick_diffuse.jpg'); wallColorMap.wrapS=wallColorMap.wrapT=THREE.RepeatWrapping; wallColorMap.colorSpace=THREE.SRGBColorSpace;
+    const wallNormalMap=textureLoader.load('https://threejs.org/examples/textures/brick_normal.jpg'); wallNormalMap.wrapS=wallNormalMap.wrapT=THREE.RepeatWrapping;
+    const wallRoughnessMap=textureLoader.load('https://threejs.org/examples/textures/brick_roughness.jpg'); wallRoughnessMap.wrapS=wallRoughnessMap.wrapT=THREE.RepeatWrapping;
     const baseWallMaterial=new THREE.MeshStandardMaterial({ map:wallColorMap, normalMap:wallNormalMap, roughnessMap:wallRoughnessMap, metalness:.25, roughness:.85 });
     const wallHeight=6, wallThickness=2, arenaSize=world.size/2;
     function createWall(x,z,w,d){ const g=new THREE.BoxGeometry(w,wallHeight,d); const m=baseWallMaterial.clone(); m.map=baseWallMaterial.map.clone(); m.normalMap=baseWallMaterial.normalMap.clone(); m.roughnessMap=baseWallMaterial.roughnessMap.clone(); const rx=Math.max(1,w/6), ry=Math.max(1,wallHeight/2); m.map.repeat.set(rx,ry); m.normalMap.repeat.copy(m.map.repeat); m.roughnessMap.repeat.copy(m.map.repeat); const mesh=new THREE.Mesh(g,m); mesh.position.set(x,wallHeight/2,z); mesh.castShadow=mesh.receiveShadow=true; scene.add(mesh); world.walls.push(mesh); }
@@ -141,7 +145,8 @@
     const pointLight=new THREE.PointLight(0x5ab9ff,1.3,65,2); pointLight.position.set(0,4.5,0); scene.add(pointLight);
 
     // Weapon group + muzzle
-    const muzzleFlashTexture=textureLoader.load('https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/sprites/lensflare0_alpha.png'); muzzleFlashTexture.colorSpace=THREE.SRGBColorSpace;
+    // --- DÜZELTME: Kırık URL güncel ve çalışan URL ile değiştirildi. ---
+    const muzzleFlashTexture=textureLoader.load('https://threejs.org/examples/textures/sprites/lensflare0_alpha.png'); muzzleFlashTexture.colorSpace=THREE.SRGBColorSpace;
     const muzzleFlash=new THREE.Sprite(new THREE.SpriteMaterial({ map:muzzleFlashTexture, color:0xfff6a8, transparent:true, blending:THREE.AdditiveBlending }));
     muzzleFlash.scale.set(1.6,1.6,1.6); muzzleFlash.center.set(.5,0); muzzleFlash.visible=false; muzzleFlash.position.set(0,0,-.1);
     const weaponGroup=new THREE.Group(); camera.add(weaponGroup); weaponGroup.position.set(.32,-.3,-.55); weaponGroup.rotation.set(-.05,.25,0); weaponGroup.visible=false;
@@ -215,7 +220,6 @@
     }
     function showRoundBanner(text){ roundBannerEl.textContent=text; roundBannerEl.style.display='block'; roundBannerEl.style.opacity='1'; setTimeout(()=>{ roundBannerEl.style.transition='opacity .6s ease'; roundBannerEl.style.opacity='0'; setTimeout(()=>{ roundBannerEl.style.display='none'; roundBannerEl.style.transition=''; },600); },1200); }
 
-    // Enemies (same AI as D)
     function spawnEnemy(){
       const spawnRadius=world.size/2 - 6; const angle=Math.random()*Math.PI*2; const distance=THREE.MathUtils.randFloat(spawnRadius*.5,spawnRadius); const x=Math.cos(angle)*distance, z=Math.sin(angle)*distance;
       const bodyGeometry=new THREE.CapsuleGeometry(.6,1.2,6,12); const mat=enemyMaterialTemplate.clone(); mat.map=enemyUniformTexture.clone(); mat.color.setHSL(THREE.MathUtils.randFloat(.55,.62),.45,.55);
@@ -257,7 +261,6 @@
 
     function removeEnemy(enemy, giveScore=true){ const i=enemies.indexOf(enemy); if(i!==-1){ maybeDropLoot(enemy.mesh.position); scene.remove(enemy.mesh); enemies.splice(i,1); if(giveScore){ game.score+=10; scoreEl.textContent=`Skor: ${game.score}`; } game.enemiesRemaining-=1; enemiesEl.textContent=`Hayatta Kalan Düşman: ${Math.max(game.enemiesRemaining,0)}`; if(game.enemiesRemaining<=0 && game.spawnQueue<=0 && enemies.length===0){ setTimeout(startNextRound,2000); } } }
 
-    // Player hitscan with zones
     function hitscanShoot(){ if(!player.alive || player.isReloading || player.ammo<=0) return;
       camera.getWorldDirection(tmpDir).normalize();
       const base = isADS ? spreadCur : spreadCur;
@@ -273,7 +276,6 @@
       if(hitPoint) spawnTracer(muzzleWorldPosition,hitPoint);
       player.ammo-=1; updateAmmoDisplay(); player.fireCooldown=.1; muzzleFlash.visible=true; setTimeout(()=>muzzleFlash.visible=false,45);
       if(!isADS) crosshairBloom();
-      // spread growth depends on ADS
       const inc = isADS ? THREE.MathUtils.degToRad(.12) : spreadIncPerShot;
       spreadCur = Math.min(spreadCur + inc, isADS ? spreadMaxADS : spreadMaxHip);
       noteGunshotNoise();
@@ -281,16 +283,13 @@
 
     function spawnImpactDecal(point, normal=new THREE.Vector3(0,1,0)){ const s=new THREE.Sprite(new THREE.SpriteMaterial({ map:muzzleFlashTexture, color:0xddddff, blending:THREE.AdditiveBlending, transparent:true, opacity:.7 })); s.scale.set(.5,.5,.5); s.position.copy(point); if(normal){ const q=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1), normal.clone().normalize()); s.quaternion.copy(q);} scene.add(s); setTimeout(()=>{ scene.remove(s); },80); }
 
-    // Loot
     function maybeDropLoot(pos){ const roll=Math.random(); if(roll>0.6) return; const type=roll<0.18?'med':'ammo'; const amount=type==='med'?THREE.MathUtils.randInt(20,35):THREE.MathUtils.randInt(20,60); const mesh=buildLootMesh(type); mesh.position.copy(pos).add(new THREE.Vector3(0,.5,0)); mesh.rotation.y=Math.random()*Math.PI*2; scene.add(mesh); lootItems.push({mesh,type,amount,bob:Math.random()*Math.PI*2}); }
     function buildLootMesh(type){ const g=type==='med'? new THREE.TorusGeometry(.35,.12,12,24) : new THREE.BoxGeometry(.7,.4,.5); const m=new THREE.MeshStandardMaterial({ color:type==='med'?0x4ef58f:0xffd24d, emissive:type==='med'?0x0a3318:0x332508, metalness:.2, roughness:.35 }); const mesh=new THREE.Mesh(g,m); mesh.castShadow=mesh.receiveShadow=true; const icon=new THREE.Sprite(new THREE.SpriteMaterial({ map:null, color:type==='med'?0x9fffe0:0xfff1b3, transparent:true, opacity:.9 })); icon.scale.set(.45,.45,.45); icon.position.set(0,.5,0); mesh.add(icon); return mesh; }
     function tryPickupLoot(){ const p=controls.getObject().position; for(let i=lootItems.length-1;i>=0;i--){ const l=lootItems[i]; if(l.mesh.position.distanceTo(p)<1.7){ if(l.type==='ammo'){ const old=player.reserve; player.reserve=Math.min(player.reserveMax, player.reserve+l.amount); if(player.isReloading===false && player.ammo===0) reloadWeapon(); updateAmmoDisplay(); showPickup(`+${player.reserve-old} mermi`); } else { const old=player.health; player.health=Math.min(100, player.health+l.amount); const r=player.health/100; healthBarEl.style.width=`${r*100}%`; showPickup(`+${player.health-old} can`);} scene.remove(l.mesh); lootItems.splice(i,1);} } }
     function showPickup(text){ pickupBannerEl.textContent=text; pickupBannerEl.classList.add('show-pickup'); setTimeout(()=>pickupBannerEl.classList.remove('show-pickup'),600); }
 
-    // Out of combat regen
     function updateRegen(delta){ const now=performance.now(); if(now - player.lastDamagedAt > 4000 && player.health>0 && player.health<60){ player.health = Math.min(60, player.health + 6*delta); const r=player.health/100; healthBarEl.style.width=`${r*100}%`; } }
 
-    // Weapon sway & bob
     let prevYaw=0, prevPitch=0, bobTime=0;
     function updateWeaponPose(delta){
       const yaw = controls.getObject().rotation.y;
@@ -299,7 +298,6 @@
       const dp = pitch - prevPitch;
       prevYaw = yaw; prevPitch = pitch;
 
-      // Mouse look sway
       const swayFactor = isADS ? 0.35 : 0.6;
       const maxSwayPos = isADS ? 0.025 : 0.045;
       const maxSwayRot = isADS ? 0.015 : 0.03;
@@ -309,7 +307,6 @@
       weaponGroup.rotation.z = THREE.MathUtils.clamp(-dy * swayFactor, -maxSwayRot, maxSwayRot);
       weaponGroup.rotation.x = -0.05 + THREE.MathUtils.clamp(-dp * swayFactor, -maxSwayRot, maxSwayRot);
 
-      // Movement bob
       const moving = (keyState['KeyW']||keyState['KeyA']||keyState['KeyS']||keyState['KeyD']);
       if(moving && player.onGround){
         bobTime += delta * (isADS?8:10);
@@ -323,17 +320,15 @@
     function updatePlayer(delta){
       if(!controls.isLocked) return;
       const sprinting=keyState['ShiftLeft']||keyState['ShiftRight'];
-      // sprint yaparken nişan iptal
       if(sprinting) aiming=false;
       setADS(aiming);
 
-      // ADS transition
       const target = isADS ? 1 : 0;
-      adsT = THREE.MathUtils.damp(adsT, target, 12, delta); // smooth
+      adsT = THREE.MathUtils.damp(adsT, target, 12, delta); 
       const fovTarget = sprinting ? sprintFOV : THREE.MathUtils.lerp(baseFOV, adsFOV, adsT);
       camera.fov = THREE.MathUtils.damp(camera.fov, fovTarget, 10, delta);
       camera.updateProjectionMatrix();
-      // spread base/limitleri
+
       const base = isADS ? spreadBaseADS : spreadBaseHip;
       const max  = isADS ? spreadMaxADS  : spreadMaxHip;
       spreadCur = THREE.MathUtils.clamp(spreadCur, base, max);
@@ -351,7 +346,7 @@
       playerCollider.setFromCenterAndSize(controls.getObject().position,new THREE.Vector3(1,player.height,1));
       const colliders=[...world.walls,...world.obstacles]; for(const c of colliders){ tempBox.setFromObject(c); if(playerCollider.intersectsBox(tempBox)){ controls.getObject().position.copy(oldPos); player.velocity.y=0; player.onGround=true; break; } }
       if(player.isReloading){ player.reloadTimer-=delta; if(player.reloadTimer<=0){ const need=player.maxAmmo-player.ammo; const toLoad=Math.min(need,player.reserve); player.ammo+=toLoad; player.reserve-=toLoad; updateAmmoDisplay(); player.isReloading=false; } }
-      // recovery
+      
       const recRate = isADS ? THREE.MathUtils.degToRad(1.7) : spreadRecoverRate;
       spreadCur = Math.max(base, spreadCur - recRate*delta);
       if(shake.time>0){ shake.time-=delta; const i=shake.intensity; camera.position.x += (Math.random()*2-1)*i*.2; camera.position.y += (Math.random()*2-1)*i*.1; }
@@ -363,7 +358,6 @@
 
     function updateLoot(delta){ const t=performance.now()/1000; for(const l of lootItems){ l.mesh.rotation.y += delta*1.6; const baseY=l.mesh.position.y; l.mesh.position.y = Math.max(.3, baseY + Math.sin(t + l.bob)*.003); } tryPickupLoot(); }
 
-    // Enemy update copied from D
     function updateEnemies(delta){
       const playerPos=controls.getObject().position.clone(); const statics=[...world.walls,...world.obstacles]; const p=difficulty.params;
       for(const enemy of enemies){
@@ -490,7 +484,10 @@
       },
     };
     applyPatch(patchContext);
-    resetGame(); animate();
+    resetGame();
+    // Yeni patch dosyası kendi animasyon döngüsünü başlattığı için ana animate() çağrısı burada devre dışı bırakılabilir.
+    // Ancak uyumluluk için şimdilik kalabilir, patch dosyası zaten üzerine yazacaktır.
+    animate();
   </script>
 </body>
 </html>
