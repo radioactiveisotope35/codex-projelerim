@@ -949,7 +949,7 @@ export function applyPatch(ctx){
       }
       playerState.jumpHeld = jumpPressed;
 
-      const effectiveADS = getAiming() && !sprinting;
+      const effectiveADS = getAiming() && !sprinting && player.alive !== false && !player.isReloading && !playerState.storeOpen;
       setADSFlag(effectiveADS);
 
       const adsTarget = effectiveADS ? 1 : 0;
@@ -1690,6 +1690,20 @@ export function applyPatch(ctx){
     }
 
     tempVecC.set(point.x, resolved + ENEMY_HALF_HEIGHT, point.z);
+    const minEnemyGap = ENEMY_RADIUS * 2.6;
+    const minEnemyGapSq = minEnemyGap * minEnemyGap;
+    for(let i=0;i<enemies.length;i++){
+      const other = enemies[i];
+      const mesh = other?.mesh;
+      if(!mesh) continue;
+      tempVecD.copy(mesh.position);
+      tempVecD.y = tempVecC.y;
+      const dx = tempVecD.x - tempVecC.x;
+      const dz = tempVecD.z - tempVecC.z;
+      if(dx*dx + dz*dz < minEnemyGapSq){
+        return false;
+      }
+    }
     tempVecA.subVectors(playerPos, tempVecC);
     const distance = tempVecA.length();
     if(distance < 1e-3){
@@ -1816,7 +1830,7 @@ export function applyPatch(ctx){
             if(enemy.burstShotsLeft <= 0){
               enemy.burstShotsLeft = THREE.MathUtils.randInt(2, 4);
             }
-            patchedEnemyHitscanShoot(enemy);
+            patchedEnemyHitscanShoot(enemy, delta);
             enemy.burstShotsLeft -= 1;
             enemy.fireCooldown = enemy.burstShotsLeft > 0
               ? THREE.MathUtils.randFloat(CONFIG.AI.focusBurstOffset[0], CONFIG.AI.focusBurstOffset[1])
@@ -1878,7 +1892,7 @@ export function applyPatch(ctx){
     mesh.position.addScaledVector(tempVecA, speed * delta);
   }
 
-  function patchedEnemyHitscanShoot(enemy){
+  function patchedEnemyHitscanShoot(enemy, delta = 0){
     const origin = borrowVec3().copy(enemy.mesh.position);
     const forward = borrowVec3();
     enemy.mesh.getWorldDirection(forward);
