@@ -100,8 +100,8 @@ export function applyPatch(ctx){
       relocateCooldown: 4,
     },
     SPAWN: {
-      safeRadius: 12,
-      maxAttempts: 24,
+      safeRadius: 18,
+      maxAttempts: 36,
       concurrentCap: 7,
       buyDuration: 12,
     },
@@ -463,6 +463,8 @@ export function applyPatch(ctx){
   const tempVecE = shared.tempVecE || (shared.tempVecE = new THREE.Vector3());
   const tempVecF = shared.tempVecF || (shared.tempVecF = new THREE.Vector3());
   const tempVecG = shared.tempVecG || (shared.tempVecG = new THREE.Vector3());
+  const tempVecH = shared.tempVecH || (shared.tempVecH = new THREE.Vector3());
+  const tempVecI = shared.tempVecI || (shared.tempVecI = new THREE.Vector3());
   const tempVec2A = shared.tempVec2A || (shared.tempVec2A = new THREE.Vector2());
   const tempVec2B = shared.tempVec2B || (shared.tempVec2B = new THREE.Vector2());
   const tempVec2C = shared.tempVec2C || (shared.tempVec2C = new THREE.Vector2());
@@ -475,6 +477,7 @@ export function applyPatch(ctx){
   if(!refs.raycaster) shared.tempRaycaster = tempRaycaster;
   const helperRay = shared.helperRay || (shared.helperRay = new THREE.Raycaster());
   const upVector = shared.upVector || (shared.upVector = new THREE.Vector3(0, 1, 0));
+  const downVector = shared.downVector || (shared.downVector = new THREE.Vector3(0, -1, 0));
   const yawObject = typeof controls.getObject === 'function' ? controls.getObject() : controls.object || controls;
   const pitchObject = camera;
   if(yawObject?.rotation){
@@ -675,6 +678,11 @@ export function applyPatch(ctx){
     if(Array.isArray(world.obstacles)){
       for(let i=0;i<world.obstacles.length;i++) staticScratch.push(world.obstacles[i]);
     }
+    if(world.ground) staticScratch.push(world.ground);
+    if(world.floor) staticScratch.push(world.floor);
+    if(Array.isArray(world.platforms)){
+      for(let i=0;i<world.platforms.length;i++) staticScratch.push(world.platforms[i]);
+    }
     return staticScratch;
   }
 
@@ -745,6 +753,7 @@ export function applyPatch(ctx){
     storeOpen: false,
     suppressedHits: 0,
     jumpHeld: false,
+    storePausedLoop: false,
   };
   player.credits = player.credits || 0;
 
@@ -1092,7 +1101,7 @@ export function applyPatch(ctx){
           inflictedDamage = dmg;
           enemy.health -= dmg;
           damageWasHeadshot = localY >= 1.0;
-          enemy.brain = enemy.brain || createEnemyBrain();
+          enemy.brain = enemy.brain || createEnemyBrain(enemy.spawnZone);
           enemy.brain.lastHitAt = now;
           enemy.suppressedUntil = now + CONFIG.AI.suppressedTime * 1000;
           if(enemy.health <= 0){ removeEnemyLocal(enemy); }
@@ -1229,47 +1238,204 @@ export function applyPatch(ctx){
   // ---------------------------------------------------------------------------
   // AI
   // ---------------------------------------------------------------------------
+  const ENEMY_RADIUS = 0.6;
+  const ENEMY_HEIGHT = 2.4;
+  const ENEMY_HALF_HEIGHT = ENEMY_HEIGHT * 0.5;
+
+  function resolveSpawnHeight(point, zone, statics){
+    const baseHeight = zone?.height ?? point.y ?? 0;
+    const startY = baseHeight + ENEMY_HEIGHT * 2;
+    tempVecI.set(point.x, startY, point.z);
+    helperRay.set(tempVecI, downVector);
+    helperRay.far = startY + ENEMY_HEIGHT * 2;
+    const hits = helperRay.intersectObjects(statics, false);
+    helperRay.far = Infinity;
+    for(let i=0;i<hits.length;i++){
+      const hit = hits[i];
+      if(!hit) continue;
+      if(hit.face){
+        tempMat3.getNormalMatrix(hit.object.matrixWorld);
+        tempVecI.copy(hit.face.normal).applyMatrix3(tempMat3).normalize();
+        if(tempVecI.y < 0.35) continue;
+      }
+      return hit.point.y;
+    }
+    if(typeof world.groundHeight === 'number' && isFinite(world.groundHeight)){
+      return world.groundHeight;
+    }
+    return baseHeight;
+  }
+
+  function capsuleOverlapsStatics(center, radius, height, statics){
+    const half = height * 0.5;
+    for(let i=0;i<statics.length;i++){
+      const mesh = statics[i];
+      if(!mesh) continue;
+      tempBox.setFromObject(mesh);
+      if(center.y + half <= tempBox.min.y - 0.05) continue;
+      if(center.y - half >= tempBox.max.y + 0.05) continue;
+      if(center.x + radius <= tempBox.min.x - 0.05) continue;
+      if(center.x - radius >= tempBox.max.x + 0.05) continue;
+      if(center.z + radius <= tempBox.min.z - 0.05) continue;
+      if(center.z - radius >= tempBox.max.z + 0.05) continue;
+      return true;
+    }
+    return false;
+  }
+
+  function ensureSpawnClearance(point, zone, statics){
+    const height = resolveSpawnHeight(point, zone, statics);
+    if(!isFinite(height)) return null;
+    const centerY = height + ENEMY_HALF_HEIGHT;
+    tempVecH.set(point.x, centerY, point.z);
+    if(capsuleOverlapsStatics(tempVecH, ENEMY_RADIUS, ENEMY_HEIGHT, statics)){
+      return null;
+    }
+    point.y = height;
+    return height;
+  }
+
+  function desiredEnemyCenterY(enemy){
+    if(!enemy || !enemy.mesh) return 0;
+    const zoneHeight = enemy.spawnZone?.height;
+    const base = isFinite(enemy.groundHeight) ? enemy.groundHeight : (isFinite(zoneHeight) ? zoneHeight : (enemy.mesh.position.y - ENEMY_HALF_HEIGHT));
+    return base + ENEMY_HALF_HEIGHT;
+  }
+
+  function clampEnemyToZone(enemy){
+    const zone = enemy?.spawnZone;
+    const mesh = enemy?.mesh;
+    if(!zone || !mesh) return;
+    const radius = Math.max(1, zone.radius || 0) - ENEMY_RADIUS * 0.25;
+    if(radius <= 0) return;
+    tempVecG.copy(mesh.position).sub(zone.center).setY(0);
+    const dist = tempVecG.length();
+    if(dist <= radius) return;
+    tempVecG.normalize().multiplyScalar(radius);
+    mesh.position.x = zone.center.x + tempVecG.x;
+    mesh.position.z = zone.center.z + tempVecG.z;
+  }
+
+  function applyEnemyVelocity(enemy, velocity, delta, statics){
+    const mesh = enemy?.mesh;
+    if(!mesh) return;
+    if(velocity.lengthSq() < 1e-6) return;
+    tempVecE.copy(velocity).multiplyScalar(delta);
+    tempVecH.copy(mesh.position);
+    tempVecI.copy(tempVecH).add(tempVecE);
+    if(!capsuleOverlapsStatics(tempVecI, ENEMY_RADIUS, ENEMY_HEIGHT, statics)){
+      mesh.position.copy(tempVecI);
+    } else {
+      let moved = false;
+      if(Math.abs(tempVecE.x) > 1e-4){
+        tempVecI.set(tempVecH.x + tempVecE.x, tempVecH.y, tempVecH.z);
+        if(!capsuleOverlapsStatics(tempVecI, ENEMY_RADIUS, ENEMY_HEIGHT, statics)){
+          mesh.position.copy(tempVecI);
+          moved = true;
+        }
+      }
+      if(!moved && Math.abs(tempVecE.z) > 1e-4){
+        tempVecI.set(tempVecH.x, tempVecH.y, tempVecH.z + tempVecE.z);
+        if(!capsuleOverlapsStatics(tempVecI, ENEMY_RADIUS, ENEMY_HEIGHT, statics)){
+          mesh.position.copy(tempVecI);
+          moved = true;
+        }
+      }
+      if(!moved) return;
+    }
+    clampEnemyToZone(enemy);
+    mesh.position.y = desiredEnemyCenterY(enemy);
+  }
+
+  function moveEnemyTowards(enemy, target, speed, delta, statics){
+    const mesh = enemy?.mesh;
+    if(!mesh) return Infinity;
+    tempVecD.subVectors(target, mesh.position).setY(0);
+    const distance = tempVecD.length();
+    if(distance < 1e-3) return distance;
+    tempVecD.normalize().multiplyScalar(speed);
+    applyEnemyVelocity(enemy, tempVecD, delta, statics);
+    return distance;
+  }
+
+  function pickCoverPoint(origin, toPlayerDir){
+    if(!Array.isArray(coverPoints) || !coverPoints.length) return null;
+    let best = null;
+    let bestScore = -Infinity;
+    for(let i=0;i<coverPoints.length;i++){
+      const cover = coverPoints[i];
+      if(!cover?.position) continue;
+      tempVecD.copy(cover.position);
+      const dx = tempVecD.x - origin.x;
+      const dz = tempVecD.z - origin.z;
+      const distSq = dx*dx + dz*dz;
+      if(distSq < 6 || distSq > 400) continue;
+      tempVecD.y = origin.y;
+      if(hasLineOfSight(tempVecD, controls.getObject().position)) continue;
+      const distance = Math.sqrt(distSq);
+      const dirDot = (dx * toPlayerDir.x + dz * toPlayerDir.z) / Math.max(distance, 1e-3);
+      const score = -distSq + dirDot * 6;
+      if(score > bestScore){
+        bestScore = score;
+        best = cover.position;
+      }
+    }
+    return best;
+  }
+
   function patchedSpawnEnemy(){
     if(enemies.length >= CONFIG.PERF.maxActiveEnemies){
       game.spawnDelay = Math.max(game.spawnDelay, 0.5);
-      return;
+      return false;
     }
+    const statics = gatherStaticMeshes();
     const p = difficulty.params;
     const attempts = CONFIG.SPAWN.maxAttempts;
     const spawnPoint = tempVecB;
     let pointFound = false;
-    let chosenZone = pickSpawnZone();
+    let chosenZone = null;
+    const zones = PATCH_STATE.enemySpawnZones || [];
 
-    if(chosenZone){
+    if(zones.length){
+      const preferred = pickSpawnZone();
+      const zoneOrder = [];
+      if(preferred) zoneOrder.push(preferred);
+      for(let i=0;i<zones.length;i++){
+        const zone = zones[i];
+        if(zone && zone !== preferred) zoneOrder.push(zone);
+      }
+      for(let zi=0; zi<zoneOrder.length && !pointFound; zi++){
+        const zone = zoneOrder[zi];
+        const radius = Math.max(2.5, zone.radius || 0);
+        for(let i=0;i<attempts;i++){
+          const distance = Math.sqrt(Math.random()) * Math.max(1.5, radius - ENEMY_RADIUS);
+          const angle = Math.random() * Math.PI * 2;
+          spawnPoint.set(
+            zone.center.x + Math.cos(angle) * distance,
+            zone.height || 0,
+            zone.center.z + Math.sin(angle) * distance
+          );
+          if(validateSpawnPoint(spawnPoint, zone, statics)){
+            chosenZone = zone;
+            pointFound = true;
+            break;
+          }
+        }
+        if(pointFound) break;
+        spawnPoint.copy(zone.center);
+        spawnPoint.y = zone.height || 0;
+        if(validateSpawnPoint(spawnPoint, zone, statics)){
+          chosenZone = zone;
+          pointFound = true;
+        }
+      }
+    } else {
+      const spawnRadius = Math.max(24, (world.size || 60) * 0.45);
       for(let i=0;i<attempts;i++){
-        const radius = Math.max(2, chosenZone.radius || 0);
-        const distance = Math.sqrt(Math.random()) * radius;
         const angle = Math.random() * Math.PI * 2;
-        spawnPoint.set(
-          chosenZone.center.x + Math.cos(angle) * distance,
-          chosenZone.height || 0,
-          chosenZone.center.z + Math.sin(angle) * distance
-        );
-        if(validateSpawnPoint(spawnPoint, chosenZone)){
-          pointFound = true;
-          break;
-        }
-      }
-      if(!pointFound){
-        spawnPoint.copy(chosenZone.center);
-        spawnPoint.y = chosenZone.height || 0;
-        pointFound = validateSpawnPoint(spawnPoint, chosenZone);
-      }
-    }
-
-    if(!pointFound){
-      const spawnRadius = Math.max(20, (world.size || 60) / 2 - 6);
-      for(let i=0;i<attempts;i++){
-        const angle = Math.random()*Math.PI*2;
-        const distance = THREE.MathUtils.randFloat(spawnRadius*0.45, spawnRadius);
-        tempVecA.set(Math.cos(angle)*distance, 0, Math.sin(angle)*distance);
-        spawnPoint.copy(tempVecA);
-        if(validateSpawnPoint(spawnPoint)){
+        const distance = THREE.MathUtils.randFloat(spawnRadius * 0.65, spawnRadius);
+        spawnPoint.set(Math.cos(angle) * distance, 0, Math.sin(angle) * distance);
+        if(validateSpawnPoint(spawnPoint, null, statics)){
           pointFound = true;
           break;
         }
@@ -1277,17 +1443,16 @@ export function applyPatch(ctx){
     }
 
     if(!pointFound){
-      const fallback = Math.max(10, (world.size || 60) * 0.4);
-      spawnPoint.set(THREE.MathUtils.randFloatSpread(fallback), 0, THREE.MathUtils.randFloatSpread(fallback));
-      chosenZone = null;
+      game.spawnQueue += 1;
+      game.spawnDelay = Math.max(game.spawnDelay, 0.6);
+      return false;
     }
 
-    const spawnHeight = chosenZone?.height ?? spawnPoint.y ?? 0;
-    spawnPoint.y = spawnHeight;
+    const spawnHeight = spawnPoint.y;
     const bodyGeometry = new THREE.CapsuleGeometry(.6,1.2,6,12);
     const mat = ctx.enemyMaterialTemplate ? ctx.enemyMaterialTemplate.clone() : new THREE.MeshStandardMaterial({ color:0x223344 });
     const enemyMesh = new THREE.Mesh(bodyGeometry, mat);
-    enemyMesh.position.set(spawnPoint.x, spawnHeight + 1.5, spawnPoint.z);
+    enemyMesh.position.set(spawnPoint.x, spawnHeight + ENEMY_HALF_HEIGHT, spawnPoint.z);
     enemyMesh.castShadow = enemyMesh.receiveShadow = true;
     scene.add(enemyMesh);
 
@@ -1303,11 +1468,13 @@ export function applyPatch(ctx){
       burstShotsLeft: 0,
       aimSpread: p.aimSpread,
       suppressedUntil: 0,
-      brain: createEnemyBrain(),
+      brain: createEnemyBrain(chosenZone),
+      groundHeight: spawnHeight,
     };
     enemy.spawnZone = chosenZone || null;
     enemyMesh.userData.enemy = enemy;
     enemies.push(enemy);
+    return true;
   }
 
   function pickSpawnZone(){
@@ -1332,19 +1499,28 @@ export function applyPatch(ctx){
     return bestZone;
   }
 
-  function createEnemyBrain(){
+  function createEnemyBrain(zone){
     return {
       state: 'patrol',
+      zone: zone || null,
       lastDecisionAt: -Infinity,
       peekUntil: 0,
       coverUntil: 0,
       flankUntil: 0,
+      repositionUntil: 0,
+      strafeDir: Math.random() < 0.5 ? -1 : 1,
+      strafeUntil: 0,
+      wanderTarget: new THREE.Vector3(),
+      nextWanderAt: 0,
+      coverTarget: new THREE.Vector3(),
+      hasCoverTarget: false,
       lastKnownPlayerPos: new THREE.Vector3(),
       lastHitAt: -Infinity,
     };
   }
 
-  function validateSpawnPoint(point, zone){
+  function validateSpawnPoint(point, zone, staticsOverride){
+    const statics = staticsOverride || gatherStaticMeshes();
     const playerPos = controls.getObject().position;
     const safeRadius = CONFIG.SPAWN.safeRadius;
     if(point.distanceTo(playerPos) < safeRadius){
@@ -1358,7 +1534,7 @@ export function applyPatch(ctx){
     const zones = PATCH_STATE.enemySpawnZones || [];
     if(activeZone){
       tempVecG.copy(point).sub(activeZone.center).setY(0);
-      const radius = activeZone.radius || 0;
+      const radius = Math.max(1, activeZone.radius || 0) - ENEMY_RADIUS * 0.5;
       if(tempVecG.lengthSq() > radius * radius){
         return false;
       }
@@ -1366,8 +1542,9 @@ export function applyPatch(ctx){
       let inside = false;
       for(let i=0;i<zones.length;i++){
         const candidate = zones[i];
+        if(!candidate) continue;
         tempVecG.copy(point).sub(candidate.center).setY(0);
-        const radius = candidate.radius || 0;
+        const radius = Math.max(1, candidate.radius || 0) - ENEMY_RADIUS * 0.5;
         if(tempVecG.lengthSq() <= radius * radius){
           inside = true;
           activeZone = candidate;
@@ -1377,80 +1554,168 @@ export function applyPatch(ctx){
       if(!inside) return false;
     }
 
-    const statics = gatherStaticMeshes();
-    tempVecC.copy(point);
-    tempVecC.y = (activeZone?.height ?? point.y ?? 0) + CONFIG.PLAYER.baseHeight * 0.5;
-    helperRay.set(tempVecC, tempVecA.subVectors(playerPos, point).normalize());
+    const resolved = ensureSpawnClearance(point, activeZone, statics);
+    if(resolved === null){
+      return false;
+    }
+
+    tempVecC.set(point.x, resolved + ENEMY_HALF_HEIGHT, point.z);
+    tempVecA.subVectors(playerPos, tempVecC);
+    const distance = tempVecA.length();
+    if(distance < 1e-3){
+      return false;
+    }
+    tempVecA.normalize();
+    helperRay.set(tempVecC, tempVecA);
+    helperRay.far = distance;
+    let blocked = false;
     for(let i=0;i<statics.length;i++){
       const mesh = statics[i];
       if(!mesh) continue;
-      const res = helperRay.intersectObject(mesh, false);
-      if(res.length && res[0].distance > 0.25){
-        return true;
+      const intersections = helperRay.intersectObject(mesh, false);
+      if(intersections.length && intersections[0].distance > 0.35){
+        blocked = true;
+        break;
       }
     }
-    return point.distanceTo(playerPos) >= safeRadius * 1.6;
+    helperRay.far = Infinity;
+    if(blocked){
+      return true;
+    }
+    return distance >= safeRadius * 1.4;
   }
 
   function patchedUpdateEnemies(delta){
     const now = performance.now();
+    const playerPos = controls.getObject().position;
+    const statics = gatherStaticMeshes();
     for(let i=0;i<enemies.length;i++){
       const enemy = enemies[i];
-      const brain = enemy.brain || (enemy.brain = createEnemyBrain());
       const mesh = enemy.mesh;
       if(!mesh) continue;
-      const toPlayer = tempVecA.subVectors(controls.getObject().position, mesh.position);
-      const distance = toPlayer.length();
-      toPlayer.normalize();
+      const brain = enemy.brain || (enemy.brain = createEnemyBrain(enemy.spawnZone));
+      mesh.position.y = desiredEnemyCenterY(enemy);
+      clampEnemyToZone(enemy);
 
-      const losKey = `${mesh.uuid}:${Math.round(controls.getObject().position.x*2)}:${Math.round(controls.getObject().position.z*2)}`;
+      tempVecA.subVectors(playerPos, mesh.position);
+      const distance = tempVecA.length();
+      const toPlayerDir = tempVecB.copy(tempVecA);
+      if(distance > 1e-3){
+        toPlayerDir.multiplyScalar(1 / distance);
+      } else {
+        toPlayerDir.set(0, 0, 0);
+      }
+
+      const losKey = `${mesh.uuid}:${Math.round(playerPos.x*2)}:${Math.round(playerPos.z*2)}`;
       let hasLine = false;
       if(CONFIG.PERF.losReuse && losCache.has(losKey) && now - losCache.get(losKey).time < 80){
         hasLine = losCache.get(losKey).value;
       } else {
-        hasLine = hasLineOfSight(mesh.position, controls.getObject().position);
+        hasLine = hasLineOfSight(mesh.position, playerPos);
         losCache.set(losKey, { value: hasLine, time: now });
       }
 
+      const suppressed = enemy.suppressedUntil > now;
+      enemy.fireCooldown = Math.max(0, enemy.fireCooldown - delta);
+      if(hasLine){
+        brain.lastKnownPlayerPos.copy(playerPos);
+        brain.lastKnownPlayerPos.y = desiredEnemyCenterY(enemy);
+      }
+
       switch(brain.state){
-        case 'patrol':
-          mesh.translateOnAxis(new THREE.Vector3(0,0,1), enemy.patrolSpeed * delta);
-          if(hasLine){
+        case 'patrol': {
+          const zone = enemy.spawnZone;
+          if(
+            now >= brain.nextWanderAt ||
+            !isFinite(brain.wanderTarget.x) ||
+            brain.wanderTarget.distanceToSquared(mesh.position) < 0.5
+          ){
+            const center = zone?.center || mesh.position;
+            const radius = zone ? Math.max(1.5, (zone.radius || 6) * 0.6) : 6;
+            const wanderAngle = Math.random() * Math.PI * 2;
+            const wanderDist = Math.sqrt(Math.random()) * radius;
+            brain.wanderTarget.set(
+              center.x + Math.cos(wanderAngle) * wanderDist,
+              desiredEnemyCenterY(enemy),
+              center.z + Math.sin(wanderAngle) * wanderDist
+            );
+            brain.nextWanderAt = now + THREE.MathUtils.randFloat(900, 1600);
+          }
+          brain.hasCoverTarget = false;
+          moveEnemyTowards(enemy, brain.wanderTarget, Math.max(enemy.patrolSpeed * 0.75, 0.5), delta, statics);
+          mesh.lookAt(playerPos.x, mesh.position.y, playerPos.z);
+          if((hasLine && distance < CONFIG.STIM.focusRadius * 1.6) || suppressed){
             brain.state = 'attack';
-            brain.peekUntil = now + THREE.MathUtils.randFloat(CONFIG.AI.peekDuration[0], CONFIG.AI.peekDuration[1]) * 1000;
+            brain.strafeUntil = now + THREE.MathUtils.randFloat(500, 1400);
           }
           break;
-        case 'attack':
-          mesh.lookAt(controls.getObject().position.x, mesh.position.y, controls.getObject().position.z);
-          if(enemy.suppressedUntil > now){
-            mesh.translateOnAxis(new THREE.Vector3(-toPlayer.z,0,toPlayer.x), delta);
+        }
+        case 'attack': {
+          mesh.lookAt(playerPos.x, mesh.position.y, playerPos.z);
+          if(now > brain.strafeUntil){
+            brain.strafeDir = Math.random() < 0.5 ? -1 : 1;
+            brain.strafeUntil = now + THREE.MathUtils.randFloat(600, 1400);
           }
-          if(hasLine){
-            if(enemy.fireCooldown <= 0){
-              enemy.fireCooldown = THREE.MathUtils.randFloat(CONFIG.AI.burstCooldown[0], CONFIG.AI.burstCooldown[1]);
-              enemy.burstShotsLeft = THREE.MathUtils.randInt(2, 4);
+          brain.hasCoverTarget = false;
+          tempVecF.set(0, 0, 0);
+          if(distance > CONFIG.STIM.focusRadius * 1.1){
+            tempVecF.addScaledVector(toPlayerDir, enemy.chaseSpeed * 0.8);
+          } else if(distance < CONFIG.STIM.focusRadius * 0.6){
+            tempVecF.addScaledVector(toPlayerDir, -enemy.chaseSpeed * 0.6);
+          }
+          if(toPlayerDir.lengthSq() > 1e-6){
+            tempVecC.set(toPlayerDir.z, 0, -toPlayerDir.x);
+            if(tempVecC.lengthSq() > 1e-6){
+              tempVecC.normalize();
+              tempVecF.addScaledVector(tempVecC, enemy.chaseSpeed * 0.55 * brain.strafeDir);
             }
-            if(enemy.burstShotsLeft > 0){
-              enemy.fireCooldown -= delta;
-              if(enemy.fireCooldown <= 0){
-                patchedEnemyHitscanShoot(enemy);
-                enemy.burstShotsLeft -= 1;
-                enemy.fireCooldown = THREE.MathUtils.randFloat(CONFIG.AI.burstCooldown[0], CONFIG.AI.burstCooldown[1]);
-              }
-            }
-          } else {
+          }
+          applyEnemyVelocity(enemy, tempVecF, delta, statics);
+          if(!hasLine || suppressed){
             brain.state = 'flank';
             brain.flankUntil = now + CONFIG.STIM.flankLoSBlock * 1000;
-            brain.lastKnownPlayerPos.copy(controls.getObject().position);
+            brain.repositionUntil = now + CONFIG.STIM.suppressionRelocate * 1000;
+            brain.hasCoverTarget = false;
+            enemy.burstShotsLeft = 0;
+            break;
+          }
+          if(enemy.fireCooldown <= 0){
+            if(enemy.burstShotsLeft <= 0){
+              enemy.burstShotsLeft = THREE.MathUtils.randInt(2, 4);
+            }
+            patchedEnemyHitscanShoot(enemy);
+            enemy.burstShotsLeft -= 1;
+            enemy.fireCooldown = enemy.burstShotsLeft > 0
+              ? THREE.MathUtils.randFloat(CONFIG.AI.focusBurstOffset[0], CONFIG.AI.focusBurstOffset[1])
+              : THREE.MathUtils.randFloat(CONFIG.AI.burstCooldown[0], CONFIG.AI.burstCooldown[1]);
           }
           break;
-        case 'flank':
-          moveTowards(mesh, brain.lastKnownPlayerPos, enemy.chaseSpeed, delta);
-          if(hasLine || now > brain.flankUntil){
+        }
+        default: {
+          if(!brain.hasCoverTarget){
+            const cover = pickCoverPoint(mesh.position, toPlayerDir.lengthSq() > 1e-6 ? toPlayerDir : tempVecC.set(0, 0, 1));
+            if(cover){
+              brain.coverTarget.copy(cover);
+            } else {
+              brain.coverTarget.copy(brain.lastKnownPlayerPos);
+            }
+            brain.coverTarget.y = desiredEnemyCenterY(enemy);
+            brain.hasCoverTarget = true;
+          }
+          const distToCover = moveEnemyTowards(enemy, brain.coverTarget, enemy.chaseSpeed, delta, statics);
+          mesh.lookAt(playerPos.x, mesh.position.y, playerPos.z);
+          if(hasLine && now > brain.flankUntil){
             brain.state = 'attack';
+            brain.hasCoverTarget = false;
+          } else if(distToCover < 0.75 || now > brain.repositionUntil){
+            brain.state = hasLine ? 'attack' : 'patrol';
+            brain.hasCoverTarget = false;
           }
           break;
+        }
       }
+
+      enemy.state = brain.state;
     }
   }
 
@@ -1475,7 +1740,23 @@ export function applyPatch(ctx){
 
   function patchedEnemyHitscanShoot(enemy){
     const origin = borrowVec3().copy(enemy.mesh.position);
-    origin.y += 1.4;
+    const forward = borrowVec3();
+    enemy.mesh.getWorldDirection(forward);
+    if(forward.lengthSq() < 1e-6){
+      forward.set(0, 0, -1);
+    }
+    forward.normalize();
+    const right = borrowVec3().set(forward.z, 0, -forward.x);
+    if(right.lengthSq() > 1e-6){
+      right.normalize();
+    } else {
+      right.set(1, 0, 0);
+    }
+    origin.copy(enemy.mesh.position);
+    origin.y = desiredEnemyCenterY(enemy) + 0.2;
+    origin.addScaledVector(forward, 0.8);
+    origin.addScaledVector(right, 0.25);
+
     const target = borrowVec3().copy(controls.getObject().position);
     target.y += CONFIG.PLAYER.baseHeight;
     const dir = borrowVec3().subVectors(target, origin).normalize();
@@ -1505,6 +1786,8 @@ export function applyPatch(ctx){
     releaseVec3(origin);
     releaseVec3(dir);
     releaseVec3(hitPoint);
+    releaseVec3(forward);
+    releaseVec3(right);
   }
 
   // ---------------------------------------------------------------------------
@@ -1532,9 +1815,12 @@ export function applyPatch(ctx){
     if(enemies.length >= CONFIG.SPAWN.concurrentCap) return;
     game.spawnDelay -= delta;
     if(game.spawnDelay <= 0 && game.spawnQueue > 0){
-      patchedSpawnEnemy();
-      game.spawnQueue -= 1;
-      game.spawnDelay = THREE.MathUtils.randFloat(0.55, 1.1);
+      if(patchedSpawnEnemy()){
+        game.spawnQueue -= 1;
+        game.spawnDelay = THREE.MathUtils.randFloat(0.55, 1.1);
+      } else {
+        game.spawnDelay = Math.max(game.spawnDelay, 0.6);
+      }
     }
     if(game.spawnQueue <= 0){
       game.state = 'inRound';
@@ -2071,13 +2357,21 @@ export function applyPatch(ctx){
 
   function openStore(fromBuyPhase){
     playerState.storeOpen = true;
-    pauseLoop();
+    const shouldPause = !fromBuyPhase;
+    playerState.storePausedLoop = shouldPause;
+    if(shouldPause){
+      pauseLoop();
+    }
     if(originalOpenStore) originalOpenStore(fromBuyPhase);
   }
   function closeStore(){
+    const wasPaused = playerState.storePausedLoop;
+    playerState.storePausedLoop = false;
     playerState.storeOpen = false;
     if(originalCloseStore) originalCloseStore();
-    resumeLoop();
+    if(wasPaused){
+      resumeLoop();
+    }
   }
 
   function showBuyBanner(){
@@ -2112,6 +2406,9 @@ export function applyPatch(ctx){
   functions.showRoundBanner = patchedShowRoundBanner;
 
   functions.animate = () => {};
+  if((game.state === undefined || game.state === null || game.state === 'waiting') && (game.spawnQueue ?? 0) <= 0 && enemies.length === 0){
+    patchedStartNextRound();
+  }
   startLoop();
 
   PATCH_STATE.CONFIG = CONFIG;
