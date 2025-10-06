@@ -13,5 +13,5 @@ if errorlevel 1 (
 )
 
 set PORT=5500
-start "" http://localhost:%PORT%/index.html
+start "" http://localhost:%PORT%/test.html
 py -3 -m http.server %PORT%
