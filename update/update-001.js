@@ -192,6 +192,7 @@ export function applyPatch(ctx){
     muzzleAnchor: null,
     enemySpawnZones: null,
     playerSpawn: null,
+    enemyGeometry: null,
     spawnFailureStreak: 0,
     lastSpawnFailureAt: 0,
   };
@@ -949,7 +950,7 @@ export function applyPatch(ctx){
       }
       playerState.jumpHeld = jumpPressed;
 
-      const effectiveADS = getAiming() && !sprinting;
+      const effectiveADS = getAiming() && !sprinting && player.alive !== false && !player.isReloading && !playerState.storeOpen;
       setADSFlag(effectiveADS);
 
       const adsTarget = effectiveADS ? 1 : 0;
@@ -1478,6 +1479,10 @@ export function applyPatch(ctx){
   }
 
   function patchedSpawnEnemy(){
+    if(!PATCH_STATE.enemyGeometry){
+      PATCH_STATE.enemyGeometry = new THREE.CapsuleGeometry(0.6, 1.2, 6, 12);
+    }
+
     if(enemies.length >= CONFIG.PERF.maxActiveEnemies){
       game.spawnDelay = Math.max(game.spawnDelay, 0.5);
       return false;
@@ -1553,7 +1558,7 @@ export function applyPatch(ctx){
     }
 
     const spawnHeight = spawnPoint.y;
-    const bodyGeometry = new THREE.CapsuleGeometry(.6,1.2,6,12);
+    const bodyGeometry = PATCH_STATE.enemyGeometry;
     const mat = ctx.enemyMaterialTemplate ? ctx.enemyMaterialTemplate.clone() : new THREE.MeshStandardMaterial({ color:0x223344 });
     const enemyMesh = new THREE.Mesh(bodyGeometry, mat);
     enemyMesh.position.set(spawnPoint.x, spawnHeight + ENEMY_HALF_HEIGHT, spawnPoint.z);
@@ -1690,6 +1695,20 @@ export function applyPatch(ctx){
     }
 
     tempVecC.set(point.x, resolved + ENEMY_HALF_HEIGHT, point.z);
+    const minEnemyGap = ENEMY_RADIUS * 2.6;
+    const minEnemyGapSq = minEnemyGap * minEnemyGap;
+    for(let i=0;i<enemies.length;i++){
+      const other = enemies[i];
+      const mesh = other?.mesh;
+      if(!mesh) continue;
+      tempVecD.copy(mesh.position);
+      tempVecD.y = tempVecC.y;
+      const dx = tempVecD.x - tempVecC.x;
+      const dz = tempVecD.z - tempVecC.z;
+      if(dx*dx + dz*dz < minEnemyGapSq){
+        return false;
+      }
+    }
     tempVecA.subVectors(playerPos, tempVecC);
     const distance = tempVecA.length();
     if(distance < 1e-3){
@@ -1816,7 +1835,7 @@ export function applyPatch(ctx){
             if(enemy.burstShotsLeft <= 0){
               enemy.burstShotsLeft = THREE.MathUtils.randInt(2, 4);
             }
-            patchedEnemyHitscanShoot(enemy);
+            patchedEnemyHitscanShoot(enemy, delta);
             enemy.burstShotsLeft -= 1;
             enemy.fireCooldown = enemy.burstShotsLeft > 0
               ? THREE.MathUtils.randFloat(CONFIG.AI.focusBurstOffset[0], CONFIG.AI.focusBurstOffset[1])
@@ -1878,7 +1897,7 @@ export function applyPatch(ctx){
     mesh.position.addScaledVector(tempVecA, speed * delta);
   }
 
-  function patchedEnemyHitscanShoot(enemy){
+  function patchedEnemyHitscanShoot(enemy, delta = 0){
     const origin = borrowVec3().copy(enemy.mesh.position);
     const forward = borrowVec3();
     enemy.mesh.getWorldDirection(forward);
@@ -1994,12 +2013,21 @@ export function applyPatch(ctx){
 
   function handleSpawning(delta){
     if(game.state !== 'spawning') return;
-    if(enemies.length >= CONFIG.SPAWN.concurrentCap) return;
     if(game.spawnQueue < 0){
       game.spawnQueue = 0;
     }
     game.spawnDelay -= delta;
-    if(game.spawnDelay <= 0 && game.spawnQueue > 0){
+    const cadence = CONFIG.SPAWN.spawnCadence;
+    let maxCatchup = -0.75;
+    if(Array.isArray(cadence) && cadence.length >= 2){
+      const minWindow = Math.max(0.12, Math.min(cadence[0], cadence[1]));
+      maxCatchup = -minWindow * 1.5;
+    }
+    if(game.spawnDelay < maxCatchup){
+      game.spawnDelay = maxCatchup;
+    }
+    const canAttemptSpawn = enemies.length < CONFIG.SPAWN.concurrentCap;
+    if(canAttemptSpawn && game.spawnDelay <= 0 && game.spawnQueue > 0){
       if(patchedSpawnEnemy()){
         game.spawnQueue -= 1;
         game.spawnDelay = nextSpawnDelay();
@@ -2069,7 +2097,9 @@ export function applyPatch(ctx){
       maybeDropLoot(enemy.mesh?.position || controls.getObject().position);
       scene.remove(enemy.mesh);
       if(enemy.mesh){
-        enemy.mesh.geometry?.dispose?.();
+        if(enemy.mesh.geometry && enemy.mesh.geometry !== PATCH_STATE.enemyGeometry){
+          enemy.mesh.geometry.dispose?.();
+        }
         if(enemy.mesh.material){
           if(Array.isArray(enemy.mesh.material)){
             enemy.mesh.material.forEach(m=>disposeMaterial(m));
@@ -2706,6 +2736,11 @@ export function applyPatch(ctx){
 
     if(renderer.shadowMap){
       renderer.shadowMap.enabled = originalShadowEnabled;
+    }
+
+    if(PATCH_STATE.enemyGeometry){
+      PATCH_STATE.enemyGeometry.dispose?.();
+      PATCH_STATE.enemyGeometry = null;
     }
 
     if(perfOverlay && typeof perfOverlay.remove === 'function'){
