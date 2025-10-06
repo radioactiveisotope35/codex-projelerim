@@ -1,0 +1,44 @@
+name: Codex Auto-Accept (Prefer PR, backup base)
+on:
+  issue_comment: { types: [created] }
+  workflow_dispatch: {}
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  auto_accept:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'issue_comment' && github.event.issue.pull_request != null && contains(github.event.comment.body, '/codex-accept'))
+    runs-on: ubuntu-latest
+    steps:
+      - id: pr
+        name: Get PR info
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const n = context.payload.issue?.number
+            const { data: pr } = await github.rest.pulls.get({ owner: context.repo.owner, repo: context.repo.repo, pull_number: n })
+            core.setOutput('base', pr.base.ref); core.setOutput('head', pr.head.ref); core.setOutput('number', String(n))
+      - uses: actions/checkout@v4
+        with: { ref: ${{ steps.pr.outputs.base }}, fetch-depth: 0 }
+      - run: |
+          git config user.name "codex-auto"
+          git config user.email "actions@users.noreply.github.com"
+      - name: Fetch PR head
+        run: git fetch origin "${{ steps.pr.outputs.head }}:${{ steps.pr.outputs.head }}"
+      - name: Backup current base (zip)
+        run: |
+          ts=$(date +'%Y-%m-%d_%H-%M-%S'); mkdir -p .codex-backups
+          git ls-files -z | xargs -0 zip -qq ".codex-backups/base-backup-$ts.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: base-backup-${{ steps.pr.outputs.base }}-${{ steps.pr.outputs.number }}
+          path: .codex-backups/*.zip
+          retention-days: 14
+      - name: Merge PR into base preferring PR (theirs)
+        run: |
+          git merge -X theirs "origin/${{ steps.pr.outputs.head }}" -m "Auto-merge: prefer PR (Codex) changes"
+          git push origin "HEAD:${{ steps.pr.outputs.base }}"
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: Number("${{ steps.pr.outputs.number }}"), body: "✅ Codex auto-accept tamam: PR içeriği base’e yazıldı, eski base yedeği Artifacts’te." })
