@@ -198,6 +198,72 @@ export function applyPatch(ctx){
     }
   };
 
+  // ---------------------------------------------------------------------------
+  // SHARED HELPERS & POOLS (INITIALIZED EARLY)
+  // ---------------------------------------------------------------------------
+  const shared = globalNS.shared = globalNS.shared || {};
+  const tempBox = shared.tempBox || (shared.tempBox = new THREE.Box3());
+  const tempBox2 = shared.tempBox2 || (shared.tempBox2 = new THREE.Box3());
+  const tempVecA = shared.tempVecA || (shared.tempVecA = new THREE.Vector3());
+  const tempVecB = shared.tempVecB || (shared.tempVecB = new THREE.Vector3());
+  const tempVecC = shared.tempVecC || (shared.tempVecC = new THREE.Vector3());
+  const tempVecD = shared.tempVecD || (shared.tempVecD = new THREE.Vector3());
+  const tempVecE = shared.tempVecE || (shared.tempVecE = new THREE.Vector3());
+  const tempVecF = shared.tempVecF || (shared.tempVecF = new THREE.Vector3());
+  const tempVecG = shared.tempVecG || (shared.tempVecG = new THREE.Vector3());
+  const tempVecH = shared.tempVecH || (shared.tempVecH = new THREE.Vector3());
+  const tempVecI = shared.tempVecI || (shared.tempVecI = new THREE.Vector3());
+  const tempVec2A = shared.tempVec2A || (shared.tempVec2A = new THREE.Vector2());
+  const tempVec2B = shared.tempVec2B || (shared.tempVec2B = new THREE.Vector2());
+  const tempVec2C = shared.tempVec2C || (shared.tempVec2C = new THREE.Vector2());
+  const tempQuat = shared.tempQuat || (shared.tempQuat = new THREE.Quaternion());
+  const tempEuler = shared.tempEuler || (shared.tempEuler = new THREE.Euler(0, 0, 0, 'YXZ'));
+  const tempMat3 = shared.tempMat3 || (shared.tempMat3 = new THREE.Matrix3());
+  const worldBounds = shared.worldBounds || (shared.worldBounds = new THREE.Box3());
+  const worldSpawnBounds = shared.worldSpawnBounds || (shared.worldSpawnBounds = new THREE.Box3());
+  const playerCollider = refs.playerCollider || shared.playerCollider || (shared.playerCollider = new THREE.Box3());
+  const crouchTestBox = shared.crouchTestBox || (shared.crouchTestBox = new THREE.Box3());
+  const tempRaycaster = refs.raycaster || shared.tempRaycaster || new THREE.Raycaster();
+  if(!refs.raycaster) shared.tempRaycaster = tempRaycaster;
+  const helperRay = shared.helperRay || (shared.helperRay = new THREE.Raycaster());
+  const upVector = shared.upVector || (shared.upVector = new THREE.Vector3(0, 1, 0));
+  const downVector = shared.downVector || (shared.downVector = new THREE.Vector3(0, -1, 0));
+  const yawObject = typeof controls.getObject === 'function' ? controls.getObject() : controls.object || controls;
+  const pitchObject = camera;
+  if(yawObject?.rotation){
+    yawObject.rotation.order = 'YXZ';
+    yawObject.rotation.z = 0;
+  }
+  if(pitchObject?.rotation){
+    pitchObject.rotation.order = 'YXZ';
+    pitchObject.rotation.z = 0;
+  }
+  const LOOK_SPEED = 0.002;
+  const MAX_MOUSE_DELTA = CONFIG.PERF.maxMouseDelta ?? 120;
+  const TWO_PI = Math.PI * 2;
+  const minPitchClamp = THREE.MathUtils.degToRad(-85);
+  const maxPitchClamp = THREE.MathUtils.degToRad(85);
+  let lastYaw = yawObject?.rotation?.y ?? 0;
+  let lastPitch = pitchObject?.rotation?.x ?? 0;
+
+  if(yawObject){
+    yawObject.rotation.y = normalizeYaw(yawObject.rotation.y);
+    lastYaw = yawObject.rotation.y;
+  }
+  if(pitchObject){
+    pitchObject.rotation.x = THREE.MathUtils.clamp(pitchObject.rotation.x, minPitchClamp, maxPitchClamp);
+    lastPitch = pitchObject.rotation.x;
+  }
+
+  const staticScratch = [];
+  const enemyMeshScratch = [];
+  const filteredStaticScratch = [];
+  const raycastScratch = [];
+
+  const ENEMY_RADIUS = 0.6;
+  const ENEMY_HEIGHT = 2.4;
+  const ENEMY_HALF_HEIGHT = ENEMY_HEIGHT * 0.5;
+
   function ensureWeaponModel(){
     if(PATCH_STATE.weaponParts){
       return;
@@ -465,63 +531,6 @@ export function applyPatch(ctx){
   }
   textureCandidates.forEach(ensureTextureReady);
 
-  // ---------------------------------------------------------------------------
-  // SHARED HELPERS & POOLS
-  // ---------------------------------------------------------------------------
-  const shared = globalNS.shared = globalNS.shared || {};
-  const tempBox = shared.tempBox || (shared.tempBox = new THREE.Box3());
-  const tempBox2 = shared.tempBox2 || (shared.tempBox2 = new THREE.Box3());
-  const tempVecA = shared.tempVecA || (shared.tempVecA = new THREE.Vector3());
-  const tempVecB = shared.tempVecB || (shared.tempVecB = new THREE.Vector3());
-  const tempVecC = shared.tempVecC || (shared.tempVecC = new THREE.Vector3());
-  const tempVecD = shared.tempVecD || (shared.tempVecD = new THREE.Vector3());
-  const tempVecE = shared.tempVecE || (shared.tempVecE = new THREE.Vector3());
-  const tempVecF = shared.tempVecF || (shared.tempVecF = new THREE.Vector3());
-  const tempVecG = shared.tempVecG || (shared.tempVecG = new THREE.Vector3());
-  const tempVecH = shared.tempVecH || (shared.tempVecH = new THREE.Vector3());
-  const tempVecI = shared.tempVecI || (shared.tempVecI = new THREE.Vector3());
-  const tempVec2A = shared.tempVec2A || (shared.tempVec2A = new THREE.Vector2());
-  const tempVec2B = shared.tempVec2B || (shared.tempVec2B = new THREE.Vector2());
-  const tempVec2C = shared.tempVec2C || (shared.tempVec2C = new THREE.Vector2());
-  const tempQuat = shared.tempQuat || (shared.tempQuat = new THREE.Quaternion());
-  const tempEuler = shared.tempEuler || (shared.tempEuler = new THREE.Euler(0, 0, 0, 'YXZ'));
-  const tempMat3 = shared.tempMat3 || (shared.tempMat3 = new THREE.Matrix3());
-  const worldBounds = shared.worldBounds || (shared.worldBounds = new THREE.Box3());
-  const worldSpawnBounds = shared.worldSpawnBounds || (shared.worldSpawnBounds = new THREE.Box3());
-  const playerCollider = refs.playerCollider || shared.playerCollider || (shared.playerCollider = new THREE.Box3());
-  const crouchTestBox = shared.crouchTestBox || (shared.crouchTestBox = new THREE.Box3());
-  const tempRaycaster = refs.raycaster || shared.tempRaycaster || new THREE.Raycaster();
-  if(!refs.raycaster) shared.tempRaycaster = tempRaycaster;
-  const helperRay = shared.helperRay || (shared.helperRay = new THREE.Raycaster());
-  const upVector = shared.upVector || (shared.upVector = new THREE.Vector3(0, 1, 0));
-  const downVector = shared.downVector || (shared.downVector = new THREE.Vector3(0, -1, 0));
-  const yawObject = typeof controls.getObject === 'function' ? controls.getObject() : controls.object || controls;
-  const pitchObject = camera;
-  if(yawObject?.rotation){
-    yawObject.rotation.order = 'YXZ';
-    yawObject.rotation.z = 0;
-  }
-  if(pitchObject?.rotation){
-    pitchObject.rotation.order = 'YXZ';
-    pitchObject.rotation.z = 0;
-  }
-  const LOOK_SPEED = 0.002;
-  const MAX_MOUSE_DELTA = CONFIG.PERF.maxMouseDelta ?? 120;
-  const TWO_PI = Math.PI * 2;
-  const minPitchClamp = THREE.MathUtils.degToRad(-85);
-  const maxPitchClamp = THREE.MathUtils.degToRad(85);
-  let lastYaw = yawObject?.rotation?.y ?? 0;
-  let lastPitch = pitchObject?.rotation?.x ?? 0;
-
-  if(yawObject){
-    yawObject.rotation.y = normalizeYaw(yawObject.rotation.y);
-    lastYaw = yawObject.rotation.y;
-  }
-  if(pitchObject){
-    pitchObject.rotation.x = THREE.MathUtils.clamp(pitchObject.rotation.x, minPitchClamp, maxPitchClamp);
-    lastPitch = pitchObject.rotation.x;
-  }
-
   function wrapPositive(angle){
     let wrapped = (angle + Math.PI) % TWO_PI;
     if(wrapped < 0) wrapped += TWO_PI;
@@ -681,11 +690,6 @@ export function applyPatch(ctx){
   }
 
   const minimapCtx = ui.minimapCtx;
-
-  const staticScratch = [];
-  const enemyMeshScratch = [];
-  const filteredStaticScratch = [];
-  const raycastScratch = [];
 
   function gatherStaticMeshes(){
     staticScratch.length = 0;
@@ -1319,10 +1323,6 @@ export function applyPatch(ctx){
   // ---------------------------------------------------------------------------
   // AI
   // ---------------------------------------------------------------------------
-  const ENEMY_RADIUS = 0.6;
-  const ENEMY_HEIGHT = 2.4;
-  const ENEMY_HALF_HEIGHT = ENEMY_HEIGHT * 0.5;
-
   function resolveSpawnHeight(point, zone, statics){
     const baseHeight = zone?.height ?? point.y ?? 0;
     const startY = baseHeight + ENEMY_HEIGHT * 2;
