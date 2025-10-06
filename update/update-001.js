@@ -1,21 +1,20 @@
-// update/update-011.js
-// Patch 011: Unified stability cleanup and texture-safe fixed-step loop
+// update/update-001.js
+// Patch 001: Consolidated stability cleanup and texture-safe fixed-step loop
 
 export function applyPatch(ctx){
   if(!ctx || typeof ctx !== 'object'){
-    console.warn('[patch-011] applyPatch requires a context object.');
+    console.warn('[patch-001] applyPatch requires a context object.');
     return;
   }
-  const globalNS = globalThis.__patch011 = globalThis.__patch011 || {};
-  if(globalNS.applied){
-    return;
+  const globalNS = globalThis.__patch001 = globalThis.__patch001 || {};
+  if(typeof globalNS.dispose === 'function'){
+    try{
+      globalNS.dispose();
+    }catch(err){
+      console.warn('[patch-001] Failed to dispose previous instance.', err);
+    }
   }
-  globalNS.applied = true;
-
-  try{ globalThis.__patch010?.stopLoop?.(); }catch(_){}
-  try{ globalThis.__patch009?.stopLoop?.(); }catch(_){}
-  try{ globalThis.__patch008?.stopLoop?.(); }catch(_){}
-  try{ globalThis.__patch007?.stopLoop?.(); }catch(_){}
+  globalNS.applied = false;
 
   const {
     THREE,
@@ -39,12 +38,14 @@ export function applyPatch(ctx){
   } = ctx;
 
   if(!THREE || !scene || !camera || !renderer || !controls || !clock){
-    console.warn('[patch-011] Missing required references.');
+    console.warn('[patch-001] Missing required references.');
     return;
   }
 
+  const originalShadowEnabled = renderer.shadowMap?.enabled ?? false;
+
   const CONFIG = {
-    CONFIG_VERSION: '011',
+    CONFIG_VERSION: '001',
     PLAYER: {
       baseHeight: player.height || 1.6,
       crouchRatio: 0.7,
@@ -148,7 +149,9 @@ export function applyPatch(ctx){
     Object.assign(CONFIG.PERF, config.PERF || {});
   }
 
-  renderer.shadowMap.enabled = CONFIG.PERF.shadows;
+  if(renderer.shadowMap){
+    renderer.shadowMap.enabled = CONFIG.PERF.shadows;
+  }
 
   if(!globalNS.textureGuarded){
     const descriptor = Object.getOwnPropertyDescriptor(THREE.Texture.prototype, 'needsUpdate');
@@ -170,6 +173,8 @@ export function applyPatch(ctx){
       globalNS.textureGuarded = true;
     }
   }
+
+  let perfOverlay = null;
 
   const PATCH_STATE = {
     debug: false,
@@ -195,6 +200,12 @@ export function applyPatch(ctx){
     return canvas;
   })();
   globalNS.fallbackCanvas = fallbackCanvas;
+  const fallbackCubeImage = globalNS.fallbackCubeImage || (() => {
+    const faces = new Array(6);
+    for(let i = 0; i < 6; i++) faces[i] = fallbackCanvas;
+    return faces;
+  })();
+  globalNS.fallbackCubeImage = fallbackCubeImage;
 
   function ensureTextureReady(tex){
     if(!tex) return false;
@@ -202,11 +213,35 @@ export function applyPatch(ctx){
     if(!img){
       if(!tex.userData) tex.userData = {};
       if(!tex.userData.fallbackApplied){
-        tex.image = fallbackCanvas;
+        tex.image = tex.isCubeTexture ? fallbackCubeImage : fallbackCanvas;
         tex.userData.fallbackApplied = true;
+        tex.generateMipmaps = false;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
         tex.needsUpdate = true;
       }
       return false;
+    }
+    if(Array.isArray(img)){
+      let valid = true;
+      for(let i = 0; i < img.length; i++){
+        const face = img[i];
+        if(!face){ valid = false; break; }
+        const w = face.width || face.naturalWidth || face.videoWidth;
+        const h = face.height || face.naturalHeight || face.videoHeight;
+        if(!w || !h){ valid = false; break; }
+      }
+      if(!valid){
+        tex.image = fallbackCubeImage;
+        tex.userData = tex.userData || {};
+        tex.userData.fallbackApplied = true;
+        tex.generateMipmaps = false;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.needsUpdate = true;
+        return true;
+      }
+      return true;
     }
     const isImageEl = typeof Image !== 'undefined' && img instanceof Image;
     if(isImageEl){
@@ -215,17 +250,23 @@ export function applyPatch(ctx){
         if(!tex.userData.errorHooked){
           tex.userData.errorHooked = true;
           img.addEventListener('error', () => {
-            tex.image = fallbackCanvas;
+            tex.image = tex.isCubeTexture ? fallbackCubeImage : fallbackCanvas;
             tex.userData.fallbackApplied = true;
+            tex.generateMipmaps = false;
+            tex.minFilter = THREE.LinearFilter;
+            tex.magFilter = THREE.LinearFilter;
             tex.needsUpdate = true;
           }, { once: true });
         }
         return false;
       }
       if(img.naturalWidth === 0 || img.naturalHeight === 0){
-        tex.image = fallbackCanvas;
+        tex.image = tex.isCubeTexture ? fallbackCubeImage : fallbackCanvas;
         tex.userData = tex.userData || {};
         tex.userData.fallbackApplied = true;
+        tex.generateMipmaps = false;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
         tex.needsUpdate = true;
         return true;
       }
@@ -233,9 +274,12 @@ export function applyPatch(ctx){
       const width = img.width || img.videoWidth || img.naturalWidth;
       const height = img.height || img.videoHeight || img.naturalHeight;
       if(!width || !height){
-        tex.image = fallbackCanvas;
+        tex.image = tex.isCubeTexture ? fallbackCubeImage : fallbackCanvas;
         tex.userData = tex.userData || {};
         tex.userData.fallbackApplied = true;
+        tex.generateMipmaps = false;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
         tex.needsUpdate = true;
         return true;
       }
@@ -588,6 +632,7 @@ export function applyPatch(ctx){
   const originalMoveTowards = functions.moveTowards;
   const originalUpdateMinimap = functions.updateMinimap;
   const originalStartNextRound = functions.startNextRound;
+  const originalRemoveEnemy = functions.removeEnemy;
   const originalDamagePlayer = functions.damagePlayer;
   const originalShowRoundBanner = functions.showRoundBanner;
   const originalAnimate = functions.animate;
@@ -1489,7 +1534,7 @@ export function applyPatch(ctx){
     }
   };
 
-  const perfOverlay = CONFIG.PERF.debugOverlay ? createPerfOverlay() : null;
+  perfOverlay = CONFIG.PERF.debugOverlay ? createPerfOverlay() : null;
 
   function createPerfOverlay(){
     const el = document.createElement('div');
@@ -1544,7 +1589,8 @@ export function applyPatch(ctx){
   // ---------------------------------------------------------------------------
   // INPUT
   // ---------------------------------------------------------------------------
-  const boundFlags = globalNS.boundFlags = globalNS.boundFlags || { input:false };
+  const boundFlags = { input:false };
+  globalNS.boundFlags = boundFlags;
   if(!boundFlags.input){
     document.addEventListener('keydown', onKeyDown, false);
     document.addEventListener('keyup', onKeyUp, false);
@@ -1583,6 +1629,22 @@ export function applyPatch(ctx){
   // ---------------------------------------------------------------------------
   const originalOpenStore = functions.openStore || ctx.openStore;
   const originalCloseStore = functions.closeStore || ctx.closeStore;
+  const originalBindings = {
+    updatePlayer: originalUpdatePlayer,
+    hitscanShoot: originalHitscanShoot,
+    enemyHitscanShoot: originalEnemyHitscanShoot,
+    spawnEnemy: originalSpawnEnemy,
+    updateEnemies: originalUpdateEnemies,
+    moveTowards: originalMoveTowards,
+    updateMinimap: originalUpdateMinimap,
+    startNextRound: originalStartNextRound,
+    removeEnemy: originalRemoveEnemy,
+    damagePlayer: originalDamagePlayer,
+    showRoundBanner: originalShowRoundBanner,
+    animate: originalAnimate,
+    openStore: originalOpenStore,
+    closeStore: originalCloseStore,
+  };
 
   function openStore(fromBuyPhase){
     playerState.storeOpen = true;
@@ -1634,6 +1696,62 @@ export function applyPatch(ctx){
 
   updateEnemiesHud();
   updateArmorBadge();
+
+  globalNS.dispose = () => {
+    try{
+      if(typeof globalNS.stopLoop === 'function'){
+        globalNS.stopLoop();
+      }
+    }catch(err){
+      console.warn('[patch-001] Failed to stop loop during dispose.', err);
+    }
+
+    if(boundFlags.input){
+      document.removeEventListener('keydown', onKeyDown, false);
+      document.removeEventListener('keyup', onKeyUp, false);
+      boundFlags.input = false;
+    }
+
+    if(renderer.domElement && globalNS.contextBound){
+      renderer.domElement.removeEventListener('webglcontextlost', handleContextLost, false);
+      renderer.domElement.removeEventListener('webglcontextrestored', handleContextRestored, false);
+      globalNS.contextBound = false;
+    }
+
+    if(renderer.shadowMap){
+      renderer.shadowMap.enabled = originalShadowEnabled;
+    }
+
+    if(perfOverlay && typeof perfOverlay.remove === 'function'){
+      perfOverlay.remove();
+      perfOverlay = null;
+    }
+
+    if(ui.contextOverlay){
+      if(typeof ui.contextOverlay.remove === 'function'){
+        ui.contextOverlay.remove();
+      }
+      delete ui.contextOverlay;
+    }
+
+    for(const [key, value] of Object.entries(originalBindings)){
+      if(value !== undefined && value !== null){
+        functions[key] = value;
+      } else {
+        delete functions[key];
+      }
+    }
+
+    PATCH_STATE.debug = false;
+
+    globalNS.boundFlags = { input:false };
+    globalNS.state = null;
+    globalNS.stopLoop = undefined;
+    globalNS.dispose = undefined;
+    globalNS.applied = false;
+  };
+
+  globalNS.applied = true;
 
   // ---------------------------------------------------------------------------
   // HELPERS
