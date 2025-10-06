@@ -195,6 +195,7 @@ export function applyPatch(ctx){
     enemyGeometry: null,
     spawnFailureStreak: 0,
     lastSpawnFailureAt: 0,
+    frameId: 0,
   };
 
   globalNS.enableDebug = (flag) => {
@@ -267,10 +268,38 @@ export function applyPatch(ctx){
   const enemyMeshScratch = [];
   const filteredStaticScratch = [];
   const raycastScratch = [];
+  const zoneOccupancyScratch = { count: 0, closestSq: Infinity };
+  const staticBoundsCache = new WeakMap();
+  PATCH_STATE.staticBoundsCache = staticBoundsCache;
 
   const ENEMY_RADIUS = 0.6;
   const ENEMY_HEIGHT = 2.4;
   const ENEMY_HALF_HEIGHT = ENEMY_HEIGHT * 0.5;
+
+  function getStaticBounds(mesh, forceUpdate = false){
+    if(!mesh) return null;
+    let entry = staticBoundsCache.get(mesh);
+    if(!entry){
+      entry = { box: new THREE.Box3(), frame: -1 };
+      staticBoundsCache.set(mesh, entry);
+      forceUpdate = true;
+    }
+    const frameId = PATCH_STATE.frameId || 0;
+    if(forceUpdate || entry.frame !== frameId){
+      mesh.updateWorldMatrix?.(true, false);
+      const geometry = mesh.geometry;
+      if(geometry && geometry.boundingBox){
+        entry.box.copy(geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
+      } else if(geometry && geometry.computeBoundingBox){
+        geometry.computeBoundingBox();
+        entry.box.copy(geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
+      } else {
+        entry.box.setFromObject(mesh);
+      }
+      entry.frame = frameId;
+    }
+    return entry.box;
+  }
 
   function ensureWeaponModel(){
     if(PATCH_STATE.weaponParts){
@@ -722,11 +751,12 @@ export function applyPatch(ctx){
     for(let i = 0; i < statics.length; i++){
       const mesh = statics[i];
       if(!mesh) continue;
-      const bbox = tempBox2.setFromObject(mesh);
-      if(!Number.isFinite(bbox.min.x) || !Number.isFinite(bbox.max.x) || !Number.isFinite(bbox.min.z) || !Number.isFinite(bbox.max.z)){
+      const bounds = getStaticBounds(mesh, true);
+      if(!bounds) continue;
+      if(!Number.isFinite(bounds.min.x) || !Number.isFinite(bounds.max.x) || !Number.isFinite(bounds.min.z) || !Number.isFinite(bounds.max.z)){
         continue;
       }
-      worldBounds.union(bbox);
+      worldBounds.union(bounds);
     }
     if(worldBounds.isEmpty() || !Number.isFinite(worldBounds.min.x) || !Number.isFinite(worldBounds.max.x)){
       const size = Math.max(20, world.size || 60);
@@ -1360,13 +1390,14 @@ export function applyPatch(ctx){
     for(let i=0;i<statics.length;i++){
       const mesh = statics[i];
       if(!mesh) continue;
-      tempBox.setFromObject(mesh);
-      if(center.y + half <= tempBox.min.y - 0.05) continue;
-      if(center.y - half >= tempBox.max.y + 0.05) continue;
-      if(center.x + radius <= tempBox.min.x - 0.05) continue;
-      if(center.x - radius >= tempBox.max.x + 0.05) continue;
-      if(center.z + radius <= tempBox.min.z - 0.05) continue;
-      if(center.z - radius >= tempBox.max.z + 0.05) continue;
+      const bounds = getStaticBounds(mesh);
+      if(!bounds) continue;
+      if(center.y + half <= bounds.min.y - 0.05) continue;
+      if(center.y - half >= bounds.max.y + 0.05) continue;
+      if(center.x + radius <= bounds.min.x - 0.05) continue;
+      if(center.x - radius >= bounds.max.x + 0.05) continue;
+      if(center.z + radius <= bounds.min.z - 0.05) continue;
+      if(center.z - radius >= bounds.max.z + 0.05) continue;
       return true;
     }
     return false;
@@ -1395,6 +1426,54 @@ export function applyPatch(ctx){
     const zoneHeight = enemy.spawnZone?.height;
     const base = isFinite(enemy.groundHeight) ? enemy.groundHeight : (isFinite(zoneHeight) ? zoneHeight : (enemy.mesh.position.y - ENEMY_HALF_HEIGHT));
     return base + ENEMY_HALF_HEIGHT;
+  }
+
+  function zoneOccupancyInfo(zone){
+    zoneOccupancyScratch.count = 0;
+    zoneOccupancyScratch.closestSq = Infinity;
+    if(!zone || !zone.center) return zoneOccupancyScratch;
+    const radius = Math.max(ENEMY_RADIUS * 2.6, zone.radius || 0);
+    const radiusSq = radius * radius;
+    for(let i=0;i<enemies.length;i++){
+      const mesh = enemies[i]?.mesh;
+      if(!mesh) continue;
+      const dx = mesh.position.x - zone.center.x;
+      const dz = mesh.position.z - zone.center.z;
+      const distSq = dx*dx + dz*dz;
+      if(distSq <= radiusSq){
+        zoneOccupancyScratch.count += 1;
+        if(distSq < zoneOccupancyScratch.closestSq){
+          zoneOccupancyScratch.closestSq = distSq;
+        }
+      }
+    }
+    return zoneOccupancyScratch;
+  }
+
+  function zoneHasDirectLine(zonePoint, statics, playerPos){
+    tempVecC.copy(zonePoint);
+    tempVecC.y += 0.5;
+    tempVecD.subVectors(playerPos, tempVecC);
+    const distance = tempVecD.length();
+    if(distance < 1e-4){
+      helperRay.far = Infinity;
+      return true;
+    }
+    tempVecD.multiplyScalar(1 / distance);
+    helperRay.set(tempVecC, tempVecD);
+    helperRay.far = distance;
+    let blocked = false;
+    for(let i=0;i<statics.length;i++){
+      const mesh = statics[i];
+      if(!mesh) continue;
+      const hits = helperRay.intersectObject(mesh, false);
+      if(hits.length && hits[0].distance > 0.2){
+        blocked = true;
+        break;
+      }
+    }
+    helperRay.far = Infinity;
+    return !blocked;
   }
 
   function clampEnemyToZone(enemy){
@@ -1611,6 +1690,7 @@ export function applyPatch(ctx){
     if(!zones.length) return null;
     const playerPos = controls.getObject().position;
     const playerSpawn = PATCH_STATE.playerSpawn;
+    const statics = gatherStaticMeshes();
     let bestZone = zones[0];
     let bestScore = -Infinity;
     for(let i=0;i<zones.length;i++){
@@ -1619,7 +1699,25 @@ export function applyPatch(ctx){
       const dz = zone.center.z - playerPos.z;
       const dist = Math.hypot(dx, dz);
       const spawnDist = playerSpawn ? Math.hypot(zone.center.x - playerSpawn.x, zone.center.z - playerSpawn.z) : dist;
-      const score = dist + spawnDist * 0.5;
+      const radius = Math.max(4, zone.radius || 0);
+      const occupancy = zoneOccupancyInfo(zone);
+      const crowdingRadius = Math.max(ENEMY_RADIUS * 2.2, 1.6);
+      const crowdingPenalty = occupancy.closestSq < crowdingRadius * crowdingRadius ? 14 : 0;
+      const occupancyPenalty = occupancy.count * Math.max(6, radius * 0.35);
+      const zoneHeight = Number.isFinite(zone.height) ? zone.height : 0;
+      tempVecE.set(zone.center.x, zoneHeight + ENEMY_HALF_HEIGHT, zone.center.z);
+      const hasLine = zoneHasDirectLine(tempVecE, statics, playerPos);
+      let linePenalty = 0;
+      if(hasLine){
+        const safeRadius = CONFIG.SPAWN.safeRadius;
+        if(dist < safeRadius * 1.5){
+          linePenalty = (safeRadius * 1.5 - dist) * 0.55;
+        }
+      } else {
+        linePenalty = -Math.min(radius, 22) * 0.2;
+      }
+      const breathingRoom = Math.min(radius, 24) * 0.4;
+      const score = dist + spawnDist * 0.5 + breathingRoom - occupancyPenalty - crowdingPenalty - linePenalty;
       if(score > bestScore){
         bestScore = score;
         bestZone = zone;
@@ -2420,6 +2518,7 @@ export function applyPatch(ctx){
   }
 
   function simulate(dt){
+    PATCH_STATE.frameId = (PATCH_STATE.frameId || 0) + 1;
     enforceLookConsistency();
     const now = performance.now();
     player.fireCooldown = Math.max(0, (fireState.nextFireTime - now) / 1000);
