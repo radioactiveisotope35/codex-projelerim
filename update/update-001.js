@@ -103,7 +103,9 @@ export function applyPatch(ctx){
       safeRadius: 18,
       maxAttempts: 36,
       concurrentCap: 7,
-      buyDuration: 12,
+      buyDuration: 5,
+      spawnCadence: [0.35, 0.65],
+      initialDelay: 0.3,
     },
     ECONOMY: {
       baseKill: 30,
@@ -124,10 +126,13 @@ export function applyPatch(ctx){
       peekDuration: [0.8, 1.4],
       flankRadius: 6,
       flankDistance: 8,
-      focusBurstOffset: [0.08, 0.25],
-      burstCooldown: [0.12, 0.22],
+      focusBurstOffset: [0.06, 0.14],
+      burstCooldown: [0.1, 0.18],
       relocateDistance: 3,
       suppressedTime: 0.9,
+      engageDelay: 0.3,
+      reengageDelay: 0.18,
+      firstShotDelay: [0.08, 0.22],
     },
     PERF: {
       fixedStep: 1 / 60,
@@ -754,6 +759,7 @@ export function applyPatch(ctx){
     suppressedHits: 0,
     jumpHeld: false,
     storePausedLoop: false,
+    manualPause: false,
   };
   player.credits = player.credits || 0;
 
@@ -1444,7 +1450,7 @@ export function applyPatch(ctx){
 
     if(!pointFound){
       game.spawnQueue += 1;
-      game.spawnDelay = Math.max(game.spawnDelay, 0.6);
+      game.spawnDelay = Math.max(game.spawnDelay, nextSpawnDelay());
       return false;
     }
 
@@ -1457,6 +1463,25 @@ export function applyPatch(ctx){
     scene.add(enemyMesh);
 
     const baseHealth = CONFIG.AI.baseHealth + game.round * CONFIG.AI.healthPerRound;
+    const engageClamp = Number.isFinite(CONFIG.AI.engageDelay) ? CONFIG.AI.engageDelay : 0.3;
+    const firstShotValues = [];
+    if(Array.isArray(CONFIG.AI.firstShotDelay)){
+      firstShotValues.push(...CONFIG.AI.firstShotDelay);
+    }
+    if(Array.isArray(p.firstShotDelay)){
+      firstShotValues.push(...p.firstShotDelay);
+    }
+    const validFirstShot = firstShotValues.filter(v => Number.isFinite(v) && v >= 0);
+    let firstShotMin = 0.08;
+    let firstShotMax = 0.22;
+    if(validFirstShot.length){
+      firstShotMin = Math.min(...validFirstShot);
+      firstShotMax = Math.max(...validFirstShot);
+    }
+    firstShotMin = Math.max(0.05, Math.min(firstShotMin, engageClamp));
+    firstShotMax = Math.max(firstShotMin + 0.04, Math.min(firstShotMax, engageClamp + 0.12));
+    const initialFireDelay = THREE.MathUtils.randFloat(firstShotMin, firstShotMax);
+
     const enemy = {
       mesh: enemyMesh,
       health: baseHealth,
@@ -1464,7 +1489,7 @@ export function applyPatch(ctx){
       state: 'patrol',
       chaseSpeed: movementConfig.enemyChase,
       patrolSpeed: movementConfig.enemyPatrol,
-      fireCooldown: THREE.MathUtils.randFloat(p.firstShotDelay[0], p.firstShotDelay[1]),
+      fireCooldown: initialFireDelay,
       burstShotsLeft: 0,
       aimSpread: p.aimSpread,
       suppressedUntil: 0,
@@ -1589,11 +1614,14 @@ export function applyPatch(ctx){
     const now = performance.now();
     const playerPos = controls.getObject().position;
     const statics = gatherStaticMeshes();
+    const engageClamp = Number.isFinite(CONFIG.AI.engageDelay) ? CONFIG.AI.engageDelay : 0.3;
+    const reengageClamp = Number.isFinite(CONFIG.AI.reengageDelay) ? CONFIG.AI.reengageDelay : 0.18;
     for(let i=0;i<enemies.length;i++){
       const enemy = enemies[i];
       const mesh = enemy.mesh;
       if(!mesh) continue;
       const brain = enemy.brain || (enemy.brain = createEnemyBrain(enemy.spawnZone));
+      const previousState = brain.state;
       mesh.position.y = desiredEnemyCenterY(enemy);
       clampEnemyToZone(enemy);
 
@@ -1715,6 +1743,13 @@ export function applyPatch(ctx){
         }
       }
 
+      if(previousState !== brain.state && brain.state === 'attack'){
+        enemy.fireCooldown = Math.min(enemy.fireCooldown, engageClamp);
+      }
+      if(brain.state === 'attack' && hasLine && enemy.fireCooldown > reengageClamp){
+        enemy.fireCooldown = Math.max(reengageClamp, enemy.fireCooldown - delta * 1.5);
+      }
+
       enemy.state = brain.state;
     }
   }
@@ -1804,10 +1839,21 @@ export function applyPatch(ctx){
     game.enemiesRemaining = toSpawn;
     updateEnemiesHud();
     game.spawnQueue = toSpawn;
-    game.spawnDelay = 0;
+    const initialDelay = Number(CONFIG.SPAWN.initialDelay);
+    game.spawnDelay = Number.isFinite(initialDelay) ? Math.max(0, initialDelay) : 0.3;
     game.state = 'spawning';
     game.roundStartAt = performance.now();
     patchedShowRoundBanner(`ROUND ${game.round} — ${difficulty.name}`);
+  }
+
+  function nextSpawnDelay(){
+    const cadence = CONFIG.SPAWN.spawnCadence;
+    if(Array.isArray(cadence) && cadence.length >= 2){
+      const min = Math.max(0.12, Math.min(cadence[0], cadence[1]));
+      const max = Math.max(min + 0.05, Math.max(cadence[0], cadence[1]));
+      return THREE.MathUtils.randFloat(min, max);
+    }
+    return THREE.MathUtils.randFloat(0.35, 0.65);
   }
 
   function handleSpawning(delta){
@@ -1817,9 +1863,9 @@ export function applyPatch(ctx){
     if(game.spawnDelay <= 0 && game.spawnQueue > 0){
       if(patchedSpawnEnemy()){
         game.spawnQueue -= 1;
-        game.spawnDelay = THREE.MathUtils.randFloat(0.55, 1.1);
+        game.spawnDelay = nextSpawnDelay();
       } else {
-        game.spawnDelay = Math.max(game.spawnDelay, 0.6);
+        game.spawnDelay = Math.max(game.spawnDelay, nextSpawnDelay());
       }
     }
     if(game.spawnQueue <= 0){
@@ -2231,6 +2277,9 @@ export function applyPatch(ctx){
     loopState.paused = true;
   }
   function resumeLoop(){
+    if(playerState.manualPause || playerState.storePausedLoop){
+      return;
+    }
     loopState.paused = false;
     loopState.accumulator = 0;
     loopState.lastTime = performance.now();
@@ -2289,6 +2338,35 @@ export function applyPatch(ctx){
     ui.contextOverlay.style.display = show ? 'grid' : 'none';
   }
 
+  function ensurePauseOverlay(){
+    if(!ui.pauseOverlay){
+      const overlay = document.createElement('div');
+      overlay.style.position = 'absolute';
+      overlay.style.inset = '0';
+      overlay.style.display = 'grid';
+      overlay.style.placeItems = 'center';
+      overlay.style.background = 'rgba(0,0,0,.65)';
+      overlay.style.fontSize = '28px';
+      overlay.style.fontWeight = '600';
+      overlay.style.color = '#fff';
+      overlay.style.letterSpacing = '0.06em';
+      overlay.style.textAlign = 'center';
+      overlay.style.zIndex = '998';
+      overlay.style.display = 'none';
+      overlay.style.whiteSpace = 'pre-line';
+      overlay.textContent = 'Duraklatıldı\nESC ile devam et';
+      ui.hud?.appendChild(overlay);
+      ui.pauseOverlay = overlay;
+    }
+  }
+
+  function setPauseOverlay(show){
+    ensurePauseOverlay();
+    if(ui.pauseOverlay){
+      ui.pauseOverlay.style.display = show ? 'grid' : 'none';
+    }
+  }
+
   if(renderer.domElement && !globalNS.contextBound){
     renderer.domElement.addEventListener('webglcontextlost', handleContextLost, false);
     renderer.domElement.addEventListener('webglcontextrestored', handleContextRestored, false);
@@ -2300,6 +2378,35 @@ export function applyPatch(ctx){
   // ---------------------------------------------------------------------------
   const boundFlags = { input:false };
   globalNS.boundFlags = boundFlags;
+
+  function setManualPauseState(paused){
+    if(paused){
+      if(playerState.manualPause) return;
+      playerState.manualPause = true;
+      setShooting(false);
+      setAiming(false);
+      pauseLoop();
+      setPauseOverlay(true);
+      controls.unlock?.();
+    } else {
+      if(!playerState.manualPause) return;
+      playerState.manualPause = false;
+      setPauseOverlay(false);
+      resumeLoop();
+      if(!playerState.storeOpen && controls.lock && document.pointerLockElement !== renderer.domElement){
+        try{
+          controls.lock();
+        }catch(err){
+          console.warn('[patch-001] Failed to re-lock pointer on resume.', err);
+        }
+      }
+    }
+  }
+
+  function toggleManualPause(){
+    setManualPauseState(!playerState.manualPause);
+  }
+
   if(!boundFlags.input){
     document.addEventListener('keydown', onKeyDown, false);
     document.addEventListener('keyup', onKeyUp, false);
@@ -2319,7 +2426,14 @@ export function applyPatch(ctx){
       if(playerState.storeOpen) closeStore();
       else openStore(false);
     }
-    if(e.code === 'Escape' && playerState.storeOpen){ closeStore(); }
+    if(e.code === 'Escape'){
+      if(playerState.storeOpen){
+        closeStore();
+      } else {
+        e.preventDefault();
+        toggleManualPause();
+      }
+    }
   }
 
   function onKeyUp(e){
@@ -2369,7 +2483,7 @@ export function applyPatch(ctx){
     playerState.storePausedLoop = false;
     playerState.storeOpen = false;
     if(originalCloseStore) originalCloseStore();
-    if(wasPaused){
+    if(wasPaused && !playerState.manualPause){
       resumeLoop();
     }
   }
@@ -2453,6 +2567,15 @@ export function applyPatch(ctx){
       }
       delete ui.contextOverlay;
     }
+
+    if(ui.pauseOverlay){
+      if(typeof ui.pauseOverlay.remove === 'function'){
+        ui.pauseOverlay.remove();
+      }
+      delete ui.pauseOverlay;
+    }
+
+    playerState.manualPause = false;
 
     if(Array.isArray(PATCH_STATE.weaponParts)){
       for(const part of PATCH_STATE.weaponParts){
