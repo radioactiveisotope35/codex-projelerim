@@ -42,6 +42,49 @@ export function applyPatch(ctx){
     return;
   }
 
+  if(scene.fog){
+    scene.fog.color?.set?.(0x192b42);
+    if(typeof scene.fog.near === 'number') scene.fog.near = Math.min(scene.fog.near, 70);
+    if(typeof scene.fog.far === 'number') scene.fog.far = Math.max(scene.fog.far, 340);
+  } else {
+    scene.fog = new THREE.Fog(0x192b42, 70, 340);
+  }
+  if(scene.background && scene.background.isColor){
+    scene.background.set(0x1b2f45);
+  }
+
+  if(renderer){
+    const currentExposure = typeof renderer.toneMappingExposure === 'number' ? renderer.toneMappingExposure : 1;
+    renderer.toneMappingExposure = Math.max(currentExposure, 1.2);
+  }
+
+  if(globalNS.lights && Array.isArray(globalNS.lights)){
+    for(const light of globalNS.lights){
+      if(light && light.parent){
+        light.parent.remove(light);
+      }
+    }
+  }
+  const ambientLight = new THREE.AmbientLight(0xcfd9ff, 0.32);
+  const hemiLight = new THREE.HemisphereLight(0xe4efff, 0x1c232b, 0.85);
+  const fillLight = new THREE.DirectionalLight(0xcfe2ff, 0.45);
+  const rimLight = new THREE.PointLight(0x66c7ff, 1.45, 70, 2);
+  fillLight.position.set(16, 18, 10);
+  fillLight.castShadow = true;
+  fillLight.shadow.mapSize.set(1024, 1024);
+  fillLight.shadow.camera.near = 4;
+  fillLight.shadow.camera.far = 90;
+  fillLight.shadow.camera.left = -45;
+  fillLight.shadow.camera.right = 45;
+  fillLight.shadow.camera.top = 45;
+  fillLight.shadow.camera.bottom = -45;
+  rimLight.position.set(0, 4.5, 0);
+  scene.add(ambientLight);
+  scene.add(hemiLight);
+  scene.add(fillLight);
+  scene.add(rimLight);
+  globalNS.lights = [ambientLight, hemiLight, fillLight, rimLight];
+
   const originalShadowEnabled = renderer.shadowMap?.enabled ?? false;
   const baseEnemyTexture = (ctx.enemyMaterialTemplate && ctx.enemyMaterialTemplate.map) || ctx.enemyUniformTexture || null;
   const sharedTextures = globalNS.sharedTextures || (globalNS.sharedTextures = new WeakSet());
@@ -3064,6 +3107,15 @@ export function applyPatch(ctx){
       }
     }catch(err){
       console.warn('[patch-001] Failed to stop loop during dispose.', err);
+    }
+
+    if(globalNS.lights){
+      for(const light of globalNS.lights){
+        if(light && light.parent){
+          light.parent.remove(light);
+        }
+      }
+      globalNS.lights = null;
     }
 
     if(boundFlags.input){
