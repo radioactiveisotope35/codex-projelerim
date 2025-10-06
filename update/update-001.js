@@ -44,6 +44,24 @@ export function applyPatch(ctx){
 
   const originalShadowEnabled = renderer.shadowMap?.enabled ?? false;
   const baseEnemyTexture = (ctx.enemyMaterialTemplate && ctx.enemyMaterialTemplate.map) || ctx.enemyUniformTexture || null;
+  const sharedTextures = globalNS.sharedTextures || (globalNS.sharedTextures = new WeakSet());
+  function markSharedTexture(tex){
+    if(tex && typeof tex === 'object' && tex.isTexture){
+      sharedTextures.add(tex);
+    }
+  }
+  markSharedTexture(baseEnemyTexture);
+  if(ctx.enemyUniformTexture) markSharedTexture(ctx.enemyUniformTexture);
+  if(ctx.enemyMaterialTemplate){
+    markSharedTexture(ctx.enemyMaterialTemplate.map);
+    markSharedTexture(ctx.enemyMaterialTemplate.normalMap);
+    markSharedTexture(ctx.enemyMaterialTemplate.roughnessMap);
+    markSharedTexture(ctx.enemyMaterialTemplate.metalnessMap);
+    markSharedTexture(ctx.enemyMaterialTemplate.aoMap);
+    markSharedTexture(ctx.enemyMaterialTemplate.displacementMap);
+    markSharedTexture(ctx.enemyMaterialTemplate.emissiveMap);
+    markSharedTexture(ctx.enemyMaterialTemplate.alphaMap);
+  }
 
   const CONFIG = {
     CONFIG_VERSION: '001',
@@ -2267,10 +2285,10 @@ export function applyPatch(ctx){
 
   function disposeMaterial(mat){
     if(!mat) return;
-    if(mat.map && mat.map.image && mat.map.image.width){
+    if(mat.map && !sharedTextures.has(mat.map) && mat.map.image && mat.map.image.width){
       mat.map.dispose?.();
     }
-    if(mat.normalMap && mat.normalMap.image && mat.normalMap.image.width){
+    if(mat.normalMap && !sharedTextures.has(mat.normalMap) && mat.normalMap.image && mat.normalMap.image.width){
       mat.normalMap.dispose?.();
     }
     mat.dispose?.();
