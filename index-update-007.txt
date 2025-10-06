@@ -189,7 +189,8 @@
     // Tracers & effects
     const tracers=[]; function spawnTracer(from,to,opacity=.8){ const g=new THREE.BufferGeometry().setFromPoints([from.clone(),to.clone()]); const m=new THREE.LineBasicMaterial({transparent:true,opacity}); const line=new THREE.Line(g,m); scene.add(line); tracers.push({line,life:.06}); }
     function showHitmarker(){ hitmarkerEl.classList.remove('hitmarker--show'); void hitmarkerEl.offsetWidth; hitmarkerEl.classList.add('hitmarker--show'); }
-    function screenShake(intensity=.02,time=.08){ shake.time=time; shake.intensity=intensity; } const shake={time:0,intensity:0};
+    function screenShake(intensity=.02,time=.08){ shake.time=time; shake.intensity=intensity; shake.duration=time; }
+    const shake={ time:0, intensity:0, duration:0, offset:new THREE.Vector3() };
     function crosshairBloom(){ crosshairEl.style.transform='translate(-50%,-50%) scale(1.25)'; setTimeout(()=>{ crosshairEl.style.transform='translate(-50%,-50%) scale(1)'; },70); }
 
     // Noise/hearing
@@ -234,10 +235,6 @@
       const now = performance.now();
       if(now - game.roundStartAt < 1200) return;
       const dt = Number.isFinite(delta) ? delta : 0.016;
-      if(enemy.firstShotArm>0){
-        enemy.firstShotArm = Math.max(0, enemy.firstShotArm - dt);
-        if(enemy.firstShotArm>0) return;
-      }
       const origin=enemy.mesh.position.clone().add(new THREE.Vector3(0,1.3,0));
       let toPlayer=controls.getObject().position.clone().add(new THREE.Vector3(0,1,0)).sub(origin).normalize();
       const extraSpread = now < enemy.suppressedUntil ? THREE.MathUtils.degToRad(2.2) : 0;
@@ -358,7 +355,21 @@
       // recovery
       const recRate = isADS ? THREE.MathUtils.degToRad(1.7) : spreadRecoverRate;
       spreadCur = Math.max(base, spreadCur - recRate*delta);
-      if(shake.time>0){ shake.time-=delta; const i=shake.intensity; camera.position.x += (Math.random()*2-1)*i*.2; camera.position.y += (Math.random()*2-1)*i*.1; }
+      if(shake.offset.lengthSq()>0){
+        camera.position.sub(shake.offset);
+        shake.offset.set(0,0,0);
+      }
+      if(shake.time>0){
+        shake.time=Math.max(0, shake.time-delta);
+        const falloff = shake.duration>0 ? shake.time/shake.duration : 0;
+        const intensity = shake.intensity * (0.6 + 0.4 * falloff);
+        shake.offset.set(
+          (Math.random()*2-1)*intensity,
+          (Math.random()*2-1)*intensity*0.6,
+          (Math.random()*2-1)*intensity*0.4
+        );
+        camera.position.add(shake.offset);
+      }
       updateRegen(delta);
       updateWeaponPose(delta);
     }
@@ -386,10 +397,17 @@
           if(distance < p.retreat){ enemy.mesh.position.addScaledVector(lookDir, -enemy.chaseSpeed*delta*1.05); }
           else if(distance > p.engage){ enemy.mesh.position.addScaledVector(lookDir, enemy.chaseSpeed*delta); }
           else { enemy.strafeTimer-=delta; if(enemy.strafeTimer<=0){ enemy.strafeTimer=THREE.MathUtils.randFloat(.3,.8); enemy.strafeDir=(Math.random()<.5?-1:1);} const strafe=new THREE.Vector3(-lookDir.z,0,lookDir.x).multiplyScalar(enemy.chaseSpeed*.7*enemy.strafeDir*delta); enemy.mesh.position.add(strafe); }
+          if(enemy.firstShotArm>0){
+            enemy.firstShotArm=Math.max(0, enemy.firstShotArm-delta);
+          }
           enemy.fireCooldown -= delta;
           if(enemy.fireCooldown<=0){
-            if(enemy.burstShotsLeft<=0){ enemy.burstShotsLeft=THREE.MathUtils.randInt(p.burstSize[0], p.burstSize[1]); enemy.fireCooldown=0; }
-            if(enemy.burstShotsLeft>0){ enemyHitscanShoot(enemy, delta); enemy.burstShotsLeft-=1; enemy.fireCooldown = enemy.burstShotsLeft>0 ? 0.14 : p.restAfterBurst + THREE.MathUtils.randFloat(-0.2,0.2); }
+            if(enemy.firstShotArm>0){
+              enemy.fireCooldown = enemy.firstShotArm;
+            } else {
+              if(enemy.burstShotsLeft<=0){ enemy.burstShotsLeft=THREE.MathUtils.randInt(p.burstSize[0], p.burstSize[1]); enemy.fireCooldown=0; }
+              if(enemy.burstShotsLeft>0){ enemyHitscanShoot(enemy, delta); enemy.burstShotsLeft-=1; enemy.fireCooldown = enemy.burstShotsLeft>0 ? 0.14 : p.restAfterBurst + THREE.MathUtils.randFloat(-0.2,0.2); }
+            }
           }
         }
 
