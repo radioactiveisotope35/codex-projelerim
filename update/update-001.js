@@ -1,21 +1,20 @@
-// update/update-011.js
-// Patch 011: Unified stability cleanup and texture-safe fixed-step loop
+// update/update-001.js
+// Patch 001: Consolidated stability cleanup and texture-safe fixed-step loop
 
 export function applyPatch(ctx){
   if(!ctx || typeof ctx !== 'object'){
-    console.warn('[patch-011] applyPatch requires a context object.');
+    console.warn('[patch-001] applyPatch requires a context object.');
     return;
   }
-  const globalNS = globalThis.__patch011 = globalThis.__patch011 || {};
-  if(globalNS.applied){
-    return;
+  const globalNS = globalThis.__patch001 = globalThis.__patch001 || {};
+  if(typeof globalNS.dispose === 'function'){
+    try{
+      globalNS.dispose();
+    }catch(err){
+      console.warn('[patch-001] Failed to dispose previous instance.', err);
+    }
   }
-  globalNS.applied = true;
-
-  try{ globalThis.__patch010?.stopLoop?.(); }catch(_){}
-  try{ globalThis.__patch009?.stopLoop?.(); }catch(_){}
-  try{ globalThis.__patch008?.stopLoop?.(); }catch(_){}
-  try{ globalThis.__patch007?.stopLoop?.(); }catch(_){}
+  globalNS.applied = false;
 
   const {
     THREE,
@@ -39,12 +38,14 @@ export function applyPatch(ctx){
   } = ctx;
 
   if(!THREE || !scene || !camera || !renderer || !controls || !clock){
-    console.warn('[patch-011] Missing required references.');
+    console.warn('[patch-001] Missing required references.');
     return;
   }
 
+  const originalShadowEnabled = renderer.shadowMap?.enabled ?? false;
+
   const CONFIG = {
-    CONFIG_VERSION: '011',
+    CONFIG_VERSION: '001',
     PLAYER: {
       baseHeight: player.height || 1.6,
       crouchRatio: 0.7,
@@ -148,7 +149,9 @@ export function applyPatch(ctx){
     Object.assign(CONFIG.PERF, config.PERF || {});
   }
 
-  renderer.shadowMap.enabled = CONFIG.PERF.shadows;
+  if(renderer.shadowMap){
+    renderer.shadowMap.enabled = CONFIG.PERF.shadows;
+  }
 
   if(!globalNS.textureGuarded){
     const descriptor = Object.getOwnPropertyDescriptor(THREE.Texture.prototype, 'needsUpdate');
@@ -171,8 +174,11 @@ export function applyPatch(ctx){
     }
   }
 
+  let perfOverlay = null;
+
   const PATCH_STATE = {
     debug: false,
+    weaponParts: null,
   };
 
   globalNS.enableDebug = (flag) => {
@@ -183,6 +189,60 @@ export function applyPatch(ctx){
       perfOverlay.style.display = 'block';
     }
   };
+
+  function ensureWeaponModel(){
+    if(PATCH_STATE.weaponParts){
+      return;
+    }
+    if(!ctx.muzzleFlash){
+      return;
+    }
+    const weaponGroup = ctx.muzzleFlash.parent?.parent || ctx.muzzleFlash.parent;
+    if(!weaponGroup){
+      return;
+    }
+    const bodyMaterial = new THREE.MeshStandardMaterial({
+      color: 0x1b2839,
+      metalness: 0.55,
+      roughness: 0.35,
+      emissive: new THREE.Color(0x0b121d),
+      emissiveIntensity: 0.25,
+    });
+    const accentMaterial = new THREE.MeshStandardMaterial({
+      color: 0x3b86ff,
+      emissive: new THREE.Color(0x162b45),
+      emissiveIntensity: 0.45,
+      metalness: 0.4,
+      roughness: 0.4,
+    });
+
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.11, 0.82), bodyMaterial);
+    body.position.set(0.02, -0.05, -0.52);
+    body.castShadow = body.receiveShadow = true;
+
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.22, 0.24), bodyMaterial.clone());
+    grip.position.set(-0.08, -0.16, -0.26);
+    grip.rotation.x = THREE.MathUtils.degToRad(12);
+
+    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.10, 0.35), bodyMaterial.clone());
+    stock.position.set(-0.12, -0.04, 0.05);
+
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.58, 12, 1, true), new THREE.MeshStandardMaterial({
+      color: 0x1f1f24,
+      metalness: 0.75,
+      roughness: 0.2,
+    }));
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(0.09, 0.0, -0.96);
+
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 0.38), accentMaterial);
+    rail.position.set(0.05, 0.02, -0.42);
+
+    weaponGroup.add(body, grip, stock, barrel, rail);
+    PATCH_STATE.weaponParts = [body, grip, stock, barrel, rail];
+  }
+
+  ensureWeaponModel();
 
   const fallbackCanvas = globalNS.fallbackCanvas || (() => {
     const canvas = document.createElement('canvas');
@@ -195,6 +255,12 @@ export function applyPatch(ctx){
     return canvas;
   })();
   globalNS.fallbackCanvas = fallbackCanvas;
+  const fallbackCubeImage = globalNS.fallbackCubeImage || (() => {
+    const faces = new Array(6);
+    for(let i = 0; i < 6; i++) faces[i] = fallbackCanvas;
+    return faces;
+  })();
+  globalNS.fallbackCubeImage = fallbackCubeImage;
 
   function ensureTextureReady(tex){
     if(!tex) return false;
@@ -202,11 +268,35 @@ export function applyPatch(ctx){
     if(!img){
       if(!tex.userData) tex.userData = {};
       if(!tex.userData.fallbackApplied){
-        tex.image = fallbackCanvas;
+        tex.image = tex.isCubeTexture ? fallbackCubeImage : fallbackCanvas;
         tex.userData.fallbackApplied = true;
+        tex.generateMipmaps = false;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
         tex.needsUpdate = true;
       }
       return false;
+    }
+    if(Array.isArray(img)){
+      let valid = true;
+      for(let i = 0; i < img.length; i++){
+        const face = img[i];
+        if(!face){ valid = false; break; }
+        const w = face.width || face.naturalWidth || face.videoWidth;
+        const h = face.height || face.naturalHeight || face.videoHeight;
+        if(!w || !h){ valid = false; break; }
+      }
+      if(!valid){
+        tex.image = fallbackCubeImage;
+        tex.userData = tex.userData || {};
+        tex.userData.fallbackApplied = true;
+        tex.generateMipmaps = false;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.needsUpdate = true;
+        return true;
+      }
+      return true;
     }
     const isImageEl = typeof Image !== 'undefined' && img instanceof Image;
     if(isImageEl){
@@ -215,17 +305,23 @@ export function applyPatch(ctx){
         if(!tex.userData.errorHooked){
           tex.userData.errorHooked = true;
           img.addEventListener('error', () => {
-            tex.image = fallbackCanvas;
+            tex.image = tex.isCubeTexture ? fallbackCubeImage : fallbackCanvas;
             tex.userData.fallbackApplied = true;
+            tex.generateMipmaps = false;
+            tex.minFilter = THREE.LinearFilter;
+            tex.magFilter = THREE.LinearFilter;
             tex.needsUpdate = true;
           }, { once: true });
         }
         return false;
       }
       if(img.naturalWidth === 0 || img.naturalHeight === 0){
-        tex.image = fallbackCanvas;
+        tex.image = tex.isCubeTexture ? fallbackCubeImage : fallbackCanvas;
         tex.userData = tex.userData || {};
         tex.userData.fallbackApplied = true;
+        tex.generateMipmaps = false;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
         tex.needsUpdate = true;
         return true;
       }
@@ -233,9 +329,12 @@ export function applyPatch(ctx){
       const width = img.width || img.videoWidth || img.naturalWidth;
       const height = img.height || img.videoHeight || img.naturalHeight;
       if(!width || !height){
-        tex.image = fallbackCanvas;
+        tex.image = tex.isCubeTexture ? fallbackCubeImage : fallbackCanvas;
         tex.userData = tex.userData || {};
         tex.userData.fallbackApplied = true;
+        tex.generateMipmaps = false;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
         tex.needsUpdate = true;
         return true;
       }
@@ -285,6 +384,7 @@ export function applyPatch(ctx){
   const tempQuat = shared.tempQuat || (shared.tempQuat = new THREE.Quaternion());
   const tempEuler = shared.tempEuler || (shared.tempEuler = new THREE.Euler(0, 0, 0, 'YXZ'));
   const tempMat3 = shared.tempMat3 || (shared.tempMat3 = new THREE.Matrix3());
+  const playerCollider = refs.playerCollider || shared.playerCollider || (shared.playerCollider = new THREE.Box3());
   const tempRaycaster = refs.raycaster || shared.tempRaycaster || new THREE.Raycaster();
   if(!refs.raycaster) shared.tempRaycaster = tempRaycaster;
   const helperRay = shared.helperRay || (shared.helperRay = new THREE.Raycaster());
@@ -588,6 +688,7 @@ export function applyPatch(ctx){
   const originalMoveTowards = functions.moveTowards;
   const originalUpdateMinimap = functions.updateMinimap;
   const originalStartNextRound = functions.startNextRound;
+  const originalRemoveEnemy = functions.removeEnemy;
   const originalDamagePlayer = functions.damagePlayer;
   const originalShowRoundBanner = functions.showRoundBanner;
   const originalAnimate = functions.animate;
@@ -600,90 +701,127 @@ export function applyPatch(ctx){
       return;
     }
 
-    const sprintHeld = (keyState['ShiftLeft'] || keyState['ShiftRight']) && !playerState.storeOpen;
-    const crouchSpeedFactor = playerState.crouched ? CONFIG.PLAYER.crouchSpeedMultiplier : 1;
+    if(ctx.muzzleFlash?.getWorldPosition && ctx.muzzleWorldPosition?.isVector3){
+      ctx.muzzleFlash.getWorldPosition(ctx.muzzleWorldPosition);
+    }
 
-    const staminaMax = CONFIG.STAMINA.max;
-    playerState.staminaDelay = Math.max(0, playerState.staminaDelay - delta);
-    playerState.staminaCombatDelay = Math.max(0, playerState.staminaCombatDelay - delta);
+    const previousPosition = borrowVec3();
+    previousPosition.copy(controls.getObject().position);
 
-    const moving = (keyState['KeyW']||keyState['KeyA']||keyState['KeyS']||keyState['KeyD']);
-    let sprinting = sprintHeld && moving && playerState.stamina > CONFIG.STAMINA.minSprint && !playerState.crouched;
+    try {
+      const sprintHeld = (keyState['ShiftLeft'] || keyState['ShiftRight']) && !playerState.storeOpen;
+      const crouchSpeedFactor = playerState.crouched ? CONFIG.PLAYER.crouchSpeedMultiplier : 1;
+      const playerHeight = player.height || CONFIG.PLAYER.baseHeight;
 
-    if(sprinting){
-      playerState.stamina = Math.max(0, playerState.stamina - CONFIG.STAMINA.sprintDrain * delta);
-      if(playerState.stamina <= 0){
-        sprinting = false;
-        playerState.staminaDelay = CONFIG.STAMINA.regenDelay;
+      const staminaMax = CONFIG.STAMINA.max;
+      playerState.staminaDelay = Math.max(0, playerState.staminaDelay - delta);
+      playerState.staminaCombatDelay = Math.max(0, playerState.staminaCombatDelay - delta);
+
+      const moving = (keyState['KeyW']||keyState['KeyA']||keyState['KeyS']||keyState['KeyD']);
+      let sprinting = sprintHeld && moving && playerState.stamina > CONFIG.STAMINA.minSprint && !playerState.crouched;
+
+      if(sprinting){
+        playerState.stamina = Math.max(0, playerState.stamina - CONFIG.STAMINA.sprintDrain * delta);
+        if(playerState.stamina <= 0){
+          sprinting = false;
+          playerState.staminaDelay = CONFIG.STAMINA.regenDelay;
+        } else {
+          playerState.staminaDelay = CONFIG.STAMINA.regenDelay;
+        }
       } else {
-        playerState.staminaDelay = CONFIG.STAMINA.regenDelay;
+        if(playerState.staminaDelay <= 0 && playerState.staminaCombatDelay <= 0){
+          playerState.stamina = Math.min(staminaMax, playerState.stamina + CONFIG.STAMINA.regenRate * delta);
+        }
       }
-    } else {
-      if(playerState.staminaDelay <= 0 && playerState.staminaCombatDelay <= 0){
-        playerState.stamina = Math.min(staminaMax, playerState.stamina + CONFIG.STAMINA.regenRate * delta);
+      updateStaminaIcon();
+
+      const effectiveADS = getAiming() && !sprinting;
+      setADSFlag(effectiveADS);
+
+      const adsTarget = effectiveADS ? 1 : 0;
+      const adsSpeed = playerState.crouched ? CONFIG.PLAYER.crouchAdsAcceleration : CONFIG.STANCE.adsSpeed;
+      const newAds = damp(getADSTransition(), adsTarget, adsSpeed, delta);
+      setADSTransition(newAds);
+
+      const targetFov = sprinting ? CONFIG.STANCE.sprintFov : THREE.MathUtils.lerp(CONFIG.STANCE.baseFov, CONFIG.STANCE.adsFov, newAds);
+      camera.fov = damp(camera.fov, playerState.crouched ? Math.min(targetFov, CONFIG.STANCE.crouchFov) : targetFov, CONFIG.STANCE.sprintCamDamp, delta);
+      camera.updateProjectionMatrix();
+
+      const baseHip = getSpreadBase(false);
+      const baseAds = getSpreadBase(true);
+      const spreadBase = effectiveADS ? baseAds : baseHip;
+      const spreadMax = effectiveADS ? weaponState.spreadMaxAds : weaponState.spreadMaxHip;
+      weaponState.spreadCurrent = THREE.MathUtils.clamp(weaponState.spreadCurrent, spreadBase, spreadMax);
+
+      const moveSpeed = (player.walkSpeed || movementConfig.playerWalk || 7.5) * crouchSpeedFactor * (sprinting ? (player.sprintMultiplier || 1.5) : 1);
+      let forward = 0; let strafe = 0;
+      if(keyState['KeyW']) forward += 1;
+      if(keyState['KeyS']) forward -= 1;
+      if(keyState['KeyD']) strafe += 1;
+      if(keyState['KeyA']) strafe -= 1;
+
+      tempVecA.set(strafe, 0, -forward).normalize();
+      if(tempVecA.lengthSq() > 0){
+        tempVecA.applyQuaternion(controls.getObject().quaternion);
+        tempVecA.multiplyScalar(moveSpeed * delta);
+        controls.getObject().position.add(tempVecA);
       }
-    }
-    updateStaminaIcon();
 
-    const effectiveADS = getAiming() && !sprinting;
-    setADSFlag(effectiveADS);
-
-    const adsTarget = effectiveADS ? 1 : 0;
-    const adsSpeed = playerState.crouched ? CONFIG.PLAYER.crouchAdsAcceleration : CONFIG.STANCE.adsSpeed;
-    const newAds = damp(getADSTransition(), adsTarget, adsSpeed, delta);
-    setADSTransition(newAds);
-
-    const targetFov = sprinting ? CONFIG.STANCE.sprintFov : THREE.MathUtils.lerp(CONFIG.STANCE.baseFov, CONFIG.STANCE.adsFov, newAds);
-    camera.fov = damp(camera.fov, playerState.crouched ? Math.min(targetFov, CONFIG.STANCE.crouchFov) : targetFov, CONFIG.STANCE.sprintCamDamp, delta);
-    camera.updateProjectionMatrix();
-
-    const baseHip = getSpreadBase(false);
-    const baseAds = getSpreadBase(true);
-    const spreadBase = effectiveADS ? baseAds : baseHip;
-    const spreadMax = effectiveADS ? weaponState.spreadMaxAds : weaponState.spreadMaxHip;
-    weaponState.spreadCurrent = THREE.MathUtils.clamp(weaponState.spreadCurrent, spreadBase, spreadMax);
-
-    const moveSpeed = (player.walkSpeed || movementConfig.playerWalk || 7.5) * crouchSpeedFactor * (sprinting ? (player.sprintMultiplier || 1.5) : 1);
-    let forward = 0; let strafe = 0;
-    if(keyState['KeyW']) forward += 1;
-    if(keyState['KeyS']) forward -= 1;
-    if(keyState['KeyD']) strafe += 1;
-    if(keyState['KeyA']) strafe -= 1;
-
-    tempVecA.set(strafe, 0, forward).normalize();
-    if(tempVecA.lengthSq() > 0){
-      tempVecA.applyQuaternion(controls.getObject().quaternion);
-      tempVecA.multiplyScalar(moveSpeed * delta);
-      controls.getObject().position.add(tempVecA);
-    }
-
-    if(player.velocity){
-      player.velocity.y -= player.gravity * delta;
-      controls.getObject().position.y += player.velocity.y * delta;
-      if(controls.getObject().position.y < CONFIG.PLAYER.baseHeight){
-        controls.getObject().position.y = CONFIG.PLAYER.baseHeight;
-        player.velocity.y = 0;
-        player.onGround = true;
+      if(player.velocity){
+        player.velocity.y -= player.gravity * delta;
+        controls.getObject().position.y += player.velocity.y * delta;
+        if(controls.getObject().position.y < playerHeight){
+          controls.getObject().position.y = playerHeight;
+          player.velocity.y = 0;
+          player.onGround = true;
+        } else if(player.velocity.y < 0){
+          player.onGround = false;
+        }
       }
-    }
 
-    if(player.isReloading){
-      player.reloadTimer -= delta;
-      if(player.reloadTimer <= 0){
-        const need = player.maxAmmo - player.ammo;
-        const toLoad = Math.min(need, player.reserve);
-        player.ammo += toLoad;
-        player.reserve -= toLoad;
-        updateAmmoDisplay();
-        player.isReloading = false;
+      if(playerCollider){
+        const colliderSize = tempVecD.set(1, playerHeight, 1);
+        playerCollider.setFromCenterAndSize(controls.getObject().position, colliderSize);
+        const statics = gatherStaticMeshes();
+        for(let i = 0; i < statics.length; i++){
+          const mesh = statics[i];
+          if(!mesh) continue;
+          tempBox.setFromObject(mesh);
+          if(playerCollider.intersectsBox(tempBox)){
+            controls.getObject().position.copy(previousPosition);
+            if(player.velocity){
+              if(previousPosition.y <= playerHeight + 0.001){
+                player.velocity.y = 0;
+                player.onGround = true;
+              } else {
+                player.velocity.y = Math.min(0, player.velocity.y);
+              }
+            }
+            break;
+          }
+        }
       }
+
+      if(player.isReloading){
+        player.reloadTimer -= delta;
+        if(player.reloadTimer <= 0){
+          const need = player.maxAmmo - player.ammo;
+          const toLoad = Math.min(need, player.reserve);
+          player.ammo += toLoad;
+          player.reserve -= toLoad;
+          updateAmmoDisplay();
+          player.isReloading = false;
+        }
+      }
+
+      const recoverRate = effectiveADS ? weaponState.recoveryAds : weaponState.recoveryHip;
+      weaponState.spreadCurrent = Math.max(spreadBase, weaponState.spreadCurrent - recoverRate * delta);
+
+      if(functions.updateWeaponPose) functions.updateWeaponPose(delta);
+      if(functions.updateRegen) functions.updateRegen(delta);
+    } finally {
+      releaseVec3(previousPosition);
     }
-
-    const recoverRate = effectiveADS ? weaponState.recoveryAds : weaponState.recoveryHip;
-    weaponState.spreadCurrent = Math.max(spreadBase, weaponState.spreadCurrent - recoverRate * delta);
-
-    if(functions.updateWeaponPose) functions.updateWeaponPose(delta);
-    if(functions.updateRegen) functions.updateRegen(delta);
   }
 
   function getSpreadBase(ads){
@@ -743,13 +881,20 @@ export function applyPatch(ctx){
     const origin = borrowVec3();
     camera.getWorldPosition(origin);
     const muzzlePos = borrowVec3();
-    if(ctx.muzzleWorldPosition){
+    const flash = ctx.muzzleFlash;
+    if(flash?.getWorldPosition){
+      flash.getWorldPosition(muzzlePos);
+      if(ctx.muzzleWorldPosition?.isVector3){
+        ctx.muzzleWorldPosition.copy(muzzlePos);
+      }
+    } else if(ctx.muzzleWorldPosition?.isVector3){
       muzzlePos.copy(ctx.muzzleWorldPosition);
     } else {
       muzzlePos.copy(origin);
     }
-    if(ctx.muzzleFlash){
-      ctx.muzzleFlash.visible = true;
+
+    if(flash){
+      flash.visible = true;
       setTimeout(()=>{ if(ctx.muzzleFlash) ctx.muzzleFlash.visible = false; }, 45);
     }
 
@@ -974,7 +1119,8 @@ export function applyPatch(ctx){
 
   function validateSpawnPoint(point){
     const playerPos = controls.getObject().position;
-    if(point.distanceTo(playerPos) < CONFIG.SPAWN.safeRadius){
+    const distance = point.distanceTo(playerPos);
+    if(distance < CONFIG.SPAWN.safeRadius){
       return false;
     }
     tempVecC.copy(point).setY(CONFIG.PLAYER.baseHeight);
@@ -986,7 +1132,7 @@ export function applyPatch(ctx){
         return true;
       }
     }
-    return false;
+    return distance >= CONFIG.SPAWN.safeRadius * 1.75;
   }
 
   function patchedUpdateEnemies(delta){
@@ -1489,7 +1635,7 @@ export function applyPatch(ctx){
     }
   };
 
-  const perfOverlay = CONFIG.PERF.debugOverlay ? createPerfOverlay() : null;
+  perfOverlay = CONFIG.PERF.debugOverlay ? createPerfOverlay() : null;
 
   function createPerfOverlay(){
     const el = document.createElement('div');
@@ -1544,7 +1690,8 @@ export function applyPatch(ctx){
   // ---------------------------------------------------------------------------
   // INPUT
   // ---------------------------------------------------------------------------
-  const boundFlags = globalNS.boundFlags = globalNS.boundFlags || { input:false };
+  const boundFlags = { input:false };
+  globalNS.boundFlags = boundFlags;
   if(!boundFlags.input){
     document.addEventListener('keydown', onKeyDown, false);
     document.addEventListener('keyup', onKeyUp, false);
@@ -1583,6 +1730,22 @@ export function applyPatch(ctx){
   // ---------------------------------------------------------------------------
   const originalOpenStore = functions.openStore || ctx.openStore;
   const originalCloseStore = functions.closeStore || ctx.closeStore;
+  const originalBindings = {
+    updatePlayer: originalUpdatePlayer,
+    hitscanShoot: originalHitscanShoot,
+    enemyHitscanShoot: originalEnemyHitscanShoot,
+    spawnEnemy: originalSpawnEnemy,
+    updateEnemies: originalUpdateEnemies,
+    moveTowards: originalMoveTowards,
+    updateMinimap: originalUpdateMinimap,
+    startNextRound: originalStartNextRound,
+    removeEnemy: originalRemoveEnemy,
+    damagePlayer: originalDamagePlayer,
+    showRoundBanner: originalShowRoundBanner,
+    animate: originalAnimate,
+    openStore: originalOpenStore,
+    closeStore: originalCloseStore,
+  };
 
   function openStore(fromBuyPhase){
     playerState.storeOpen = true;
@@ -1634,6 +1797,78 @@ export function applyPatch(ctx){
 
   updateEnemiesHud();
   updateArmorBadge();
+
+  globalNS.dispose = () => {
+    try{
+      if(typeof globalNS.stopLoop === 'function'){
+        globalNS.stopLoop();
+      }
+    }catch(err){
+      console.warn('[patch-001] Failed to stop loop during dispose.', err);
+    }
+
+    if(boundFlags.input){
+      document.removeEventListener('keydown', onKeyDown, false);
+      document.removeEventListener('keyup', onKeyUp, false);
+      boundFlags.input = false;
+    }
+
+    if(renderer.domElement && globalNS.contextBound){
+      renderer.domElement.removeEventListener('webglcontextlost', handleContextLost, false);
+      renderer.domElement.removeEventListener('webglcontextrestored', handleContextRestored, false);
+      globalNS.contextBound = false;
+    }
+
+    if(renderer.shadowMap){
+      renderer.shadowMap.enabled = originalShadowEnabled;
+    }
+
+    if(perfOverlay && typeof perfOverlay.remove === 'function'){
+      perfOverlay.remove();
+      perfOverlay = null;
+    }
+
+    if(ui.contextOverlay){
+      if(typeof ui.contextOverlay.remove === 'function'){
+        ui.contextOverlay.remove();
+      }
+      delete ui.contextOverlay;
+    }
+
+    if(Array.isArray(PATCH_STATE.weaponParts)){
+      for(const part of PATCH_STATE.weaponParts){
+        if(!part) continue;
+        part.parent?.remove(part);
+        part.geometry?.dispose?.();
+        if(part.material){
+          if(Array.isArray(part.material)){
+            part.material.forEach(disposeMaterial);
+          } else {
+            disposeMaterial(part.material);
+          }
+        }
+      }
+      PATCH_STATE.weaponParts = null;
+    }
+
+    for(const [key, value] of Object.entries(originalBindings)){
+      if(value !== undefined && value !== null){
+        functions[key] = value;
+      } else {
+        delete functions[key];
+      }
+    }
+
+    PATCH_STATE.debug = false;
+
+    globalNS.boundFlags = { input:false };
+    globalNS.state = null;
+    globalNS.stopLoop = undefined;
+    globalNS.dispose = undefined;
+    globalNS.applied = false;
+  };
+
+  globalNS.applied = true;
 
   // ---------------------------------------------------------------------------
   // HELPERS
