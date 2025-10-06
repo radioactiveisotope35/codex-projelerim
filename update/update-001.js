@@ -274,6 +274,7 @@ export function applyPatch(ctx){
 
   function buildEnemySpawnZones(){
     const zones = [];
+    ensureSpawnBounds();
     const rawSources = [];
     if(Array.isArray(ctx.enemySpawnPoints)) rawSources.push(...ctx.enemySpawnPoints);
     if(Array.isArray(refs.enemySpawnPoints)) rawSources.push(...refs.enemySpawnPoints);
@@ -293,9 +294,15 @@ export function applyPatch(ctx){
     if(zones.length === 0){
       const size = Math.max(20, world.size || 60);
       const radius = Math.max(8, size * 0.18);
-      zones.push({ center: new THREE.Vector3(0, 0, -size * 0.4), radius, height: 0 });
-      zones.push({ center: new THREE.Vector3(size * 0.35, 0, size * 0.35), radius: radius * 0.75, height: 0 });
-      zones.push({ center: new THREE.Vector3(-size * 0.35, 0, size * 0.35), radius: radius * 0.75, height: 0 });
+      const fallbackZones = [
+        { center: new THREE.Vector3(0, 0, -size * 0.4), radius, height: 0 },
+        { center: new THREE.Vector3(size * 0.35, 0, size * 0.35), radius: radius * 0.75, height: 0 },
+        { center: new THREE.Vector3(-size * 0.35, 0, size * 0.35), radius: radius * 0.75, height: 0 },
+      ];
+      for(let i = 0; i < fallbackZones.length; i++){
+        const clamped = clampZoneToSpawnBounds(fallbackZones[i]);
+        if(clamped) zones.push(clamped);
+      }
     }
     return zones;
   }
@@ -303,30 +310,33 @@ export function applyPatch(ctx){
   function normalizeSpawnZone(entry){
     if(!entry) return null;
     const baseRadius = Math.max(6, (world.size || 60) * 0.12);
+    let zone = null;
     if(entry.isVector3){
-      return { center: entry.clone(), radius: baseRadius, height: entry.y || 0 };
-    }
-    if(entry.position?.isVector3){
+      zone = { center: entry.clone(), radius: baseRadius, height: entry.y || 0 };
+    } else if(entry.position?.isVector3){
       const radius = typeof entry.userData?.radius === 'number' ? entry.userData.radius : (entry.radius || baseRadius);
-      return { center: entry.position.clone(), radius: Math.max(4, radius), height: entry.position.y || 0 };
-    }
-    if(typeof entry === 'object'){ 
+      zone = { center: entry.position.clone(), radius: Math.max(4, radius), height: entry.position.y || 0 };
+    } else if(typeof entry === 'object'){
       if(entry.center?.isVector3){
-        return { center: entry.center.clone(), radius: entry.radius || baseRadius, height: entry.height || entry.center.y || 0 };
-      }
-      if('x' in entry && 'z' in entry){
+        zone = { center: entry.center.clone(), radius: entry.radius || baseRadius, height: entry.height || entry.center.y || 0 };
+      } else if('x' in entry && 'z' in entry){
         const center = new THREE.Vector3(entry.x, entry.y || 0, entry.z);
         const radius = entry.radius || entry.r || baseRadius;
-        return { center, radius: Math.max(4, radius), height: entry.height || center.y };
+        zone = { center, radius: Math.max(4, radius), height: entry.height || center.y };
       }
     }
-    return null;
+    if(!zone) return null;
+    zone = clampZoneToSpawnBounds(zone);
+    if(!zone) return null;
+    if(!Number.isFinite(zone.radius) || zone.radius <= ENEMY_RADIUS + 0.2) return null;
+    return zone;
   }
 
   ensureWeaponModel();
   ensureMuzzleAnchor();
 
   PATCH_STATE.playerSpawn = (PATCH_STATE.playerSpawn || new THREE.Vector3()).copy(controls.getObject().position);
+  refreshWorldBounds();
   PATCH_STATE.enemySpawnZones = buildEnemySpawnZones();
 
   const fallbackCanvas = globalNS.fallbackCanvas || (() => {
@@ -476,6 +486,8 @@ export function applyPatch(ctx){
   const tempQuat = shared.tempQuat || (shared.tempQuat = new THREE.Quaternion());
   const tempEuler = shared.tempEuler || (shared.tempEuler = new THREE.Euler(0, 0, 0, 'YXZ'));
   const tempMat3 = shared.tempMat3 || (shared.tempMat3 = new THREE.Matrix3());
+  const worldBounds = shared.worldBounds || (shared.worldBounds = new THREE.Box3());
+  const worldSpawnBounds = shared.worldSpawnBounds || (shared.worldSpawnBounds = new THREE.Box3());
   const playerCollider = refs.playerCollider || shared.playerCollider || (shared.playerCollider = new THREE.Box3());
   const crouchTestBox = shared.crouchTestBox || (shared.crouchTestBox = new THREE.Box3());
   const tempRaycaster = refs.raycaster || shared.tempRaycaster || new THREE.Raycaster();
@@ -689,6 +701,69 @@ export function applyPatch(ctx){
       for(let i=0;i<world.platforms.length;i++) staticScratch.push(world.platforms[i]);
     }
     return staticScratch;
+  }
+
+  function refreshWorldBounds(){
+    worldBounds.makeEmpty();
+    worldSpawnBounds.makeEmpty();
+    const statics = gatherStaticMeshes();
+    for(let i = 0; i < statics.length; i++){
+      const mesh = statics[i];
+      if(!mesh) continue;
+      const bbox = tempBox2.setFromObject(mesh);
+      if(!Number.isFinite(bbox.min.x) || !Number.isFinite(bbox.max.x) || !Number.isFinite(bbox.min.z) || !Number.isFinite(bbox.max.z)){
+        continue;
+      }
+      worldBounds.union(bbox);
+    }
+    if(worldBounds.isEmpty() || !Number.isFinite(worldBounds.min.x) || !Number.isFinite(worldBounds.max.x)){
+      const size = Math.max(20, world.size || 60);
+      worldBounds.min.set(-size * 0.5, -10, -size * 0.5);
+      worldBounds.max.set(size * 0.5, 10, size * 0.5);
+    }
+    worldSpawnBounds.copy(worldBounds);
+    const margin = Math.max(ENEMY_RADIUS * 1.6, 0.75);
+    worldSpawnBounds.min.x += margin;
+    worldSpawnBounds.min.z += margin;
+    worldSpawnBounds.max.x -= margin;
+    worldSpawnBounds.max.z -= margin;
+    if(worldSpawnBounds.min.x > worldSpawnBounds.max.x){
+      const midX = (worldBounds.min.x + worldBounds.max.x) * 0.5;
+      worldSpawnBounds.min.x = worldSpawnBounds.max.x = midX;
+    }
+    if(worldSpawnBounds.min.z > worldSpawnBounds.max.z){
+      const midZ = (worldBounds.min.z + worldBounds.max.z) * 0.5;
+      worldSpawnBounds.min.z = worldSpawnBounds.max.z = midZ;
+    }
+    worldSpawnBounds.min.y = worldBounds.min.y;
+    worldSpawnBounds.max.y = worldBounds.max.y;
+    const stateBounds = PATCH_STATE.worldBounds || (PATCH_STATE.worldBounds = new THREE.Box3());
+    stateBounds.copy(worldBounds);
+    const stateSpawnBounds = PATCH_STATE.worldSpawnBounds || (PATCH_STATE.worldSpawnBounds = new THREE.Box3());
+    stateSpawnBounds.copy(worldSpawnBounds);
+    return stateSpawnBounds;
+  }
+
+  function ensureSpawnBounds(){
+    if(PATCH_STATE.worldSpawnBounds && !PATCH_STATE.worldSpawnBounds.isEmpty()){
+      return PATCH_STATE.worldSpawnBounds;
+    }
+    return refreshWorldBounds();
+  }
+
+  function clampZoneToSpawnBounds(zone){
+    if(!zone || !zone.center) return null;
+    const bounds = ensureSpawnBounds();
+    if(!bounds || bounds.isEmpty()) return zone;
+    zone.center.x = THREE.MathUtils.clamp(zone.center.x, bounds.min.x, bounds.max.x);
+    zone.center.z = THREE.MathUtils.clamp(zone.center.z, bounds.min.z, bounds.max.z);
+    const spanX = Math.max(0, bounds.max.x - bounds.min.x);
+    const spanZ = Math.max(0, bounds.max.z - bounds.min.z);
+    const maxRadius = Math.max(ENEMY_RADIUS + 0.35, Math.min(spanX, spanZ) * 0.5);
+    zone.radius = Math.max(ENEMY_RADIUS + 0.35, Math.min(zone.radius || maxRadius, maxRadius));
+    const clampedHeight = THREE.MathUtils.clamp(zone.height ?? zone.center.y ?? 0, bounds.min.y, bounds.max.y);
+    zone.height = clampedHeight;
+    return zone;
   }
 
   function gatherEnemyMeshes(){
@@ -1291,7 +1366,13 @@ export function applyPatch(ctx){
 
   function ensureSpawnClearance(point, zone, statics){
     const height = resolveSpawnHeight(point, zone, statics);
-    if(!isFinite(height)) return null;
+    if(!Number.isFinite(height)) return null;
+    const spawnBounds = ensureSpawnBounds();
+    if(spawnBounds && !spawnBounds.isEmpty()){
+      if(height < spawnBounds.min.y - 0.05 || height > spawnBounds.max.y + 0.05){
+        return null;
+      }
+    }
     const centerY = height + ENEMY_HALF_HEIGHT;
     tempVecH.set(point.x, centerY, point.z);
     if(capsuleOverlapsStatics(tempVecH, ENEMY_RADIUS, ENEMY_HEIGHT, statics)){
@@ -1395,6 +1476,7 @@ export function applyPatch(ctx){
       return false;
     }
     const statics = gatherStaticMeshes();
+    const playerPos = controls.getObject().position;
     const p = difficulty.params;
     const attempts = CONFIG.SPAWN.maxAttempts;
     const spawnPoint = tempVecB;
@@ -1436,11 +1518,20 @@ export function applyPatch(ctx){
         }
       }
     } else {
-      const spawnRadius = Math.max(24, (world.size || 60) * 0.45);
+      const spawnBounds = ensureSpawnBounds();
       for(let i=0;i<attempts;i++){
-        const angle = Math.random() * Math.PI * 2;
-        const distance = THREE.MathUtils.randFloat(spawnRadius * 0.65, spawnRadius);
-        spawnPoint.set(Math.cos(angle) * distance, 0, Math.sin(angle) * distance);
+        if(spawnBounds && !spawnBounds.isEmpty()){
+          spawnPoint.set(
+            THREE.MathUtils.randFloat(spawnBounds.min.x, spawnBounds.max.x),
+            THREE.MathUtils.clamp(playerPos.y, spawnBounds.min.y, spawnBounds.max.y),
+            THREE.MathUtils.randFloat(spawnBounds.min.z, spawnBounds.max.z)
+          );
+        } else {
+          const spawnRadius = Math.max(24, (world.size || 60) * 0.45);
+          const angle = Math.random() * Math.PI * 2;
+          const distance = THREE.MathUtils.randFloat(spawnRadius * 0.65, spawnRadius);
+          spawnPoint.set(Math.cos(angle) * distance, 0, Math.sin(angle) * distance);
+        }
         if(validateSpawnPoint(spawnPoint, null, statics)){
           pointFound = true;
           break;
@@ -1546,6 +1637,12 @@ export function applyPatch(ctx){
 
   function validateSpawnPoint(point, zone, staticsOverride){
     const statics = staticsOverride || gatherStaticMeshes();
+    const spawnBounds = ensureSpawnBounds();
+    if(spawnBounds && !spawnBounds.isEmpty()){
+      if(point.x < spawnBounds.min.x || point.x > spawnBounds.max.x || point.z < spawnBounds.min.z || point.z > spawnBounds.max.z){
+        return false;
+      }
+    }
     const playerPos = controls.getObject().position;
     const safeRadius = CONFIG.SPAWN.safeRadius;
     if(point.distanceTo(playerPos) < safeRadius){
