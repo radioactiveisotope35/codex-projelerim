@@ -358,9 +358,10 @@
     function updatePlayer(delta){
       if(!controls.isLocked) return;
       const sprinting=keyState['ShiftLeft']||keyState['ShiftRight'];
-      // sprint yaparken nişan iptal
-      if(sprinting) aiming=false;
-      setADS(aiming);
+      // ADS only if the input is held and player is free to aim
+      const wantsADS = aiming && player.alive && !player.isReloading;
+      const effectiveADS = wantsADS && !sprinting;
+      setADS(effectiveADS);
 
       // ADS transition
       const target = isADS ? 1 : 0;
@@ -452,7 +453,7 @@
 
     function moveTowards(enemy,target,speed,delta){ const dir=tmpVec.subVectors(target,enemy.mesh.position); dir.y=0; const d=dir.length(); if(d>.5){ dir.normalize(); enemy.mesh.position.addScaledVector(dir, speed*delta); enemy.mesh.lookAt(enemy.mesh.position.clone().add(dir)); } }
 
-    function updateMinimap(){ const ctx=minimapCtx, size=minimapCanvas.width, scale=size/world.size; ctx.clearRect(0,0,size,size); ctx.fillStyle='rgba(10,18,28,.9)'; ctx.fillRect(0,0,size,size); ctx.strokeStyle='rgba(255,255,255,.15)'; ctx.strokeRect(2,2,size-4,size-4); const playerPos=controls.getObject().position; const yaw=camera.rotation.y; function project(pos){ return {x:size/2+pos.x*scale, y:size/2+pos.z*scale}; } ctx.fillStyle='#50c8ff'; const p=project(playerPos); ctx.beginPath(); ctx.arc(p.x,p.y,6,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.moveTo(p.x,p.y); const r=18; ctx.lineTo(p.x+Math.sin(yaw-.35)*r, p.y+Math.cos(yaw-.35)*r); ctx.lineTo(p.x+Math.sin(yaw+.35)*r, p.y+Math.cos(yaw+.35)*r); ctx.closePath(); ctx.fillStyle='rgba(80,200,255,.25)'; ctx.fill(); ctx.fillStyle='#ff5c3b'; enemies.forEach(e=>{ const ep=project(e.mesh.position); ctx.beginPath(); ctx.arc(ep.x,ep.y,5,0,Math.PI*2); ctx.fill(); }); }
+    function updateMinimap(){ const ctx=minimapCtx, size=minimapCanvas.width, scale=size/world.size; ctx.clearRect(0,0,size,size); ctx.fillStyle='rgba(10,18,28,.9)'; ctx.fillRect(0,0,size,size); ctx.strokeStyle='rgba(255,255,255,.15)'; ctx.strokeRect(2,2,size-4,size-4); const playerPos=controls.getObject().position; const yaw=controls.getObject().rotation.y; function project(pos){ return {x:size/2+pos.x*scale, y:size/2+pos.z*scale}; } ctx.fillStyle='#50c8ff'; const p=project(playerPos); ctx.beginPath(); ctx.arc(p.x,p.y,6,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.moveTo(p.x,p.y); const r=18; ctx.lineTo(p.x+Math.sin(yaw-.35)*r, p.y+Math.cos(yaw-.35)*r); ctx.lineTo(p.x+Math.sin(yaw+.35)*r, p.y+Math.cos(yaw+.35)*r); ctx.closePath(); ctx.fillStyle='rgba(80,200,255,.25)'; ctx.fill(); ctx.fillStyle='#ff5c3b'; enemies.forEach(e=>{ const ep=project(e.mesh.position); ctx.beginPath(); ctx.arc(ep.x,ep.y,5,0,Math.PI*2); ctx.fill(); }); }
 
     function animate(){ requestAnimationFrame(animate); const delta=Math.min(.05, clock.getDelta()); if(player.fireCooldown>0) player.fireCooldown-=delta; if(shooting && player.fireCooldown<=0) hitscanShoot(); if(game.state!=='over'){ updatePlayer(delta); updateEnemies(delta); updateTracers(delta); updateLoot(delta); updateMinimap(); if(game.state==='spawning'){ game.spawnDelay-=delta; if(game.spawnDelay<=0 && game.spawnQueue>0){ spawnEnemy(); game.spawnQueue-=1; game.spawnDelay=THREE.MathUtils.randFloat(.6,1.2);} else if(game.spawnQueue<=0){ game.state='inRound'; } } } renderer.render(scene,camera); }
 

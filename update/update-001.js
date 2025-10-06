@@ -949,7 +949,7 @@ export function applyPatch(ctx){
       }
       playerState.jumpHeld = jumpPressed;
 
-      const effectiveADS = getAiming() && !sprinting;
+      const effectiveADS = getAiming() && !sprinting && player.alive !== false && !player.isReloading && !playerState.storeOpen;
       setADSFlag(effectiveADS);
 
       const adsTarget = effectiveADS ? 1 : 0;
