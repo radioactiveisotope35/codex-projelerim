@@ -192,6 +192,7 @@ export function applyPatch(ctx){
     muzzleAnchor: null,
     enemySpawnZones: null,
     playerSpawn: null,
+    enemyGeometry: null,
     spawnFailureStreak: 0,
     lastSpawnFailureAt: 0,
   };
@@ -1478,6 +1479,10 @@ export function applyPatch(ctx){
   }
 
   function patchedSpawnEnemy(){
+    if(!PATCH_STATE.enemyGeometry){
+      PATCH_STATE.enemyGeometry = new THREE.CapsuleGeometry(0.6, 1.2, 6, 12);
+    }
+
     if(enemies.length >= CONFIG.PERF.maxActiveEnemies){
       game.spawnDelay = Math.max(game.spawnDelay, 0.5);
       return false;
@@ -1553,7 +1558,7 @@ export function applyPatch(ctx){
     }
 
     const spawnHeight = spawnPoint.y;
-    const bodyGeometry = new THREE.CapsuleGeometry(.6,1.2,6,12);
+    const bodyGeometry = PATCH_STATE.enemyGeometry;
     const mat = ctx.enemyMaterialTemplate ? ctx.enemyMaterialTemplate.clone() : new THREE.MeshStandardMaterial({ color:0x223344 });
     const enemyMesh = new THREE.Mesh(bodyGeometry, mat);
     enemyMesh.position.set(spawnPoint.x, spawnHeight + ENEMY_HALF_HEIGHT, spawnPoint.z);
@@ -2008,12 +2013,21 @@ export function applyPatch(ctx){
 
   function handleSpawning(delta){
     if(game.state !== 'spawning') return;
-    if(enemies.length >= CONFIG.SPAWN.concurrentCap) return;
     if(game.spawnQueue < 0){
       game.spawnQueue = 0;
     }
     game.spawnDelay -= delta;
-    if(game.spawnDelay <= 0 && game.spawnQueue > 0){
+    const cadence = CONFIG.SPAWN.spawnCadence;
+    let maxCatchup = -0.75;
+    if(Array.isArray(cadence) && cadence.length >= 2){
+      const minWindow = Math.max(0.12, Math.min(cadence[0], cadence[1]));
+      maxCatchup = -minWindow * 1.5;
+    }
+    if(game.spawnDelay < maxCatchup){
+      game.spawnDelay = maxCatchup;
+    }
+    const canAttemptSpawn = enemies.length < CONFIG.SPAWN.concurrentCap;
+    if(canAttemptSpawn && game.spawnDelay <= 0 && game.spawnQueue > 0){
       if(patchedSpawnEnemy()){
         game.spawnQueue -= 1;
         game.spawnDelay = nextSpawnDelay();
@@ -2083,7 +2097,9 @@ export function applyPatch(ctx){
       maybeDropLoot(enemy.mesh?.position || controls.getObject().position);
       scene.remove(enemy.mesh);
       if(enemy.mesh){
-        enemy.mesh.geometry?.dispose?.();
+        if(enemy.mesh.geometry && enemy.mesh.geometry !== PATCH_STATE.enemyGeometry){
+          enemy.mesh.geometry.dispose?.();
+        }
         if(enemy.mesh.material){
           if(Array.isArray(enemy.mesh.material)){
             enemy.mesh.material.forEach(m=>disposeMaterial(m));
@@ -2720,6 +2736,11 @@ export function applyPatch(ctx){
 
     if(renderer.shadowMap){
       renderer.shadowMap.enabled = originalShadowEnabled;
+    }
+
+    if(PATCH_STATE.enemyGeometry){
+      PATCH_STATE.enemyGeometry.dispose?.();
+      PATCH_STATE.enemyGeometry = null;
     }
 
     if(perfOverlay && typeof perfOverlay.remove === 'function'){
