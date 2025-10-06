@@ -42,7 +42,99 @@ export function applyPatch(ctx){
     return;
   }
 
+  if(scene.fog){
+    scene.fog.color?.set?.(0x192b42);
+    if(typeof scene.fog.near === 'number') scene.fog.near = Math.min(scene.fog.near, 70);
+    if(typeof scene.fog.far === 'number') scene.fog.far = Math.max(scene.fog.far, 340);
+  } else {
+    scene.fog = new THREE.Fog(0x192b42, 70, 340);
+  }
+  if(scene.background && scene.background.isColor){
+    scene.background.set(0x1b2f45);
+  }
+
+  if(renderer){
+    const currentExposure = typeof renderer.toneMappingExposure === 'number' ? renderer.toneMappingExposure : 1;
+    renderer.toneMappingExposure = Math.max(currentExposure, 1.2);
+  }
+
+  if(globalNS.lights && Array.isArray(globalNS.lights)){
+    for(const light of globalNS.lights){
+      if(light && light.parent){
+        light.parent.remove(light);
+      }
+    }
+  }
+  const ambientLight = new THREE.AmbientLight(0xcfd9ff, 0.32);
+  const hemiLight = new THREE.HemisphereLight(0xe4efff, 0x1c232b, 0.85);
+  const fillLight = new THREE.DirectionalLight(0xcfe2ff, 0.45);
+  const rimLight = new THREE.PointLight(0x66c7ff, 1.45, 70, 2);
+  fillLight.position.set(16, 18, 10);
+  fillLight.castShadow = true;
+  fillLight.shadow.mapSize.set(1024, 1024);
+  fillLight.shadow.camera.near = 4;
+  fillLight.shadow.camera.far = 90;
+  fillLight.shadow.camera.left = -45;
+  fillLight.shadow.camera.right = 45;
+  fillLight.shadow.camera.top = 45;
+  fillLight.shadow.camera.bottom = -45;
+  rimLight.position.set(0, 4.5, 0);
+  scene.add(ambientLight);
+  scene.add(hemiLight);
+  scene.add(fillLight);
+  scene.add(rimLight);
+  globalNS.lights = [ambientLight, hemiLight, fillLight, rimLight];
+
   const originalShadowEnabled = renderer.shadowMap?.enabled ?? false;
+  const baseEnemyTexture = (ctx.enemyMaterialTemplate && ctx.enemyMaterialTemplate.map) || ctx.enemyUniformTexture || null;
+  const sharedTextures = globalNS.sharedTextures || (globalNS.sharedTextures = new WeakSet());
+  const MATERIAL_TEXTURE_PROPS = [
+    'map',
+    'normalMap',
+    'roughnessMap',
+    'metalnessMap',
+    'aoMap',
+    'displacementMap',
+    'emissiveMap',
+    'alphaMap',
+    'lightMap',
+    'envMap',
+    'bumpMap',
+    'specularMap',
+    'gradientMap',
+    'clearcoatMap',
+    'clearcoatNormalMap',
+    'clearcoatRoughnessMap',
+    'sheenColorMap',
+    'sheenRoughnessMap',
+    'transmissionMap',
+    'thicknessMap',
+    'anisotropyMap',
+    'specularColorMap',
+    'specularIntensityMap',
+  ];
+  function markSharedTexture(tex){
+    if(tex && typeof tex === 'object' && tex.isTexture){
+      sharedTextures.add(tex);
+    }
+  }
+  function markMaterialTexturesShared(material){
+    if(!material) return;
+    const list = Array.isArray(material) ? material : [material];
+    for(let i=0;i<list.length;i++){
+      const mat = list[i];
+      if(!mat || typeof mat !== 'object') continue;
+      for(let j=0;j<MATERIAL_TEXTURE_PROPS.length;j++){
+        const tex = mat[MATERIAL_TEXTURE_PROPS[j]];
+        markSharedTexture(tex);
+      }
+    }
+  }
+  markSharedTexture(baseEnemyTexture);
+  if(ctx.enemyUniformTexture) markSharedTexture(ctx.enemyUniformTexture);
+  if(ctx.enemyMaterialTemplate){
+    markMaterialTexturesShared(ctx.enemyMaterialTemplate);
+  }
 
   const CONFIG = {
     CONFIG_VERSION: '001',
@@ -72,6 +164,12 @@ export function applyPatch(ctx){
       spreadADSMax: THREE.MathUtils.degToRad(0.55),
       spreadRecovery: THREE.MathUtils.degToRad(1.5),
       spreadRecoveryADS: THREE.MathUtils.degToRad(1.9),
+      spreadHipTight: THREE.MathUtils.degToRad(0.22),
+      spreadAdsTight: THREE.MathUtils.degToRad(0.08),
+      adaptiveFireFloor: 0.075,
+      adaptiveFireCeil: 0.11,
+      staminaSpreadBonus: 0.82,
+      staminaSpreadPenalty: 1.18,
       falloffStart: 25,
       falloffEnd: 70,
       falloffMin: 0.6,
@@ -133,6 +231,19 @@ export function applyPatch(ctx){
       engageDelay: 0.3,
       reengageDelay: 0.18,
       firstShotDelay: [0.08, 0.22],
+      preferredRange: [6, 14],
+      leadFactor: 0.18,
+      aimJitter: [THREE.MathUtils.degToRad(0.6), THREE.MathUtils.degToRad(1.8)],
+      aggressionRange: [0.35, 0.85],
+      accuracyRange: [0.4, 0.92],
+      resilienceRange: [0.4, 0.95],
+      damageScale: [0.9, 1.22],
+      fireCadence: [0.08, 0.16],
+      flinchSuppression: 0.55,
+      reactionFloor: 0.05,
+      reactionCeil: 0.16,
+      awarenessMemory: 0.9,
+      alertDistance: 11,
     },
     PERF: {
       fixedStep: 1 / 60,
@@ -192,8 +303,17 @@ export function applyPatch(ctx){
     muzzleAnchor: null,
     enemySpawnZones: null,
     playerSpawn: null,
+    enemyGeometry: null,
     spawnFailureStreak: 0,
     lastSpawnFailureAt: 0,
+    frameId: 0,
+    enemyProfileSummary: {
+      count: 0,
+      totalAggression: 0,
+      totalAccuracy: 0,
+      totalResilience: 0,
+    },
+    playerFireDelay: null,
   };
 
   globalNS.enableDebug = (flag) => {
@@ -266,10 +386,402 @@ export function applyPatch(ctx){
   const enemyMeshScratch = [];
   const filteredStaticScratch = [];
   const raycastScratch = [];
+  const zoneOccupancyScratch = { count: 0, closestSq: Infinity };
+  const staticBoundsCache = new WeakMap();
+  PATCH_STATE.staticBoundsCache = staticBoundsCache;
 
   const ENEMY_RADIUS = 0.6;
   const ENEMY_HEIGHT = 2.4;
   const ENEMY_HALF_HEIGHT = ENEMY_HEIGHT * 0.5;
+  const ENEMY_PROFILE_PALETTES = [
+    { base: 0x2d3f5f, accent: 0x57d6ff, emissive: 0x071b2c },
+    { base: 0x3e2f55, accent: 0xff6d8a, emissive: 0x1c0618 },
+    { base: 0x354b2f, accent: 0x9cf36d, emissive: 0x0b1609 },
+    { base: 0x463b29, accent: 0xffc266, emissive: 0x1f1606 },
+  ];
+  const DEFAULT_ENEMY_PROFILE = {
+    aggression: 0.55,
+    accuracy: 0.58,
+    resilience: 0.62,
+    aggressionValue: lerpRange(CONFIG.AI.aggressionRange, 0.55),
+    accuracyValue: lerpRange(CONFIG.AI.accuracyRange, 0.58),
+    resilienceValue: lerpRange(CONFIG.AI.resilienceRange, 0.62),
+    preferredRange: THREE.MathUtils.lerp(CONFIG.AI.preferredRange[0], CONFIG.AI.preferredRange[1], 0.55),
+    damageScale: 1,
+    burst: [2, 3],
+    burstCadence: [0.06, 0.12],
+    restCadence: [0.2, 0.28],
+    scale: { x: 1, y: 1, z: 1 },
+    paletteIndex: 0,
+    aimJitter: THREE.MathUtils.lerp(CONFIG.AI.aimJitter[1], CONFIG.AI.aimJitter[0], 0.58),
+    leadTime: CONFIG.AI.leadFactor,
+    suppressionResist: 1,
+  };
+
+  function lerpRange(range, t){
+    if(!Array.isArray(range) || range.length < 2){
+      return typeof range === 'number' ? range : t;
+    }
+    return THREE.MathUtils.lerp(range[0], range[1], THREE.MathUtils.clamp(t, 0, 1));
+  }
+
+  function getEnemyPalette(index){
+    if(!ENEMY_PROFILE_PALETTES.length){
+      return { base: 0x233246, accent: 0x6dd3ff, emissive: 0x05101a };
+    }
+    const safeIndex = Math.abs(Math.floor(index || 0)) % ENEMY_PROFILE_PALETTES.length;
+    return ENEMY_PROFILE_PALETTES[safeIndex];
+  }
+
+  function buildEnemyProfile(round = 1){
+    const stage = THREE.MathUtils.clamp((round - 1) / 12, 0, 1);
+    const aggression = THREE.MathUtils.clamp(Math.random() * 0.4 + stage * 0.6, 0, 1);
+    const accuracy = THREE.MathUtils.clamp(Math.random() * 0.45 + stage * 0.55, 0, 1);
+    const resilience = THREE.MathUtils.clamp(Math.random() * 0.35 + stage * 0.55, 0, 1);
+    const aggressionValue = lerpRange(CONFIG.AI.aggressionRange, aggression);
+    const accuracyValue = lerpRange(CONFIG.AI.accuracyRange, accuracy);
+    const resilienceValue = lerpRange(CONFIG.AI.resilienceRange, resilience);
+    const paletteIndex = Math.floor(Math.random() * ENEMY_PROFILE_PALETTES.length);
+    const preferredRange = lerpRange(
+      CONFIG.AI.preferredRange,
+      THREE.MathUtils.clamp(accuracy * 0.6 + (1 - aggression) * 0.35, 0, 1)
+    );
+    const damageScale = lerpRange(
+      CONFIG.AI.damageScale,
+      THREE.MathUtils.clamp((aggression * 0.45 + resilience * 0.7) / 1.15, 0, 1)
+    );
+    const burstCountMin = Math.max(2, Math.round(THREE.MathUtils.lerp(1.8, 3.1, aggression * 0.7 + stage * 0.35)));
+    const burstCountMax = burstCountMin + Math.max(1, Math.round(THREE.MathUtils.lerp(1, 2, accuracy * 0.6 + aggression * 0.25)));
+    const cadenceWeight = THREE.MathUtils.clamp(accuracy * 0.6 + aggression * 0.2, 0, 1);
+    const burstCadence = [
+      Math.max(0.045, THREE.MathUtils.lerp(0.05, 0.08, 1 - cadenceWeight)),
+      Math.max(0.06, THREE.MathUtils.lerp(0.1, 0.16, 1 - accuracy)),
+    ];
+    const restCadenceBase = THREE.MathUtils.lerp(0.18, 0.32, 1 - resilience * 0.65);
+    const restCadence = [
+      Math.max(0.14, restCadenceBase * 0.7),
+      Math.max(restCadenceBase, restCadenceBase + THREE.MathUtils.lerp(0.04, 0.1, 1 - aggression)),
+    ];
+    const scale = {
+      x: THREE.MathUtils.lerp(0.88, 1.14, aggression * 0.65 + resilience * 0.35),
+      y: THREE.MathUtils.lerp(0.94, 1.12, resilience),
+      z: THREE.MathUtils.lerp(0.9, 1.08, (1 - accuracy) * 0.4 + aggression * 0.4),
+    };
+    const aimJitter = THREE.MathUtils.lerp(CONFIG.AI.aimJitter[1], CONFIG.AI.aimJitter[0], accuracy);
+    const leadTime = CONFIG.AI.leadFactor * THREE.MathUtils.lerp(0.55, 1.2, accuracy);
+    const suppressionResist = THREE.MathUtils.lerp(0.75, 1.2, resilience);
+    return {
+      aggression,
+      accuracy,
+      resilience,
+      aggressionValue,
+      accuracyValue,
+      resilienceValue,
+      preferredRange,
+      damageScale,
+      burst: [burstCountMin, burstCountMax],
+      burstCadence,
+      restCadence,
+      scale,
+      paletteIndex,
+      aimJitter,
+      leadTime,
+      suppressionResist,
+    };
+  }
+
+  function applyEnemyVisualProfile(enemy){
+    if(!enemy?.mesh || !enemy.profile) return;
+    const palette = getEnemyPalette(enemy.profile.paletteIndex);
+    const material = Array.isArray(enemy.mesh.material) ? enemy.mesh.material[0] : enemy.mesh.material;
+    if(material){
+      if(material.color?.setHex){
+        material.color.setHex(palette.base);
+      }
+      if(material.emissive?.setHex){
+        material.emissive.setHex(palette.emissive);
+        material.emissiveIntensity = THREE.MathUtils.clamp(0.28 + enemy.profile.accuracy * 0.45, 0.25, 0.85);
+      }
+      material.metalness = THREE.MathUtils.clamp(0.22 + enemy.profile.accuracy * 0.35, 0.12, 0.68);
+      material.roughness = THREE.MathUtils.clamp(0.48 - enemy.profile.accuracy * 0.18, 0.16, 0.6);
+      material.needsUpdate = true;
+    }
+    enemy.mesh.scale.set(
+      enemy.profile.scale.x,
+      enemy.profile.scale.y,
+      enemy.profile.scale.z
+    );
+    enemy.mesh.userData.enemyPalette = palette;
+  }
+
+  function updateEnemySummary(enemy, delta){
+    const summary = PATCH_STATE.enemyProfileSummary;
+    if(!summary || !enemy?.profile) return;
+    summary.totalAggression = Math.max(0, summary.totalAggression + delta * enemy.profile.aggression);
+    summary.totalAccuracy = Math.max(0, summary.totalAccuracy + delta * enemy.profile.accuracy);
+    summary.totalResilience = Math.max(0, summary.totalResilience + delta * enemy.profile.resilience);
+    summary.count = Math.max(0, summary.count + delta);
+  }
+
+  function registerEnemyProfile(enemy){
+    if(!enemy || enemy.__profileRegistered) return;
+    updateEnemySummary(enemy, 1);
+    enemy.__profileRegistered = true;
+    recalcPlayerTuning();
+  }
+
+  function unregisterEnemyProfile(enemy){
+    if(!enemy || !enemy.__profileRegistered) return;
+    enemy.__profileRegistered = false;
+    updateEnemySummary(enemy, -1);
+    recalcPlayerTuning();
+  }
+
+  function recalcPlayerTuning(){
+    if(!playerState || !weaponState) return;
+    const summary = PATCH_STATE.enemyProfileSummary || { count: 0, totalAggression: 0, totalAccuracy: 0, totalResilience: 0 };
+    const count = Math.max(1, summary.count || 0);
+    const avgAgg = summary.count ? summary.totalAggression / count : DEFAULT_ENEMY_PROFILE.aggression;
+    const avgAcc = summary.count ? summary.totalAccuracy / count : DEFAULT_ENEMY_PROFILE.accuracy;
+    const avgRes = summary.count ? summary.totalResilience / count : DEFAULT_ENEMY_PROFILE.resilience;
+    const pressure = THREE.MathUtils.clamp(avgAgg * 0.55 + avgAcc * 0.45, 0, 1);
+    const sustain = THREE.MathUtils.clamp(avgRes * 0.6 + (1 - avgAgg) * 0.2, 0, 1);
+    const fireDelay = THREE.MathUtils.lerp(CONFIG.WEAPONS.adaptiveFireCeil, CONFIG.WEAPONS.adaptiveFireFloor, pressure);
+    PATCH_STATE.playerFireDelay = fireDelay;
+    playerState.fireTempo = fireDelay;
+    weaponState.baseHip = THREE.MathUtils.lerp(CONFIG.WEAPONS.spreadHipTight, CONFIG.WEAPONS.spreadHip, pressure);
+    weaponState.baseAds = THREE.MathUtils.lerp(CONFIG.WEAPONS.spreadAdsTight, CONFIG.WEAPONS.spreadADS, pressure * 0.9);
+    weaponState.spreadMaxHip = Math.max(
+      weaponState.baseHip * 3.1,
+      THREE.MathUtils.lerp(CONFIG.WEAPONS.spreadHipMax * 0.82, CONFIG.WEAPONS.spreadHipMax, pressure)
+    );
+    weaponState.spreadMaxAds = Math.max(
+      weaponState.baseAds * 2.1,
+      THREE.MathUtils.lerp(CONFIG.WEAPONS.spreadADSMax * 0.85, CONFIG.WEAPONS.spreadADSMax, pressure * 0.9)
+    );
+    weaponState.recoveryHip = THREE.MathUtils.lerp(
+      CONFIG.WEAPONS.spreadRecovery * 1.32,
+      CONFIG.WEAPONS.spreadRecovery,
+      sustain
+    );
+    weaponState.recoveryAds = THREE.MathUtils.lerp(
+      CONFIG.WEAPONS.spreadRecoveryADS * 1.22,
+      CONFIG.WEAPONS.spreadRecoveryADS,
+      sustain
+    );
+    const minBase = Math.min(weaponState.baseHip, weaponState.baseAds);
+    const maxCap = Math.max(weaponState.spreadMaxHip, weaponState.spreadMaxAds);
+    weaponState.spreadCurrent = THREE.MathUtils.clamp(weaponState.spreadCurrent, minBase, maxCap);
+  }
+
+  function retrofitExistingEnemies(){
+    if(!Array.isArray(enemies)) return;
+    const round = game?.round || 1;
+    for(let i = 0; i < enemies.length; i++){
+      const enemy = enemies[i];
+      if(!enemy) continue;
+      if(!enemy.profile){
+        const profile = buildEnemyProfile(round);
+        enemy.profile = profile;
+        enemy.weaponPattern = {
+          burstMin: profile.burst[0],
+          burstMax: profile.burst[1],
+          burstCadence: profile.burstCadence.slice(0, 2),
+          restCadence: profile.restCadence.slice(0, 2),
+        };
+        enemy.preferredRange = profile.preferredRange;
+        enemy.damageScalar = profile.damageScale;
+      }
+      if(enemy.mesh){
+        applyEnemyVisualProfile(enemy);
+        enemy.mesh.userData.enemyProfile = enemy.profile;
+      }
+      enemy.__profileRegistered = false;
+      registerEnemyProfile(enemy);
+    }
+  }
+
+  function applySharedEnemyTexture(material){
+    if(!material || !baseEnemyTexture) return material;
+    const previous = material.map;
+    if(previous && previous !== baseEnemyTexture && typeof previous.dispose === 'function' && !sharedTextures.has(previous)){
+      try{
+        previous.dispose();
+      }catch(err){
+        console.warn('[patch-001] Failed to dispose previous enemy material map.', err);
+      }
+    }
+    material.map = baseEnemyTexture;
+    material.needsUpdate = true;
+    return material;
+  }
+
+  function createDefaultEnemyMaterial(){
+    const material = new THREE.MeshStandardMaterial({ color:0x223344 });
+    return applySharedEnemyTexture(material);
+  }
+
+  function instantiateEnemyMaterial(){
+    const template = ctx.enemyMaterialTemplate;
+    if(!template){
+      return createDefaultEnemyMaterial();
+    }
+
+    if(Array.isArray(template)){
+      const materials = [];
+      for(let i=0;i<template.length;i++){
+        const src = template[i];
+        let clone = null;
+        if(src && typeof src.clone === 'function'){
+          try{
+            clone = src.clone();
+          }catch(err){
+            console.warn('[patch-001] Failed to clone enemy material template entry.', err);
+            clone = null;
+          }
+        }
+        if((!clone || clone === src) && src && src.isMaterial){
+          try{
+            clone = new src.constructor();
+            if(clone && clone.copy){
+              clone.copy(src);
+            }
+          }catch(err){
+            console.warn('[patch-001] Failed to copy enemy material template entry.', err);
+            clone = null;
+          }
+        }
+        if(!clone || clone === src){
+          clone = createDefaultEnemyMaterial();
+        } else {
+          applySharedEnemyTexture(clone);
+        }
+        materials.push(clone);
+      }
+      return materials;
+    }
+
+    let clone = null;
+    if(template && typeof template.clone === 'function'){
+      try{
+        clone = template.clone();
+      }catch(err){
+        console.warn('[patch-001] Failed to clone enemy material template.', err);
+        clone = null;
+      }
+    }
+    if((!clone || clone === template) && template && template.isMaterial){
+      try{
+        clone = new template.constructor();
+        if(clone && clone.copy){
+          clone.copy(template);
+        }
+      }catch(err){
+        console.warn('[patch-001] Failed to copy enemy material template.', err);
+        clone = null;
+      }
+    }
+    if(!clone || clone === template){
+      clone = createDefaultEnemyMaterial();
+    } else {
+      applySharedEnemyTexture(clone);
+    }
+    return clone;
+  }
+
+  function ensureEnemyGeometry(){
+    if(PATCH_STATE.enemyGeometry){
+      return PATCH_STATE.enemyGeometry;
+    }
+
+    const cylinderHeight = Math.max(0, ENEMY_HEIGHT - ENEMY_RADIUS * 2);
+    const radialSegments = 12;
+    const heightSegments = 6;
+
+    let geometry = null;
+
+    const tryBuild = (builder, label) => {
+      if(geometry || typeof builder !== 'function'){
+        return;
+      }
+      try{
+        geometry = new builder(ENEMY_RADIUS, cylinderHeight, heightSegments, radialSegments);
+      }catch(err){
+        console.warn(`[patch-001] Failed to create ${label} enemy geometry.`, err);
+        geometry = null;
+      }
+    };
+
+    tryBuild(THREE.CapsuleGeometry, 'CapsuleGeometry');
+    tryBuild(THREE.CapsuleBufferGeometry, 'CapsuleBufferGeometry');
+
+    if(!geometry){
+      try{
+        geometry = new THREE.CylinderGeometry(ENEMY_RADIUS, ENEMY_RADIUS, Math.max(ENEMY_HEIGHT, ENEMY_RADIUS * 2), radialSegments, 1, false);
+        if(!PATCH_STATE.enemyGeometryFallbackLogged){
+          PATCH_STATE.enemyGeometryFallbackLogged = true;
+          console.warn('[patch-001] Falling back to cylinder enemy geometry; capsule geometry unavailable.');
+        }
+      }catch(err){
+        console.error('[patch-001] Failed to create fallback enemy geometry.', err);
+        geometry = null;
+      }
+    }
+
+    if(geometry && geometry.attributes?.position){
+      const pos = geometry.attributes.position;
+      for(let i = 0; i < pos.count; i++){
+        const y = pos.getY(i);
+        const normalized = THREE.MathUtils.clamp((y + ENEMY_HALF_HEIGHT) / Math.max(ENEMY_HEIGHT, 1e-3), 0, 1);
+        let scale = 1;
+        if(normalized > 0.65){
+          scale = THREE.MathUtils.lerp(0.82, 0.58, (normalized - 0.65) / 0.35);
+        } else if(normalized > 0.35){
+          scale = THREE.MathUtils.lerp(1.28, 0.9, (normalized - 0.35) / 0.3);
+        } else {
+          scale = THREE.MathUtils.lerp(1.06, 0.92, normalized / 0.35);
+        }
+        const shoulder = Math.sin(normalized * Math.PI) * 0.06;
+        pos.setX(i, pos.getX(i) * (scale + shoulder));
+        pos.setZ(i, pos.getZ(i) * (scale + shoulder));
+      }
+      geometry.computeVertexNormals?.();
+      pos.needsUpdate = true;
+    }
+
+    if(geometry){
+      geometry.computeBoundingBox?.();
+      geometry.computeBoundingSphere?.();
+      PATCH_STATE.enemyGeometry = geometry;
+    }
+
+    return geometry;
+  }
+
+  function getStaticBounds(mesh, forceUpdate = false){
+    if(!mesh) return null;
+    let entry = staticBoundsCache.get(mesh);
+    if(!entry){
+      entry = { box: new THREE.Box3(), frame: -1 };
+      staticBoundsCache.set(mesh, entry);
+      forceUpdate = true;
+    }
+    const frameId = PATCH_STATE.frameId || 0;
+    if(forceUpdate || entry.frame !== frameId){
+      mesh.updateWorldMatrix?.(true, false);
+      const geometry = mesh.geometry;
+      if(geometry && geometry.boundingBox){
+        entry.box.copy(geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
+      } else if(geometry && geometry.computeBoundingBox){
+        geometry.computeBoundingBox();
+        entry.box.copy(geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
+      } else {
+        entry.box.setFromObject(mesh);
+      }
+      entry.frame = frameId;
+    }
+    return entry.box;
+  }
 
   function ensureWeaponModel(){
     if(PATCH_STATE.weaponParts){
@@ -721,11 +1233,12 @@ export function applyPatch(ctx){
     for(let i = 0; i < statics.length; i++){
       const mesh = statics[i];
       if(!mesh) continue;
-      const bbox = tempBox2.setFromObject(mesh);
-      if(!Number.isFinite(bbox.min.x) || !Number.isFinite(bbox.max.x) || !Number.isFinite(bbox.min.z) || !Number.isFinite(bbox.max.z)){
+      const bounds = getStaticBounds(mesh, true);
+      if(!bounds) continue;
+      if(!Number.isFinite(bounds.min.x) || !Number.isFinite(bounds.max.x) || !Number.isFinite(bounds.min.z) || !Number.isFinite(bounds.max.z)){
         continue;
       }
-      worldBounds.union(bbox);
+      worldBounds.union(bounds);
     }
     if(worldBounds.isEmpty() || !Number.isFinite(worldBounds.min.x) || !Number.isFinite(worldBounds.max.x)){
       const size = Math.max(20, world.size || 60);
@@ -846,6 +1359,7 @@ export function applyPatch(ctx){
     jumpHeld: false,
     storePausedLoop: false,
     manualPause: false,
+    fireTempo: CONFIG.WEAPONS.fireRate,
   };
   player.credits = player.credits || 0;
 
@@ -859,12 +1373,47 @@ export function applyPatch(ctx){
     recoveryAds: CONFIG.WEAPONS.spreadRecoveryADS,
   };
 
+  recalcPlayerTuning();
+
   const fireState = {
     nextFireTime: 0,
   };
 
   const coverPoints = [];
   const losCache = new Map();
+  const losCacheScratch = [];
+  const LOS_CACHE_MAX_ENTRIES = 256;
+  const LOS_CACHE_MAX_AGE = 240;
+  const LOS_CACHE_PRUNE_INTERVAL = 120;
+  let lastLosPrune = 0;
+
+  function pruneLosCache(now){
+    if(!losCache.size) return;
+    const needsAggressivePrune = losCache.size > LOS_CACHE_MAX_ENTRIES;
+    if(!needsAggressivePrune && now - lastLosPrune < LOS_CACHE_PRUNE_INTERVAL){
+      return;
+    }
+    lastLosPrune = now;
+    const cutoff = now - LOS_CACHE_MAX_AGE;
+    for(const [key, entry] of losCache){
+      if(!entry || entry.time < cutoff){
+        losCache.delete(key);
+      }
+    }
+    if(losCache.size <= LOS_CACHE_MAX_ENTRIES){
+      return;
+    }
+    losCacheScratch.length = 0;
+    for(const [key, entry] of losCache){
+      losCacheScratch.push([key, entry?.time ?? 0]);
+    }
+    losCacheScratch.sort((a, b) => a[1] - b[1]);
+    const excess = Math.max(0, losCache.size - LOS_CACHE_MAX_ENTRIES);
+    for(let i = 0; i < excess && i < losCacheScratch.length; i++){
+      losCache.delete(losCacheScratch[i][0]);
+    }
+    losCacheScratch.length = 0;
+  }
 
   // ---------------------------------------------------------------------------
   // ORIG REFS
@@ -949,7 +1498,7 @@ export function applyPatch(ctx){
       }
       playerState.jumpHeld = jumpPressed;
 
-      const effectiveADS = getAiming() && !sprinting;
+      const effectiveADS = getAiming() && !sprinting && player.alive !== false && !player.isReloading && !playerState.storeOpen;
       setADSFlag(effectiveADS);
 
       const adsTarget = effectiveADS ? 1 : 0;
@@ -1037,12 +1586,16 @@ export function applyPatch(ctx){
   }
 
   function getSpreadBase(ads){
+    const staminaRatio = CONFIG.STAMINA?.max ? THREE.MathUtils.clamp(playerState.stamina / CONFIG.STAMINA.max, 0, 1) : 1;
+    const staminaScale = THREE.MathUtils.lerp(CONFIG.WEAPONS.staminaSpreadPenalty, CONFIG.WEAPONS.staminaSpreadBonus, staminaRatio);
     if(ads){
       const base = weaponState.baseAds;
-      return playerState.crouched ? base * (CONFIG.PLAYER.crouchSpreadMultiplier * 0.85) : base;
+      const crouchScale = playerState.crouched ? CONFIG.PLAYER.crouchSpreadMultiplier * 0.8 : 1;
+      return base * staminaScale * crouchScale;
     }
     const base = weaponState.baseHip;
-    return playerState.crouched ? base * CONFIG.PLAYER.crouchSpreadMultiplier : base;
+    const crouchScale = playerState.crouched ? CONFIG.PLAYER.crouchSpreadMultiplier : 1;
+    return base * staminaScale * crouchScale;
   }
 
   function toggleCrouch(force){
@@ -1135,7 +1688,8 @@ export function applyPatch(ctx){
 
     performShot(now);
 
-    const delaySec = playerState.semiAuto ? CONFIG.WEAPONS.semiAutoDelay : CONFIG.WEAPONS.fireRate;
+    const baseFire = playerState.fireTempo ?? CONFIG.WEAPONS.fireRate;
+    const delaySec = playerState.semiAuto ? CONFIG.WEAPONS.semiAutoDelay : baseFire;
     fireState.nextFireTime = now + delaySec * 1000;
     player.fireCooldown = delaySec;
     playerState.lastShotTime = now;
@@ -1195,7 +1749,8 @@ export function applyPatch(ctx){
           damageWasHeadshot = localY >= 1.0;
           enemy.brain = enemy.brain || createEnemyBrain(enemy.spawnZone);
           enemy.brain.lastHitAt = now;
-          enemy.suppressedUntil = now + CONFIG.AI.suppressedTime * 1000;
+          const suppressionScalar = enemy.profile?.suppressionResist || 1;
+          enemy.suppressedUntil = now + CONFIG.AI.suppressedTime * 1000 * suppressionScalar;
           if(enemy.health <= 0){ removeEnemyLocal(enemy); }
           else if(enemy.mesh?.material?.emissive){
             enemy.mesh.material.emissive.setHex(0xff3333);
@@ -1359,13 +1914,14 @@ export function applyPatch(ctx){
     for(let i=0;i<statics.length;i++){
       const mesh = statics[i];
       if(!mesh) continue;
-      tempBox.setFromObject(mesh);
-      if(center.y + half <= tempBox.min.y - 0.05) continue;
-      if(center.y - half >= tempBox.max.y + 0.05) continue;
-      if(center.x + radius <= tempBox.min.x - 0.05) continue;
-      if(center.x - radius >= tempBox.max.x + 0.05) continue;
-      if(center.z + radius <= tempBox.min.z - 0.05) continue;
-      if(center.z - radius >= tempBox.max.z + 0.05) continue;
+      const bounds = getStaticBounds(mesh);
+      if(!bounds) continue;
+      if(center.y + half <= bounds.min.y - 0.05) continue;
+      if(center.y - half >= bounds.max.y + 0.05) continue;
+      if(center.x + radius <= bounds.min.x - 0.05) continue;
+      if(center.x - radius >= bounds.max.x + 0.05) continue;
+      if(center.z + radius <= bounds.min.z - 0.05) continue;
+      if(center.z - radius >= bounds.max.z + 0.05) continue;
       return true;
     }
     return false;
@@ -1394,6 +1950,54 @@ export function applyPatch(ctx){
     const zoneHeight = enemy.spawnZone?.height;
     const base = isFinite(enemy.groundHeight) ? enemy.groundHeight : (isFinite(zoneHeight) ? zoneHeight : (enemy.mesh.position.y - ENEMY_HALF_HEIGHT));
     return base + ENEMY_HALF_HEIGHT;
+  }
+
+  function zoneOccupancyInfo(zone){
+    zoneOccupancyScratch.count = 0;
+    zoneOccupancyScratch.closestSq = Infinity;
+    if(!zone || !zone.center) return zoneOccupancyScratch;
+    const radius = Math.max(ENEMY_RADIUS * 2.6, zone.radius || 0);
+    const radiusSq = radius * radius;
+    for(let i=0;i<enemies.length;i++){
+      const mesh = enemies[i]?.mesh;
+      if(!mesh) continue;
+      const dx = mesh.position.x - zone.center.x;
+      const dz = mesh.position.z - zone.center.z;
+      const distSq = dx*dx + dz*dz;
+      if(distSq <= radiusSq){
+        zoneOccupancyScratch.count += 1;
+        if(distSq < zoneOccupancyScratch.closestSq){
+          zoneOccupancyScratch.closestSq = distSq;
+        }
+      }
+    }
+    return zoneOccupancyScratch;
+  }
+
+  function zoneHasDirectLine(zonePoint, statics, playerPos){
+    tempVecC.copy(zonePoint);
+    tempVecC.y += 0.5;
+    tempVecD.subVectors(playerPos, tempVecC);
+    const distance = tempVecD.length();
+    if(distance < 1e-4){
+      helperRay.far = Infinity;
+      return true;
+    }
+    tempVecD.multiplyScalar(1 / distance);
+    helperRay.set(tempVecC, tempVecD);
+    helperRay.far = distance;
+    let blocked = false;
+    for(let i=0;i<statics.length;i++){
+      const mesh = statics[i];
+      if(!mesh) continue;
+      const hits = helperRay.intersectObject(mesh, false);
+      if(hits.length && hits[0].distance > 0.2){
+        blocked = true;
+        break;
+      }
+    }
+    helperRay.far = Infinity;
+    return !blocked;
   }
 
   function clampEnemyToZone(enemy){
@@ -1478,6 +2082,13 @@ export function applyPatch(ctx){
   }
 
   function patchedSpawnEnemy(){
+    const bodyGeometry = ensureEnemyGeometry();
+    if(!bodyGeometry){
+      registerSpawnFailure();
+      game.spawnDelay = Math.max(game.spawnDelay, nextSpawnDelay());
+      return false;
+    }
+
     if(enemies.length >= CONFIG.PERF.maxActiveEnemies){
       game.spawnDelay = Math.max(game.spawnDelay, 0.5);
       return false;
@@ -1553,9 +2164,8 @@ export function applyPatch(ctx){
     }
 
     const spawnHeight = spawnPoint.y;
-    const bodyGeometry = new THREE.CapsuleGeometry(.6,1.2,6,12);
-    const mat = ctx.enemyMaterialTemplate ? ctx.enemyMaterialTemplate.clone() : new THREE.MeshStandardMaterial({ color:0x223344 });
-    const enemyMesh = new THREE.Mesh(bodyGeometry, mat);
+    const enemyMaterial = instantiateEnemyMaterial();
+    const enemyMesh = new THREE.Mesh(bodyGeometry, enemyMaterial);
     enemyMesh.position.set(spawnPoint.x, spawnHeight + ENEMY_HALF_HEIGHT, spawnPoint.z);
     enemyMesh.castShadow = enemyMesh.receiveShadow = true;
     scene.add(enemyMesh);
@@ -1580,23 +2190,42 @@ export function applyPatch(ctx){
     firstShotMax = Math.max(firstShotMin + 0.04, Math.min(firstShotMax, engageClamp + 0.12));
     const initialFireDelay = THREE.MathUtils.randFloat(firstShotMin, firstShotMax);
 
+    const profile = buildEnemyProfile(game.round || 1);
+    const healthScalar = THREE.MathUtils.lerp(0.88, 1.28, profile.resilience);
+    const enemyHealth = baseHealth * healthScalar;
+    const chaseMultiplier = THREE.MathUtils.lerp(0.85, 1.25, profile.aggression);
+    const patrolMultiplier = THREE.MathUtils.lerp(0.72, 1.08, profile.resilience * 0.5 + profile.accuracy * 0.3);
+    const initialCooldown = Math.max(initialFireDelay, profile.restCadence[0] * 0.85);
+
     const enemy = {
       mesh: enemyMesh,
-      health: baseHealth,
-      maxHealth: baseHealth,
+      health: enemyHealth,
+      maxHealth: enemyHealth,
       state: 'patrol',
-      chaseSpeed: movementConfig.enemyChase,
-      patrolSpeed: movementConfig.enemyPatrol,
-      fireCooldown: initialFireDelay,
+      chaseSpeed: (movementConfig.enemyChase || 3.8) * chaseMultiplier,
+      patrolSpeed: (movementConfig.enemyPatrol || 2.6) * patrolMultiplier,
+      fireCooldown: initialCooldown,
       burstShotsLeft: 0,
-      aimSpread: p.aimSpread,
+      aimSpread: Math.max(THREE.MathUtils.degToRad(0.45), p.aimSpread * THREE.MathUtils.lerp(1.05, 0.62, profile.accuracy)),
       suppressedUntil: 0,
       brain: createEnemyBrain(chosenZone),
       groundHeight: spawnHeight,
+      profile,
+      weaponPattern: {
+        burstMin: profile.burst[0],
+        burstMax: profile.burst[1],
+        burstCadence: profile.burstCadence.slice(0, 2),
+        restCadence: profile.restCadence.slice(0, 2),
+      },
+      preferredRange: profile.preferredRange,
+      damageScalar: profile.damageScale,
     };
     enemy.spawnZone = chosenZone || null;
+    applyEnemyVisualProfile(enemy);
+    enemyMesh.userData.enemyProfile = profile;
     enemyMesh.userData.enemy = enemy;
     enemies.push(enemy);
+    registerEnemyProfile(enemy);
     resetSpawnFailureCounters();
     return true;
   }
@@ -1606,6 +2235,7 @@ export function applyPatch(ctx){
     if(!zones.length) return null;
     const playerPos = controls.getObject().position;
     const playerSpawn = PATCH_STATE.playerSpawn;
+    const statics = gatherStaticMeshes();
     let bestZone = zones[0];
     let bestScore = -Infinity;
     for(let i=0;i<zones.length;i++){
@@ -1614,7 +2244,25 @@ export function applyPatch(ctx){
       const dz = zone.center.z - playerPos.z;
       const dist = Math.hypot(dx, dz);
       const spawnDist = playerSpawn ? Math.hypot(zone.center.x - playerSpawn.x, zone.center.z - playerSpawn.z) : dist;
-      const score = dist + spawnDist * 0.5;
+      const radius = Math.max(4, zone.radius || 0);
+      const occupancy = zoneOccupancyInfo(zone);
+      const crowdingRadius = Math.max(ENEMY_RADIUS * 2.2, 1.6);
+      const crowdingPenalty = occupancy.closestSq < crowdingRadius * crowdingRadius ? 14 : 0;
+      const occupancyPenalty = occupancy.count * Math.max(6, radius * 0.35);
+      const zoneHeight = Number.isFinite(zone.height) ? zone.height : 0;
+      tempVecE.set(zone.center.x, zoneHeight + ENEMY_HALF_HEIGHT, zone.center.z);
+      const hasLine = zoneHasDirectLine(tempVecE, statics, playerPos);
+      let linePenalty = 0;
+      if(hasLine){
+        const safeRadius = CONFIG.SPAWN.safeRadius;
+        if(dist < safeRadius * 1.5){
+          linePenalty = (safeRadius * 1.5 - dist) * 0.55;
+        }
+      } else {
+        linePenalty = -Math.min(radius, 22) * 0.2;
+      }
+      const breathingRoom = Math.min(radius, 24) * 0.4;
+      const score = dist + spawnDist * 0.5 + breathingRoom - occupancyPenalty - crowdingPenalty - linePenalty;
       if(score > bestScore){
         bestScore = score;
         bestZone = zone;
@@ -1640,6 +2288,9 @@ export function applyPatch(ctx){
       hasCoverTarget: false,
       lastKnownPlayerPos: new THREE.Vector3(),
       lastHitAt: -Infinity,
+      alertUntil: 0,
+      seeingPlayer: false,
+      lastSeenAt: -Infinity,
     };
   }
 
@@ -1690,6 +2341,20 @@ export function applyPatch(ctx){
     }
 
     tempVecC.set(point.x, resolved + ENEMY_HALF_HEIGHT, point.z);
+    const minEnemyGap = ENEMY_RADIUS * 2.6;
+    const minEnemyGapSq = minEnemyGap * minEnemyGap;
+    for(let i=0;i<enemies.length;i++){
+      const other = enemies[i];
+      const mesh = other?.mesh;
+      if(!mesh) continue;
+      tempVecD.copy(mesh.position);
+      tempVecD.y = tempVecC.y;
+      const dx = tempVecD.x - tempVecC.x;
+      const dz = tempVecD.z - tempVecC.z;
+      if(dx*dx + dz*dz < minEnemyGapSq){
+        return false;
+      }
+    }
     tempVecA.subVectors(playerPos, tempVecC);
     const distance = tempVecA.length();
     if(distance < 1e-3){
@@ -1717,6 +2382,7 @@ export function applyPatch(ctx){
 
   function patchedUpdateEnemies(delta){
     const now = performance.now();
+    pruneLosCache(now);
     const playerPos = controls.getObject().position;
     const statics = gatherStaticMeshes();
     const engageClamp = Number.isFinite(CONFIG.AI.engageDelay) ? CONFIG.AI.engageDelay : 0.3;
@@ -1755,6 +2421,58 @@ export function applyPatch(ctx){
         brain.lastKnownPlayerPos.y = desiredEnemyCenterY(enemy);
       }
 
+      const profile = enemy.profile || DEFAULT_ENEMY_PROFILE;
+      const weaponPattern = enemy.weaponPattern || {
+        burstMin: DEFAULT_ENEMY_PROFILE.burst?.[0] ?? 2,
+        burstMax: DEFAULT_ENEMY_PROFILE.burst?.[1] ?? 3,
+        burstCadence: DEFAULT_ENEMY_PROFILE.burstCadence || CONFIG.AI.focusBurstOffset,
+        restCadence: DEFAULT_ENEMY_PROFILE.restCadence || CONFIG.AI.burstCooldown,
+      };
+      const burstMin = Math.max(1, Math.round(weaponPattern.burstMin || 2));
+      const burstMax = Math.max(burstMin, Math.round(weaponPattern.burstMax || burstMin + 1));
+      const burstCadence = Array.isArray(weaponPattern.burstCadence) && weaponPattern.burstCadence.length >= 2
+        ? weaponPattern.burstCadence
+        : (DEFAULT_ENEMY_PROFILE.burstCadence || CONFIG.AI.focusBurstOffset);
+      const restCadence = Array.isArray(weaponPattern.restCadence) && weaponPattern.restCadence.length >= 2
+        ? weaponPattern.restCadence
+        : (DEFAULT_ENEMY_PROFILE.restCadence || CONFIG.AI.burstCooldown);
+      const preferredRange = enemy.preferredRange || profile.preferredRange || CONFIG.STIM.focusRadius;
+      const engageRange = Math.max(CONFIG.STIM.focusRadius, preferredRange);
+      const strafeAggression = THREE.MathUtils.clamp(profile.aggression * 0.8 + profile.accuracy * 0.2, 0, 1);
+      const retreatAggression = THREE.MathUtils.clamp(1 - profile.resilience * 0.6, 0, 1);
+      const suppressionResist = profile.suppressionResist || 1;
+      const detectionSkill = THREE.MathUtils.clamp(profile.accuracy * 0.6 + profile.aggression * 0.4, 0, 1);
+      const reactionFloor = Number.isFinite(CONFIG.AI.reactionFloor) ? CONFIG.AI.reactionFloor : 0.05;
+      const reactionCeil = Number.isFinite(CONFIG.AI.reactionCeil) ? CONFIG.AI.reactionCeil : 0.16;
+      const awarenessMemorySec = Number.isFinite(CONFIG.AI.awarenessMemory) ? CONFIG.AI.awarenessMemory : 0.9;
+      const awarenessMemoryMs = Math.max(awarenessMemorySec * 1000, 200);
+      const alertDistance = Number.isFinite(CONFIG.AI.alertDistance) ? CONFIG.AI.alertDistance : engageRange;
+      const previouslySeeing = brain.seeingPlayer === true;
+      if(hasLine){
+        brain.lastSeenAt = now;
+        brain.seeingPlayer = true;
+        const reactionTarget = THREE.MathUtils.lerp(reactionCeil, reactionFloor, detectionSkill);
+        if(!previouslySeeing){
+          enemy.fireCooldown = Math.min(enemy.fireCooldown, reactionTarget);
+        }
+        const alertExtension = awarenessMemoryMs * THREE.MathUtils.lerp(0.7, 1.2, detectionSkill);
+        brain.alertUntil = Math.max(brain.alertUntil || 0, now + alertExtension);
+      } else if(previouslySeeing && now - brain.lastSeenAt > 180){
+        brain.seeingPlayer = false;
+      }
+
+      if(distance < alertDistance){
+        const closeBonus = THREE.MathUtils.lerp(520, 320, detectionSkill);
+        brain.alertUntil = Math.max(brain.alertUntil || 0, now + closeBonus);
+      } else if(brain.alertUntil && now > brain.alertUntil && brain.lastSeenAt > 0){
+        const memoryHold = awarenessMemoryMs * THREE.MathUtils.lerp(0.35, 0.75, detectionSkill);
+        if(now - brain.lastSeenAt < memoryHold){
+          brain.alertUntil = now + memoryHold * 0.35;
+        }
+      }
+
+      const alertActive = hasLine || (brain.alertUntil || 0) > now;
+
       switch(brain.state){
         case 'patrol': {
           const zone = enemy.spawnZone;
@@ -1764,7 +2482,9 @@ export function applyPatch(ctx){
             brain.wanderTarget.distanceToSquared(mesh.position) < 0.5
           ){
             const center = zone?.center || mesh.position;
-            const radius = zone ? Math.max(1.5, (zone.radius || 6) * 0.6) : 6;
+            const radius = zone
+              ? Math.max(1.5, (zone.radius || 6) * THREE.MathUtils.lerp(0.6, 1.0, profile.aggression * 0.25 + profile.resilience * 0.35))
+              : 6;
             const wanderAngle = Math.random() * Math.PI * 2;
             const wanderDist = Math.sqrt(Math.random()) * radius;
             brain.wanderTarget.set(
@@ -1772,14 +2492,18 @@ export function applyPatch(ctx){
               desiredEnemyCenterY(enemy),
               center.z + Math.sin(wanderAngle) * wanderDist
             );
-            brain.nextWanderAt = now + THREE.MathUtils.randFloat(900, 1600);
+            const wanderDelay = THREE.MathUtils.randFloat(900, 1600) * THREE.MathUtils.lerp(0.75, 1.2, 1 - profile.aggression * 0.5);
+            brain.nextWanderAt = now + wanderDelay;
           }
           brain.hasCoverTarget = false;
-          moveEnemyTowards(enemy, brain.wanderTarget, Math.max(enemy.patrolSpeed * 0.75, 0.5), delta, statics);
+          const patrolSpeed = Math.max(enemy.patrolSpeed * THREE.MathUtils.lerp(0.78, 1.12, profile.aggression * 0.25 + profile.resilience * 0.35), 0.45);
+          moveEnemyTowards(enemy, brain.wanderTarget, patrolSpeed, delta, statics);
           mesh.lookAt(playerPos.x, mesh.position.y, playerPos.z);
-          if((hasLine && distance < CONFIG.STIM.focusRadius * 1.6) || suppressed){
+          const engageThreshold = engageRange * THREE.MathUtils.lerp(1.35, 1.75, profile.aggression);
+          if(((alertActive && distance < engageThreshold) || (hasLine && distance < engageThreshold * 1.05)) || suppressed){
             brain.state = 'attack';
-            brain.strafeUntil = now + THREE.MathUtils.randFloat(500, 1400);
+            const strafeWindow = THREE.MathUtils.randFloat(500, 1400) * THREE.MathUtils.lerp(0.85, 1.2, strafeAggression);
+            brain.strafeUntil = now + strafeWindow;
           }
           break;
         }
@@ -1787,40 +2511,51 @@ export function applyPatch(ctx){
           mesh.lookAt(playerPos.x, mesh.position.y, playerPos.z);
           if(now > brain.strafeUntil){
             brain.strafeDir = Math.random() < 0.5 ? -1 : 1;
-            brain.strafeUntil = now + THREE.MathUtils.randFloat(600, 1400);
+            const strafeWindow = THREE.MathUtils.randFloat(520, 1400) * THREE.MathUtils.lerp(0.9, 1.25, strafeAggression);
+            brain.strafeUntil = now + strafeWindow;
           }
           brain.hasCoverTarget = false;
           tempVecF.set(0, 0, 0);
-          if(distance > CONFIG.STIM.focusRadius * 1.1){
-            tempVecF.addScaledVector(toPlayerDir, enemy.chaseSpeed * 0.8);
-          } else if(distance < CONFIG.STIM.focusRadius * 0.6){
-            tempVecF.addScaledVector(toPlayerDir, -enemy.chaseSpeed * 0.6);
+          const rangeBuffer = THREE.MathUtils.lerp(0.3, 0.12, profile.accuracy);
+          if(distance > engageRange * (1 + rangeBuffer)){
+            tempVecF.addScaledVector(toPlayerDir, enemy.chaseSpeed * THREE.MathUtils.lerp(0.65, 1.05, profile.aggression));
+          } else if(distance < engageRange * Math.max(0.45, 1 - rangeBuffer * 1.2)){
+            tempVecF.addScaledVector(toPlayerDir, -enemy.chaseSpeed * THREE.MathUtils.lerp(0.45, 0.82, retreatAggression));
           }
           if(toPlayerDir.lengthSq() > 1e-6){
             tempVecC.set(toPlayerDir.z, 0, -toPlayerDir.x);
             if(tempVecC.lengthSq() > 1e-6){
               tempVecC.normalize();
-              tempVecF.addScaledVector(tempVecC, enemy.chaseSpeed * 0.55 * brain.strafeDir);
+              const strafeSpeed = enemy.chaseSpeed * THREE.MathUtils.lerp(0.42, 0.88, strafeAggression);
+              tempVecF.addScaledVector(tempVecC, strafeSpeed * brain.strafeDir);
             }
           }
           applyEnemyVelocity(enemy, tempVecF, delta, statics);
-          if(!hasLine || suppressed){
+          if((!hasLine && !(brain.alertUntil && brain.alertUntil > now)) || suppressed){
             brain.state = 'flank';
-            brain.flankUntil = now + CONFIG.STIM.flankLoSBlock * 1000;
-            brain.repositionUntil = now + CONFIG.STIM.suppressionRelocate * 1000;
+            const flankDelay = CONFIG.STIM.flankLoSBlock * 1000 * THREE.MathUtils.lerp(0.85, 1.25, strafeAggression);
+            brain.flankUntil = now + flankDelay;
+            brain.repositionUntil = now + CONFIG.STIM.suppressionRelocate * 1000 * suppressionResist;
             brain.hasCoverTarget = false;
             enemy.burstShotsLeft = 0;
             break;
           }
           if(enemy.fireCooldown <= 0){
             if(enemy.burstShotsLeft <= 0){
-              enemy.burstShotsLeft = THREE.MathUtils.randInt(2, 4);
+              enemy.burstShotsLeft = THREE.MathUtils.randInt(burstMin, burstMax);
             }
-            patchedEnemyHitscanShoot(enemy);
+            patchedEnemyHitscanShoot(enemy, delta, {
+              suppressed,
+              distance,
+              toPlayerDir,
+              now,
+              playerPos,
+              profile,
+            });
             enemy.burstShotsLeft -= 1;
             enemy.fireCooldown = enemy.burstShotsLeft > 0
-              ? THREE.MathUtils.randFloat(CONFIG.AI.focusBurstOffset[0], CONFIG.AI.focusBurstOffset[1])
-              : THREE.MathUtils.randFloat(CONFIG.AI.burstCooldown[0], CONFIG.AI.burstCooldown[1]);
+              ? THREE.MathUtils.randFloat(burstCadence[0], burstCadence[1])
+              : THREE.MathUtils.randFloat(restCadence[0], restCadence[1]);
           }
           break;
         }
@@ -1835,13 +2570,14 @@ export function applyPatch(ctx){
             brain.coverTarget.y = desiredEnemyCenterY(enemy);
             brain.hasCoverTarget = true;
           }
-          const distToCover = moveEnemyTowards(enemy, brain.coverTarget, enemy.chaseSpeed, delta, statics);
+          const relocateSpeed = enemy.chaseSpeed * THREE.MathUtils.lerp(0.78, 1.08, profile.aggression);
+          const distToCover = moveEnemyTowards(enemy, brain.coverTarget, relocateSpeed, delta, statics);
           mesh.lookAt(playerPos.x, mesh.position.y, playerPos.z);
-          if(hasLine && now > brain.flankUntil){
+          if((alertActive && now > brain.flankUntil) || (hasLine && now > brain.flankUntil)){
             brain.state = 'attack';
             brain.hasCoverTarget = false;
-          } else if(distToCover < 0.75 || now > brain.repositionUntil){
-            brain.state = hasLine ? 'attack' : 'patrol';
+          } else if(distToCover < THREE.MathUtils.lerp(0.9, 0.55, profile.accuracy) || now > brain.repositionUntil){
+            brain.state = alertActive || hasLine ? 'attack' : 'patrol';
             brain.hasCoverTarget = false;
           }
           break;
@@ -1849,10 +2585,13 @@ export function applyPatch(ctx){
       }
 
       if(previousState !== brain.state && brain.state === 'attack'){
-        enemy.fireCooldown = Math.min(enemy.fireCooldown, engageClamp);
+        const engageDelay = engageClamp * THREE.MathUtils.lerp(0.85, 1.15, 1 - profile.aggression);
+        enemy.fireCooldown = Math.min(enemy.fireCooldown, engageDelay);
       }
       if(brain.state === 'attack' && hasLine && enemy.fireCooldown > reengageClamp){
-        enemy.fireCooldown = Math.max(reengageClamp, enemy.fireCooldown - delta * 1.5);
+        const clampTarget = reengageClamp * THREE.MathUtils.lerp(0.75, 1.05, 1 - profile.accuracy);
+        const cooldownPull = delta * THREE.MathUtils.lerp(1.2, 1.8, profile.aggression);
+        enemy.fireCooldown = Math.max(clampTarget, enemy.fireCooldown - cooldownPull);
       }
 
       enemy.state = brain.state;
@@ -1878,7 +2617,7 @@ export function applyPatch(ctx){
     mesh.position.addScaledVector(tempVecA, speed * delta);
   }
 
-  function patchedEnemyHitscanShoot(enemy){
+  function patchedEnemyHitscanShoot(enemy, delta = 0, context = {}){
     const origin = borrowVec3().copy(enemy.mesh.position);
     const forward = borrowVec3();
     enemy.mesh.getWorldDirection(forward);
@@ -1899,7 +2638,26 @@ export function applyPatch(ctx){
 
     const target = borrowVec3().copy(controls.getObject().position);
     target.y += CONFIG.PLAYER.baseHeight;
+    const profile = context.profile || enemy.profile || DEFAULT_ENEMY_PROFILE;
+    const playerVel = borrowVec3();
+    if(player.velocity && typeof player.velocity.x === 'number'){
+      playerVel.copy(player.velocity);
+    } else {
+      playerVel.set(0, 0, 0);
+    }
+    const distance = context.distance ?? origin.distanceTo(target);
+    const leadTime = (profile.leadTime || CONFIG.AI.leadFactor) * Math.min(1.4, Math.max(0.4, distance / 18));
+    target.addScaledVector(playerVel, leadTime);
     const dir = borrowVec3().subVectors(target, origin).normalize();
+    const jitterBase = profile.aimJitter || DEFAULT_ENEMY_PROFILE.aimJitter || THREE.MathUtils.degToRad(1.2);
+    const jitterScale = (context.suppressed ? jitterBase * 1.45 : jitterBase) * THREE.MathUtils.lerp(1.2, 0.85, profile.accuracy || 0.5);
+    if(jitterScale > 0.0001){
+      const yawJitter = (Math.random() * 2 - 1) * jitterScale;
+      const pitchJitter = (Math.random() * 2 - 1) * jitterScale * 0.6;
+      tempEuler.set(pitchJitter, yawJitter, 0);
+      tempQuat.setFromEuler(tempEuler);
+      dir.applyQuaternion(tempQuat).normalize();
+    }
     helperRay.set(origin, dir);
     const statics = gatherStaticMeshes();
     const hits = helperRay.intersectObjects(statics, false);
@@ -1914,13 +2672,19 @@ export function applyPatch(ctx){
     }
 
     let hitPoint = borrowVec3().copy(origin).addScaledVector(dir, 100);
+    const damageScale = enemy.damageScalar || profile.damageScale || 1;
+    let damage = (difficulty.params?.enemyDamage || 6) * damageScale;
+    if(context.suppressed){
+      damage *= CONFIG.AI.flinchSuppression;
+    }
     if(!blocked){
-      patchedDamagePlayer(difficulty.params.enemyDamage);
+      patchedDamagePlayer(damage);
       hitPoint.copy(playerPos);
     } else if(hits.length){
       hitPoint.copy(hits[0].point);
     }
     spawnTracer(origin, hitPoint);
+    releaseVec3(playerVel);
     releaseVec3(playerPos);
     releaseVec3(target);
     releaseVec3(origin);
@@ -1994,12 +2758,21 @@ export function applyPatch(ctx){
 
   function handleSpawning(delta){
     if(game.state !== 'spawning') return;
-    if(enemies.length >= CONFIG.SPAWN.concurrentCap) return;
     if(game.spawnQueue < 0){
       game.spawnQueue = 0;
     }
     game.spawnDelay -= delta;
-    if(game.spawnDelay <= 0 && game.spawnQueue > 0){
+    const cadence = CONFIG.SPAWN.spawnCadence;
+    let maxCatchup = -0.75;
+    if(Array.isArray(cadence) && cadence.length >= 2){
+      const minWindow = Math.max(0.12, Math.min(cadence[0], cadence[1]));
+      maxCatchup = -minWindow * 1.5;
+    }
+    if(game.spawnDelay < maxCatchup){
+      game.spawnDelay = maxCatchup;
+    }
+    const canAttemptSpawn = enemies.length < CONFIG.SPAWN.concurrentCap;
+    if(canAttemptSpawn && game.spawnDelay <= 0 && game.spawnQueue > 0){
       if(patchedSpawnEnemy()){
         game.spawnQueue -= 1;
         game.spawnDelay = nextSpawnDelay();
@@ -2066,10 +2839,13 @@ export function applyPatch(ctx){
     if(!enemy) return;
     const idx = enemies.indexOf(enemy);
     if(idx !== -1){
+      unregisterEnemyProfile(enemy);
       maybeDropLoot(enemy.mesh?.position || controls.getObject().position);
       scene.remove(enemy.mesh);
       if(enemy.mesh){
-        enemy.mesh.geometry?.dispose?.();
+        if(enemy.mesh.geometry && enemy.mesh.geometry !== PATCH_STATE.enemyGeometry){
+          enemy.mesh.geometry.dispose?.();
+        }
         if(enemy.mesh.material){
           if(Array.isArray(enemy.mesh.material)){
             enemy.mesh.material.forEach(m=>disposeMaterial(m));
@@ -2095,13 +2871,37 @@ export function applyPatch(ctx){
     }
   }
 
+  function disposeTexture(tex){
+    if(!tex || typeof tex !== 'object' || !tex.isTexture) return;
+    if(sharedTextures.has(tex)) return;
+    if(tex.image && (Number.isFinite(tex.image.width) || Number.isFinite(tex.image.height))){
+      tex.dispose?.();
+      return;
+    }
+    if(tex.source && tex.source.data){
+      tex.dispose?.();
+      return;
+    }
+    tex.dispose?.();
+  }
+
   function disposeMaterial(mat){
     if(!mat) return;
-    if(mat.map && mat.map.image && mat.map.image.width){
-      mat.map.dispose?.();
+    if(Array.isArray(mat)){
+      for(let i=0;i<mat.length;i++){
+        disposeMaterial(mat[i]);
+      }
+      return;
     }
-    if(mat.normalMap && mat.normalMap.image && mat.normalMap.image.width){
-      mat.normalMap.dispose?.();
+    for(let i=0;i<MATERIAL_TEXTURE_PROPS.length;i++){
+      const prop = MATERIAL_TEXTURE_PROPS[i];
+      const tex = mat[prop];
+      if(!tex || typeof tex !== 'object' || !tex.isTexture) continue;
+      if(sharedTextures.has(tex)) continue;
+      disposeTexture(tex);
+      if(mat[prop] === tex){
+        mat[prop] = null;
+      }
     }
     mat.dispose?.();
   }
@@ -2390,6 +3190,7 @@ export function applyPatch(ctx){
   }
 
   function simulate(dt){
+    PATCH_STATE.frameId = (PATCH_STATE.frameId || 0) + 1;
     enforceLookConsistency();
     const now = performance.now();
     player.fireCooldown = Math.max(0, (fireState.nextFireTime - now) / 1000);
@@ -2671,6 +3472,8 @@ export function applyPatch(ctx){
   functions.damagePlayer = patchedDamagePlayer;
   functions.showRoundBanner = patchedShowRoundBanner;
 
+  retrofitExistingEnemies();
+
   functions.animate = () => {};
   if((game.state === undefined || game.state === null || game.state === 'waiting') && (game.spawnQueue ?? 0) <= 0 && enemies.length === 0){
     patchedStartNextRound();
@@ -2692,6 +3495,29 @@ export function applyPatch(ctx){
       console.warn('[patch-001] Failed to stop loop during dispose.', err);
     }
 
+    PATCH_STATE.enemyProfileSummary = {
+      count: 0,
+      totalAggression: 0,
+      totalAccuracy: 0,
+      totalResilience: 0,
+    };
+    PATCH_STATE.playerFireDelay = null;
+    playerState.fireTempo = CONFIG.WEAPONS.fireRate;
+    if(Array.isArray(enemies)){
+      for(const enemy of enemies){
+        if(enemy) enemy.__profileRegistered = false;
+      }
+    }
+
+    if(globalNS.lights){
+      for(const light of globalNS.lights){
+        if(light && light.parent){
+          light.parent.remove(light);
+        }
+      }
+      globalNS.lights = null;
+    }
+
     if(boundFlags.input){
       document.removeEventListener('keydown', onKeyDown, false);
       document.removeEventListener('keyup', onKeyUp, false);
@@ -2706,6 +3532,11 @@ export function applyPatch(ctx){
 
     if(renderer.shadowMap){
       renderer.shadowMap.enabled = originalShadowEnabled;
+    }
+
+    if(PATCH_STATE.enemyGeometry){
+      PATCH_STATE.enemyGeometry.dispose?.();
+      PATCH_STATE.enemyGeometry = null;
     }
 
     if(perfOverlay && typeof perfOverlay.remove === 'function'){
