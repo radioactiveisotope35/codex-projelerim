@@ -171,11 +171,12 @@
     renderer.domElement.addEventListener('click',()=>{ if(!player.alive) return; controls.lock(); });
     let initialLockHandled=false;
     controls.addEventListener('lock',()=>{ crosshairEl.style.display='block'; document.getElementById('info').style.display='none'; weaponGroup.visible=true; if(!initialLockHandled && game.state==='waiting'){ startNextRound(); initialLockHandled=true; } });
-    controls.addEventListener('unlock',()=>{ crosshairEl.style.display='none'; document.getElementById('info').style.display='block'; weaponGroup.visible=false; muzzleFlash.visible=false; aiming=false; });
+    controls.addEventListener('unlock',()=>{ crosshairEl.style.display='none'; document.getElementById('info').style.display='block'; weaponGroup.visible=false; muzzleFlash.visible=false; aiming=false; shooting=false; setADS(false); });
 
     // Helpers
     const playerCollider=new THREE.Box3(), tempBox=new THREE.Box3(), enemyCollider=new THREE.Box3(), muzzleWorldPosition=new THREE.Vector3();
     const raycaster=new THREE.Raycaster(), tmpVec=new THREE.Vector3(), tmpDir=new THREE.Vector3(), tmpQuat=new THREE.Quaternion(), tmpEuler=new THREE.Euler(0,0,0,'YXZ');
+    const spawnCandidate=new THREE.Vector3();
 
     // Spread
     let spreadBaseHip=THREE.MathUtils.degToRad(.35), spreadBaseADS=THREE.MathUtils.degToRad(.14);
@@ -189,7 +190,8 @@
     // Tracers & effects
     const tracers=[]; function spawnTracer(from,to,opacity=.8){ const g=new THREE.BufferGeometry().setFromPoints([from.clone(),to.clone()]); const m=new THREE.LineBasicMaterial({transparent:true,opacity}); const line=new THREE.Line(g,m); scene.add(line); tracers.push({line,life:.06}); }
     function showHitmarker(){ hitmarkerEl.classList.remove('hitmarker--show'); void hitmarkerEl.offsetWidth; hitmarkerEl.classList.add('hitmarker--show'); }
-    function screenShake(intensity=.02,time=.08){ shake.time=time; shake.intensity=intensity; } const shake={time:0,intensity:0};
+    function screenShake(intensity=.02,time=.08){ shake.time=time; shake.intensity=intensity; shake.duration=time; }
+    const shake={ time:0, intensity:0, duration:0, offset:new THREE.Vector3() };
     function crosshairBloom(){ crosshairEl.style.transform='translate(-50%,-50%) scale(1.25)'; setTimeout(()=>{ crosshairEl.style.transform='translate(-50%,-50%) scale(1)'; },70); }
 
     // Noise/hearing
@@ -217,9 +219,42 @@
 
     // Enemies (same AI as D)
     function spawnEnemy(){
-      const spawnRadius=world.size/2 - 6; const angle=Math.random()*Math.PI*2; const distance=THREE.MathUtils.randFloat(spawnRadius*.5,spawnRadius); const x=Math.cos(angle)*distance, z=Math.sin(angle)*distance;
+      const spawnRadius=world.size/2 - 6;
+      const statics=[...world.walls,...world.obstacles];
+      const playerPos=controls.getObject().position;
+      const minPlayerDistSq=14*14;
+      const minEnemyDistSq=3.4*3.4;
+      const clearance=0.9;
+      let found=false;
+      for(let attempt=0; attempt<28 && !found; attempt++){
+        const angle=Math.random()*Math.PI*2;
+        const distance=THREE.MathUtils.randFloat(spawnRadius*.5,spawnRadius);
+        spawnCandidate.set(Math.cos(angle)*distance,0,Math.sin(angle)*distance);
+        const dx=playerPos.x-spawnCandidate.x;
+        const dz=playerPos.z-spawnCandidate.z;
+        if(dx*dx+dz*dz<minPlayerDistSq) continue;
+        let blocked=false;
+        for(const obj of statics){
+          tempBox.setFromObject(obj);
+          if(spawnCandidate.x>tempBox.min.x-clearance && spawnCandidate.x<tempBox.max.x+clearance && spawnCandidate.z>tempBox.min.z-clearance && spawnCandidate.z<tempBox.max.z+clearance){ blocked=true; break; }
+        }
+        if(blocked) continue;
+        for(const other of enemies){
+          const mesh=other.mesh; if(!mesh) continue;
+          const ox=mesh.position.x-spawnCandidate.x;
+          const oz=mesh.position.z-spawnCandidate.z;
+          if(ox*ox+oz*oz<minEnemyDistSq){ blocked=true; break; }
+        }
+        if(blocked) continue;
+        found=true;
+      }
+      if(!found){
+        const fallbackAngle=Math.random()*Math.PI*2;
+        const fallbackDist=spawnRadius*.75;
+        spawnCandidate.set(Math.cos(fallbackAngle)*fallbackDist,0,Math.sin(fallbackAngle)*fallbackDist);
+      }
       const bodyGeometry=new THREE.CapsuleGeometry(.6,1.2,6,12); const mat=enemyMaterialTemplate.clone(); mat.map=enemyUniformTexture.clone(); mat.color.setHSL(THREE.MathUtils.randFloat(.55,.62),.45,.55);
-      const enemyMesh=new THREE.Mesh(bodyGeometry,mat); enemyMesh.position.set(x,1.5,z); enemyMesh.castShadow=enemyMesh.receiveShadow=true; scene.add(enemyMesh);
+      const enemyMesh=new THREE.Mesh(bodyGeometry,mat); enemyMesh.position.set(spawnCandidate.x,1.5,spawnCandidate.z); enemyMesh.castShadow=enemyMesh.receiveShadow=true; scene.add(enemyMesh);
       const p = difficulty.params;
       const enemy={ mesh:enemyMesh, health:85+game.round*6, maxHealth:85+game.round*6, state:'patrol', subTimer:0, targetPoint:new THREE.Vector3(), chaseSpeed:movementConfig.enemyChase, patrolSpeed:movementConfig.enemyPatrol, lastSeenPlayerAt:new THREE.Vector3(), fireCooldown:THREE.MathUtils.randFloat(.8,1.4), burstShotsLeft:0, burstSize:THREE.MathUtils.randInt(p.burstSize[0], p.burstSize[1]), burstGap:.14, restAfterBurst:p.restAfterBurst, aimSpread:p.aimSpread, strafeTimer:0, strafeDir:(Math.random()<.5?-1:1), firstShotArm:THREE.MathUtils.randFloat(p.firstShotDelay[0], p.firstShotDelay[1]), suppressedUntil:0 };
       pickNewPatrolPoint(enemy); enemies.push(enemy);
@@ -229,11 +264,11 @@
     function hasLineOfSight(from,to){ const dir=tmpDir.subVectors(to,from).normalize(); raycaster2.set(from.clone().add(new THREE.Vector3(0,1.3,0)),dir); const statics=[...world.walls,...world.obstacles]; const hits=raycaster2.intersectObjects(statics,false); if(!hits.length) return true; const dist=from.distanceTo(to); return hits[0].distance > dist-0.5; }
     function nearestCoverPoint(enemy){ const epos=enemy.mesh.position, ppos=controls.getObject().position; let best=null, bestDist=Infinity; for(const ob of world.obstacles){ const b=new THREE.Box3().setFromObject(ob); const c=b.getCenter(new THREE.Vector3()); const d=epos.distanceTo(c); if(d<bestDist){ bestDist=d; best={box:b, center:c, mesh:ob}; } } if(!best) return null; const away=new THREE.Vector3().subVectors(best.center,ppos).setY(0).normalize(); const half=best.box.getSize(new THREE.Vector3()).multiplyScalar(.5); const offset=new THREE.Vector3(away.x*half.x,0,away.z*half.z); return best.center.clone().add(offset.multiplyScalar(1.1)); }
 
-    function enemyHitscanShoot(enemy){
+    function enemyHitscanShoot(enemy, delta){
       const p = difficulty.params;
       const now = performance.now();
       if(now - game.roundStartAt < 1200) return;
-      if(enemy.firstShotArm>0){ enemy.firstShotArm -= clock.getDelta(); return; }
+      const dt = Number.isFinite(delta) ? delta : 0.016;
       const origin=enemy.mesh.position.clone().add(new THREE.Vector3(0,1.3,0));
       let toPlayer=controls.getObject().position.clone().add(new THREE.Vector3(0,1,0)).sub(origin).normalize();
       const extraSpread = now < enemy.suppressedUntil ? THREE.MathUtils.degToRad(2.2) : 0;
@@ -282,7 +317,7 @@
     function spawnImpactDecal(point, normal=new THREE.Vector3(0,1,0)){ const s=new THREE.Sprite(new THREE.SpriteMaterial({ map:muzzleFlashTexture, color:0xddddff, blending:THREE.AdditiveBlending, transparent:true, opacity:.7 })); s.scale.set(.5,.5,.5); s.position.copy(point); if(normal){ const q=new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1), normal.clone().normalize()); s.quaternion.copy(q);} scene.add(s); setTimeout(()=>{ scene.remove(s); },80); }
 
     // Loot
-    function maybeDropLoot(pos){ const roll=Math.random(); if(roll>0.6) return; const type=roll<0.18?'med':'ammo'; const amount=type==='med'?THREE.MathUtils.randInt(20,35):THREE.MathUtils.randInt(20,60); const mesh=buildLootMesh(type); mesh.position.copy(pos).add(new THREE.Vector3(0,.5,0)); mesh.rotation.y=Math.random()*Math.PI*2; scene.add(mesh); lootItems.push({mesh,type,amount,bob:Math.random()*Math.PI*2}); }
+    function maybeDropLoot(pos){ const roll=Math.random(); if(roll>0.6) return; const type=roll<0.18?'med':'ammo'; const amount=type==='med'?THREE.MathUtils.randInt(20,35):THREE.MathUtils.randInt(20,60); const mesh=buildLootMesh(type); mesh.position.copy(pos).add(new THREE.Vector3(0,.5,0)); mesh.rotation.y=Math.random()*Math.PI*2; scene.add(mesh); lootItems.push({mesh,type,amount,bob:Math.random()*Math.PI*2,baseY:mesh.position.y}); }
     function buildLootMesh(type){ const g=type==='med'? new THREE.TorusGeometry(.35,.12,12,24) : new THREE.BoxGeometry(.7,.4,.5); const m=new THREE.MeshStandardMaterial({ color:type==='med'?0x4ef58f:0xffd24d, emissive:type==='med'?0x0a3318:0x332508, metalness:.2, roughness:.35 }); const mesh=new THREE.Mesh(g,m); mesh.castShadow=mesh.receiveShadow=true; const icon=new THREE.Sprite(new THREE.SpriteMaterial({ map:null, color:type==='med'?0x9fffe0:0xfff1b3, transparent:true, opacity:.9 })); icon.scale.set(.45,.45,.45); icon.position.set(0,.5,0); mesh.add(icon); return mesh; }
     function tryPickupLoot(){ const p=controls.getObject().position; for(let i=lootItems.length-1;i>=0;i--){ const l=lootItems[i]; if(l.mesh.position.distanceTo(p)<1.7){ if(l.type==='ammo'){ const old=player.reserve; player.reserve=Math.min(player.reserveMax, player.reserve+l.amount); if(player.isReloading===false && player.ammo===0) reloadWeapon(); updateAmmoDisplay(); showPickup(`+${player.reserve-old} mermi`); } else { const old=player.health; player.health=Math.min(100, player.health+l.amount); const r=player.health/100; healthBarEl.style.width=`${r*100}%`; showPickup(`+${player.health-old} can`);} scene.remove(l.mesh); lootItems.splice(i,1);} } }
     function showPickup(text){ pickupBannerEl.textContent=text; pickupBannerEl.classList.add('show-pickup'); setTimeout(()=>pickupBannerEl.classList.remove('show-pickup'),600); }
@@ -323,9 +358,10 @@
     function updatePlayer(delta){
       if(!controls.isLocked) return;
       const sprinting=keyState['ShiftLeft']||keyState['ShiftRight'];
-      // sprint yaparken nişan iptal
-      if(sprinting) aiming=false;
-      setADS(aiming);
+      // ADS only if the input is held and player is free to aim
+      const wantsADS = aiming && player.alive && !player.isReloading;
+      const effectiveADS = wantsADS && !sprinting;
+      setADS(effectiveADS);
 
       // ADS transition
       const target = isADS ? 1 : 0;
@@ -354,14 +390,28 @@
       // recovery
       const recRate = isADS ? THREE.MathUtils.degToRad(1.7) : spreadRecoverRate;
       spreadCur = Math.max(base, spreadCur - recRate*delta);
-      if(shake.time>0){ shake.time-=delta; const i=shake.intensity; camera.position.x += (Math.random()*2-1)*i*.2; camera.position.y += (Math.random()*2-1)*i*.1; }
+      if(shake.offset.lengthSq()>0){
+        camera.position.sub(shake.offset);
+        shake.offset.set(0,0,0);
+      }
+      if(shake.time>0){
+        shake.time=Math.max(0, shake.time-delta);
+        const falloff = shake.duration>0 ? shake.time/shake.duration : 0;
+        const intensity = shake.intensity * (0.6 + 0.4 * falloff);
+        shake.offset.set(
+          (Math.random()*2-1)*intensity,
+          (Math.random()*2-1)*intensity*0.6,
+          (Math.random()*2-1)*intensity*0.4
+        );
+        camera.position.add(shake.offset);
+      }
       updateRegen(delta);
       updateWeaponPose(delta);
     }
 
     function updateTracers(delta){ for(let i=tracers.length-1;i>=0;i--){ const t=tracers[i]; t.life-=delta; if(t.life<=0){ scene.remove(t.line); tracers.splice(i,1);} else t.line.material.opacity=Math.max(0, t.life/.06); } }
 
-    function updateLoot(delta){ const t=performance.now()/1000; for(const l of lootItems){ l.mesh.rotation.y += delta*1.6; const baseY=l.mesh.position.y; l.mesh.position.y = Math.max(.3, baseY + Math.sin(t + l.bob)*.003); } tryPickupLoot(); }
+    function updateLoot(delta){ const t=performance.now()/1000; for(const l of lootItems){ l.mesh.rotation.y += delta*1.6; const anchor = Number.isFinite(l.baseY) ? l.baseY : l.mesh.position.y; l.mesh.position.y = Math.max(.3, anchor + Math.sin(t + l.bob)*.12); } tryPickupLoot(); }
 
     // Enemy update copied from D
     function updateEnemies(delta){
@@ -382,10 +432,17 @@
           if(distance < p.retreat){ enemy.mesh.position.addScaledVector(lookDir, -enemy.chaseSpeed*delta*1.05); }
           else if(distance > p.engage){ enemy.mesh.position.addScaledVector(lookDir, enemy.chaseSpeed*delta); }
           else { enemy.strafeTimer-=delta; if(enemy.strafeTimer<=0){ enemy.strafeTimer=THREE.MathUtils.randFloat(.3,.8); enemy.strafeDir=(Math.random()<.5?-1:1);} const strafe=new THREE.Vector3(-lookDir.z,0,lookDir.x).multiplyScalar(enemy.chaseSpeed*.7*enemy.strafeDir*delta); enemy.mesh.position.add(strafe); }
+          if(enemy.firstShotArm>0){
+            enemy.firstShotArm=Math.max(0, enemy.firstShotArm-delta);
+          }
           enemy.fireCooldown -= delta;
           if(enemy.fireCooldown<=0){
-            if(enemy.burstShotsLeft<=0){ enemy.burstShotsLeft=THREE.MathUtils.randInt(p.burstSize[0], p.burstSize[1]); enemy.fireCooldown=0; }
-            if(enemy.burstShotsLeft>0){ enemyHitscanShoot(enemy); enemy.burstShotsLeft-=1; enemy.fireCooldown = enemy.burstShotsLeft>0 ? 0.14 : p.restAfterBurst + THREE.MathUtils.randFloat(-0.2,0.2); }
+            if(enemy.firstShotArm>0){
+              enemy.fireCooldown = enemy.firstShotArm;
+            } else {
+              if(enemy.burstShotsLeft<=0){ enemy.burstShotsLeft=THREE.MathUtils.randInt(p.burstSize[0], p.burstSize[1]); enemy.fireCooldown=0; }
+              if(enemy.burstShotsLeft>0){ enemyHitscanShoot(enemy, delta); enemy.burstShotsLeft-=1; enemy.fireCooldown = enemy.burstShotsLeft>0 ? 0.14 : p.restAfterBurst + THREE.MathUtils.randFloat(-0.2,0.2); }
+            }
           }
         }
 
@@ -396,7 +453,7 @@
 
     function moveTowards(enemy,target,speed,delta){ const dir=tmpVec.subVectors(target,enemy.mesh.position); dir.y=0; const d=dir.length(); if(d>.5){ dir.normalize(); enemy.mesh.position.addScaledVector(dir, speed*delta); enemy.mesh.lookAt(enemy.mesh.position.clone().add(dir)); } }
 
-    function updateMinimap(){ const ctx=minimapCtx, size=minimapCanvas.width, scale=size/world.size; ctx.clearRect(0,0,size,size); ctx.fillStyle='rgba(10,18,28,.9)'; ctx.fillRect(0,0,size,size); ctx.strokeStyle='rgba(255,255,255,.15)'; ctx.strokeRect(2,2,size-4,size-4); const playerPos=controls.getObject().position; const yaw=camera.rotation.y; function project(pos){ return {x:size/2+pos.x*scale, y:size/2+pos.z*scale}; } ctx.fillStyle='#50c8ff'; const p=project(playerPos); ctx.beginPath(); ctx.arc(p.x,p.y,6,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.moveTo(p.x,p.y); const r=18; ctx.lineTo(p.x+Math.sin(yaw-.35)*r, p.y+Math.cos(yaw-.35)*r); ctx.lineTo(p.x+Math.sin(yaw+.35)*r, p.y+Math.cos(yaw+.35)*r); ctx.closePath(); ctx.fillStyle='rgba(80,200,255,.25)'; ctx.fill(); ctx.fillStyle='#ff5c3b'; enemies.forEach(e=>{ const ep=project(e.mesh.position); ctx.beginPath(); ctx.arc(ep.x,ep.y,5,0,Math.PI*2); ctx.fill(); }); }
+    function updateMinimap(){ const ctx=minimapCtx, size=minimapCanvas.width, scale=size/world.size; ctx.clearRect(0,0,size,size); ctx.fillStyle='rgba(10,18,28,.9)'; ctx.fillRect(0,0,size,size); ctx.strokeStyle='rgba(255,255,255,.15)'; ctx.strokeRect(2,2,size-4,size-4); const playerPos=controls.getObject().position; const yaw=controls.getObject().rotation.y; function project(pos){ return {x:size/2+pos.x*scale, y:size/2+pos.z*scale}; } ctx.fillStyle='#50c8ff'; const p=project(playerPos); ctx.beginPath(); ctx.arc(p.x,p.y,6,0,Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.moveTo(p.x,p.y); const r=18; ctx.lineTo(p.x+Math.sin(yaw-.35)*r, p.y+Math.cos(yaw-.35)*r); ctx.lineTo(p.x+Math.sin(yaw+.35)*r, p.y+Math.cos(yaw+.35)*r); ctx.closePath(); ctx.fillStyle='rgba(80,200,255,.25)'; ctx.fill(); ctx.fillStyle='#ff5c3b'; enemies.forEach(e=>{ const ep=project(e.mesh.position); ctx.beginPath(); ctx.arc(ep.x,ep.y,5,0,Math.PI*2); ctx.fill(); }); }
 
     function animate(){ requestAnimationFrame(animate); const delta=Math.min(.05, clock.getDelta()); if(player.fireCooldown>0) player.fireCooldown-=delta; if(shooting && player.fireCooldown<=0) hitscanShoot(); if(game.state!=='over'){ updatePlayer(delta); updateEnemies(delta); updateTracers(delta); updateLoot(delta); updateMinimap(); if(game.state==='spawning'){ game.spawnDelay-=delta; if(game.spawnDelay<=0 && game.spawnQueue>0){ spawnEnemy(); game.spawnQueue-=1; game.spawnDelay=THREE.MathUtils.randFloat(.6,1.2);} else if(game.spawnQueue<=0){ game.state='inRound'; } } } renderer.render(scene,camera); }
 
