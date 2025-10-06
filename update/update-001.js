@@ -45,22 +45,52 @@ export function applyPatch(ctx){
   const originalShadowEnabled = renderer.shadowMap?.enabled ?? false;
   const baseEnemyTexture = (ctx.enemyMaterialTemplate && ctx.enemyMaterialTemplate.map) || ctx.enemyUniformTexture || null;
   const sharedTextures = globalNS.sharedTextures || (globalNS.sharedTextures = new WeakSet());
+  const MATERIAL_TEXTURE_PROPS = [
+    'map',
+    'normalMap',
+    'roughnessMap',
+    'metalnessMap',
+    'aoMap',
+    'displacementMap',
+    'emissiveMap',
+    'alphaMap',
+    'lightMap',
+    'envMap',
+    'bumpMap',
+    'specularMap',
+    'gradientMap',
+    'clearcoatMap',
+    'clearcoatNormalMap',
+    'clearcoatRoughnessMap',
+    'sheenColorMap',
+    'sheenRoughnessMap',
+    'transmissionMap',
+    'thicknessMap',
+    'anisotropyMap',
+    'specularColorMap',
+    'specularIntensityMap',
+  ];
   function markSharedTexture(tex){
     if(tex && typeof tex === 'object' && tex.isTexture){
       sharedTextures.add(tex);
     }
   }
+  function markMaterialTexturesShared(material){
+    if(!material) return;
+    const list = Array.isArray(material) ? material : [material];
+    for(let i=0;i<list.length;i++){
+      const mat = list[i];
+      if(!mat || typeof mat !== 'object') continue;
+      for(let j=0;j<MATERIAL_TEXTURE_PROPS.length;j++){
+        const tex = mat[MATERIAL_TEXTURE_PROPS[j]];
+        markSharedTexture(tex);
+      }
+    }
+  }
   markSharedTexture(baseEnemyTexture);
   if(ctx.enemyUniformTexture) markSharedTexture(ctx.enemyUniformTexture);
   if(ctx.enemyMaterialTemplate){
-    markSharedTexture(ctx.enemyMaterialTemplate.map);
-    markSharedTexture(ctx.enemyMaterialTemplate.normalMap);
-    markSharedTexture(ctx.enemyMaterialTemplate.roughnessMap);
-    markSharedTexture(ctx.enemyMaterialTemplate.metalnessMap);
-    markSharedTexture(ctx.enemyMaterialTemplate.aoMap);
-    markSharedTexture(ctx.enemyMaterialTemplate.displacementMap);
-    markSharedTexture(ctx.enemyMaterialTemplate.emissiveMap);
-    markSharedTexture(ctx.enemyMaterialTemplate.alphaMap);
+    markMaterialTexturesShared(ctx.enemyMaterialTemplate);
   }
 
   const CONFIG = {
@@ -2283,13 +2313,37 @@ export function applyPatch(ctx){
     }
   }
 
+  function disposeTexture(tex){
+    if(!tex || typeof tex !== 'object' || !tex.isTexture) return;
+    if(sharedTextures.has(tex)) return;
+    if(tex.image && (Number.isFinite(tex.image.width) || Number.isFinite(tex.image.height))){
+      tex.dispose?.();
+      return;
+    }
+    if(tex.source && tex.source.data){
+      tex.dispose?.();
+      return;
+    }
+    tex.dispose?.();
+  }
+
   function disposeMaterial(mat){
     if(!mat) return;
-    if(mat.map && !sharedTextures.has(mat.map) && mat.map.image && mat.map.image.width){
-      mat.map.dispose?.();
+    if(Array.isArray(mat)){
+      for(let i=0;i<mat.length;i++){
+        disposeMaterial(mat[i]);
+      }
+      return;
     }
-    if(mat.normalMap && !sharedTextures.has(mat.normalMap) && mat.normalMap.image && mat.normalMap.image.width){
-      mat.normalMap.dispose?.();
+    for(let i=0;i<MATERIAL_TEXTURE_PROPS.length;i++){
+      const prop = MATERIAL_TEXTURE_PROPS[i];
+      const tex = mat[prop];
+      if(!tex || typeof tex !== 'object' || !tex.isTexture) continue;
+      if(sharedTextures.has(tex)) continue;
+      disposeTexture(tex);
+      if(mat[prop] === tex){
+        mat[prop] = null;
+      }
     }
     mat.dispose?.();
   }
