@@ -1,21 +1,20 @@
-// update/update-011.js
-// Patch 011: Unified stability cleanup and texture-safe fixed-step loop
+// update/update-001.js
+// Patch 001: Consolidated stability cleanup and texture-safe fixed-step loop
 
 export function applyPatch(ctx){
   if(!ctx || typeof ctx !== 'object'){
-    console.warn('[patch-011] applyPatch requires a context object.');
+    console.warn('[patch-001] applyPatch requires a context object.');
     return;
   }
-  const globalNS = globalThis.__patch011 = globalThis.__patch011 || {};
-  if(globalNS.applied){
-    return;
+  const globalNS = globalThis.__patch001 = globalThis.__patch001 || {};
+  if(typeof globalNS.dispose === 'function'){
+    try{
+      globalNS.dispose();
+    }catch(err){
+      console.warn('[patch-001] Failed to dispose previous instance.', err);
+    }
   }
-  globalNS.applied = true;
-
-  try{ globalThis.__patch010?.stopLoop?.(); }catch(_){}
-  try{ globalThis.__patch009?.stopLoop?.(); }catch(_){}
-  try{ globalThis.__patch008?.stopLoop?.(); }catch(_){}
-  try{ globalThis.__patch007?.stopLoop?.(); }catch(_){}
+  globalNS.applied = false;
 
   const {
     THREE,
@@ -39,12 +38,14 @@ export function applyPatch(ctx){
   } = ctx;
 
   if(!THREE || !scene || !camera || !renderer || !controls || !clock){
-    console.warn('[patch-011] Missing required references.');
+    console.warn('[patch-001] Missing required references.');
     return;
   }
 
+  const originalShadowEnabled = renderer.shadowMap?.enabled ?? false;
+
   const CONFIG = {
-    CONFIG_VERSION: '011',
+    CONFIG_VERSION: '001',
     PLAYER: {
       baseHeight: player.height || 1.6,
       crouchRatio: 0.7,
@@ -148,7 +149,9 @@ export function applyPatch(ctx){
     Object.assign(CONFIG.PERF, config.PERF || {});
   }
 
-  renderer.shadowMap.enabled = CONFIG.PERF.shadows;
+  if(renderer.shadowMap){
+    renderer.shadowMap.enabled = CONFIG.PERF.shadows;
+  }
 
   if(!globalNS.textureGuarded){
     const descriptor = Object.getOwnPropertyDescriptor(THREE.Texture.prototype, 'needsUpdate');
@@ -171,8 +174,14 @@ export function applyPatch(ctx){
     }
   }
 
+  let perfOverlay = null;
+
   const PATCH_STATE = {
     debug: false,
+    weaponParts: null,
+    muzzleAnchor: null,
+    enemySpawnZones: null,
+    playerSpawn: null,
   };
 
   globalNS.enableDebug = (flag) => {
@@ -183,6 +192,137 @@ export function applyPatch(ctx){
       perfOverlay.style.display = 'block';
     }
   };
+
+  function ensureWeaponModel(){
+    if(PATCH_STATE.weaponParts){
+      return;
+    }
+    if(!ctx.muzzleFlash){
+      return;
+    }
+    const weaponGroup = ctx.muzzleFlash.parent?.parent || ctx.muzzleFlash.parent;
+    if(!weaponGroup){
+      return;
+    }
+    const bodyMaterial = new THREE.MeshStandardMaterial({
+      color: 0x1b2839,
+      metalness: 0.55,
+      roughness: 0.35,
+      emissive: new THREE.Color(0x0b121d),
+      emissiveIntensity: 0.25,
+    });
+    const accentMaterial = new THREE.MeshStandardMaterial({
+      color: 0x3b86ff,
+      emissive: new THREE.Color(0x162b45),
+      emissiveIntensity: 0.45,
+      metalness: 0.4,
+      roughness: 0.4,
+    });
+
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.11, 0.82), bodyMaterial);
+    body.position.set(0.02, -0.05, -0.52);
+    body.castShadow = body.receiveShadow = true;
+
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.22, 0.24), bodyMaterial.clone());
+    grip.position.set(-0.08, -0.16, -0.26);
+    grip.rotation.x = THREE.MathUtils.degToRad(12);
+
+    const stock = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.10, 0.35), bodyMaterial.clone());
+    stock.position.set(-0.12, -0.04, 0.05);
+
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.58, 12, 1, true), new THREE.MeshStandardMaterial({
+      color: 0x1f1f24,
+      metalness: 0.75,
+      roughness: 0.2,
+    }));
+    barrel.rotation.x = Math.PI / 2;
+    barrel.position.set(0.09, 0.0, -0.96);
+
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 0.38), accentMaterial);
+    rail.position.set(0.05, 0.02, -0.42);
+
+    weaponGroup.add(body, grip, stock, barrel, rail);
+    PATCH_STATE.weaponParts = [body, grip, stock, barrel, rail];
+  }
+
+  function ensureMuzzleAnchor(){
+    if(!ctx.muzzleFlash) return;
+    const weaponGroup = ctx.muzzleFlash.parent?.parent || ctx.muzzleFlash.parent;
+    if(!weaponGroup) return;
+    let anchor = PATCH_STATE.muzzleAnchor;
+    if(!anchor){
+      anchor = new THREE.Object3D();
+      anchor.name = 'patch001-muzzle-anchor';
+      anchor.position.set(0.18, -0.08, -0.92);
+      PATCH_STATE.muzzleAnchor = anchor;
+      weaponGroup.add(anchor);
+    } else if(anchor.parent !== weaponGroup){
+      weaponGroup.add(anchor);
+    }
+    if(ctx.muzzleFlash.parent !== anchor){
+      anchor.add(ctx.muzzleFlash);
+      ctx.muzzleFlash.position.set(0, 0, 0);
+    }
+    ctx.muzzleAnchor = anchor;
+    anchor.updateMatrixWorld(true);
+  }
+
+  function buildEnemySpawnZones(){
+    const zones = [];
+    const rawSources = [];
+    if(Array.isArray(ctx.enemySpawnPoints)) rawSources.push(...ctx.enemySpawnPoints);
+    if(Array.isArray(refs.enemySpawnPoints)) rawSources.push(...refs.enemySpawnPoints);
+    if(Array.isArray(world.enemySpawnPoints)) rawSources.push(...world.enemySpawnPoints);
+    if(world.spawnPoints){
+      if(Array.isArray(world.spawnPoints.enemy)) rawSources.push(...world.spawnPoints.enemy);
+      else if(Array.isArray(world.spawnPoints)) rawSources.push(...world.spawnPoints);
+    }
+    if(refs.spawnPoints){
+      if(Array.isArray(refs.spawnPoints.enemy)) rawSources.push(...refs.spawnPoints.enemy);
+      else if(Array.isArray(refs.spawnPoints)) rawSources.push(...refs.spawnPoints);
+    }
+    for(const entry of rawSources){
+      const zone = normalizeSpawnZone(entry);
+      if(zone) zones.push(zone);
+    }
+    if(zones.length === 0){
+      const size = Math.max(20, world.size || 60);
+      const radius = Math.max(8, size * 0.18);
+      zones.push({ center: new THREE.Vector3(0, 0, -size * 0.4), radius, height: 0 });
+      zones.push({ center: new THREE.Vector3(size * 0.35, 0, size * 0.35), radius: radius * 0.75, height: 0 });
+      zones.push({ center: new THREE.Vector3(-size * 0.35, 0, size * 0.35), radius: radius * 0.75, height: 0 });
+    }
+    return zones;
+  }
+
+  function normalizeSpawnZone(entry){
+    if(!entry) return null;
+    const baseRadius = Math.max(6, (world.size || 60) * 0.12);
+    if(entry.isVector3){
+      return { center: entry.clone(), radius: baseRadius, height: entry.y || 0 };
+    }
+    if(entry.position?.isVector3){
+      const radius = typeof entry.userData?.radius === 'number' ? entry.userData.radius : (entry.radius || baseRadius);
+      return { center: entry.position.clone(), radius: Math.max(4, radius), height: entry.position.y || 0 };
+    }
+    if(typeof entry === 'object'){ 
+      if(entry.center?.isVector3){
+        return { center: entry.center.clone(), radius: entry.radius || baseRadius, height: entry.height || entry.center.y || 0 };
+      }
+      if('x' in entry && 'z' in entry){
+        const center = new THREE.Vector3(entry.x, entry.y || 0, entry.z);
+        const radius = entry.radius || entry.r || baseRadius;
+        return { center, radius: Math.max(4, radius), height: entry.height || center.y };
+      }
+    }
+    return null;
+  }
+
+  ensureWeaponModel();
+  ensureMuzzleAnchor();
+
+  PATCH_STATE.playerSpawn = (PATCH_STATE.playerSpawn || new THREE.Vector3()).copy(controls.getObject().position);
+  PATCH_STATE.enemySpawnZones = buildEnemySpawnZones();
 
   const fallbackCanvas = globalNS.fallbackCanvas || (() => {
     const canvas = document.createElement('canvas');
@@ -195,6 +335,12 @@ export function applyPatch(ctx){
     return canvas;
   })();
   globalNS.fallbackCanvas = fallbackCanvas;
+  const fallbackCubeImage = globalNS.fallbackCubeImage || (() => {
+    const faces = new Array(6);
+    for(let i = 0; i < 6; i++) faces[i] = fallbackCanvas;
+    return faces;
+  })();
+  globalNS.fallbackCubeImage = fallbackCubeImage;
 
   function ensureTextureReady(tex){
     if(!tex) return false;
@@ -202,11 +348,35 @@ export function applyPatch(ctx){
     if(!img){
       if(!tex.userData) tex.userData = {};
       if(!tex.userData.fallbackApplied){
-        tex.image = fallbackCanvas;
+        tex.image = tex.isCubeTexture ? fallbackCubeImage : fallbackCanvas;
         tex.userData.fallbackApplied = true;
+        tex.generateMipmaps = false;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
         tex.needsUpdate = true;
       }
       return false;
+    }
+    if(Array.isArray(img)){
+      let valid = true;
+      for(let i = 0; i < img.length; i++){
+        const face = img[i];
+        if(!face){ valid = false; break; }
+        const w = face.width || face.naturalWidth || face.videoWidth;
+        const h = face.height || face.naturalHeight || face.videoHeight;
+        if(!w || !h){ valid = false; break; }
+      }
+      if(!valid){
+        tex.image = fallbackCubeImage;
+        tex.userData = tex.userData || {};
+        tex.userData.fallbackApplied = true;
+        tex.generateMipmaps = false;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        tex.needsUpdate = true;
+        return true;
+      }
+      return true;
     }
     const isImageEl = typeof Image !== 'undefined' && img instanceof Image;
     if(isImageEl){
@@ -215,17 +385,23 @@ export function applyPatch(ctx){
         if(!tex.userData.errorHooked){
           tex.userData.errorHooked = true;
           img.addEventListener('error', () => {
-            tex.image = fallbackCanvas;
+            tex.image = tex.isCubeTexture ? fallbackCubeImage : fallbackCanvas;
             tex.userData.fallbackApplied = true;
+            tex.generateMipmaps = false;
+            tex.minFilter = THREE.LinearFilter;
+            tex.magFilter = THREE.LinearFilter;
             tex.needsUpdate = true;
           }, { once: true });
         }
         return false;
       }
       if(img.naturalWidth === 0 || img.naturalHeight === 0){
-        tex.image = fallbackCanvas;
+        tex.image = tex.isCubeTexture ? fallbackCubeImage : fallbackCanvas;
         tex.userData = tex.userData || {};
         tex.userData.fallbackApplied = true;
+        tex.generateMipmaps = false;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
         tex.needsUpdate = true;
         return true;
       }
@@ -233,9 +409,12 @@ export function applyPatch(ctx){
       const width = img.width || img.videoWidth || img.naturalWidth;
       const height = img.height || img.videoHeight || img.naturalHeight;
       if(!width || !height){
-        tex.image = fallbackCanvas;
+        tex.image = tex.isCubeTexture ? fallbackCubeImage : fallbackCanvas;
         tex.userData = tex.userData || {};
         tex.userData.fallbackApplied = true;
+        tex.generateMipmaps = false;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
         tex.needsUpdate = true;
         return true;
       }
@@ -282,9 +461,16 @@ export function applyPatch(ctx){
   const tempVecC = shared.tempVecC || (shared.tempVecC = new THREE.Vector3());
   const tempVecD = shared.tempVecD || (shared.tempVecD = new THREE.Vector3());
   const tempVecE = shared.tempVecE || (shared.tempVecE = new THREE.Vector3());
+  const tempVecF = shared.tempVecF || (shared.tempVecF = new THREE.Vector3());
+  const tempVecG = shared.tempVecG || (shared.tempVecG = new THREE.Vector3());
+  const tempVec2A = shared.tempVec2A || (shared.tempVec2A = new THREE.Vector2());
+  const tempVec2B = shared.tempVec2B || (shared.tempVec2B = new THREE.Vector2());
+  const tempVec2C = shared.tempVec2C || (shared.tempVec2C = new THREE.Vector2());
   const tempQuat = shared.tempQuat || (shared.tempQuat = new THREE.Quaternion());
   const tempEuler = shared.tempEuler || (shared.tempEuler = new THREE.Euler(0, 0, 0, 'YXZ'));
   const tempMat3 = shared.tempMat3 || (shared.tempMat3 = new THREE.Matrix3());
+  const playerCollider = refs.playerCollider || shared.playerCollider || (shared.playerCollider = new THREE.Box3());
+  const crouchTestBox = shared.crouchTestBox || (shared.crouchTestBox = new THREE.Box3());
   const tempRaycaster = refs.raycaster || shared.tempRaycaster || new THREE.Raycaster();
   if(!refs.raycaster) shared.tempRaycaster = tempRaycaster;
   const helperRay = shared.helperRay || (shared.helperRay = new THREE.Raycaster());
@@ -543,6 +729,7 @@ export function applyPatch(ctx){
   // ---------------------------------------------------------------------------
   const playerState = {
     crouched: false,
+    heightRatio: 1,
     stamina: CONFIG.STAMINA.max,
     staminaDelay: 0,
     staminaCombatDelay: 0,
@@ -557,6 +744,7 @@ export function applyPatch(ctx){
     buyPhase: false,
     storeOpen: false,
     suppressedHits: 0,
+    jumpHeld: false,
   };
   player.credits = player.credits || 0;
 
@@ -588,6 +776,7 @@ export function applyPatch(ctx){
   const originalMoveTowards = functions.moveTowards;
   const originalUpdateMinimap = functions.updateMinimap;
   const originalStartNextRound = functions.startNextRound;
+  const originalRemoveEnemy = functions.removeEnemy;
   const originalDamagePlayer = functions.damagePlayer;
   const originalShowRoundBanner = functions.showRoundBanner;
   const originalAnimate = functions.animate;
@@ -600,90 +789,150 @@ export function applyPatch(ctx){
       return;
     }
 
-    const sprintHeld = (keyState['ShiftLeft'] || keyState['ShiftRight']) && !playerState.storeOpen;
-    const crouchSpeedFactor = playerState.crouched ? CONFIG.PLAYER.crouchSpeedMultiplier : 1;
+    if(ctx.muzzleWorldPosition?.isVector3){
+      getMuzzleWorldPosition(ctx.muzzleWorldPosition);
+    }
 
-    const staminaMax = CONFIG.STAMINA.max;
-    playerState.staminaDelay = Math.max(0, playerState.staminaDelay - delta);
-    playerState.staminaCombatDelay = Math.max(0, playerState.staminaCombatDelay - delta);
+    const previousPosition = borrowVec3();
+    previousPosition.copy(controls.getObject().position);
 
-    const moving = (keyState['KeyW']||keyState['KeyA']||keyState['KeyS']||keyState['KeyD']);
-    let sprinting = sprintHeld && moving && playerState.stamina > CONFIG.STAMINA.minSprint && !playerState.crouched;
+    try {
+      const sprintHeld = (keyState['ShiftLeft'] || keyState['ShiftRight']) && !playerState.storeOpen;
+      const moving = (keyState['KeyW']||keyState['KeyA']||keyState['KeyS']||keyState['KeyD']);
+      const baseHeight = player.height || CONFIG.PLAYER.baseHeight;
+      const crouchSpeedFactor = playerState.crouched ? CONFIG.PLAYER.crouchSpeedMultiplier : 1;
 
-    if(sprinting){
-      playerState.stamina = Math.max(0, playerState.stamina - CONFIG.STAMINA.sprintDrain * delta);
-      if(playerState.stamina <= 0){
-        sprinting = false;
+      const targetRatio = playerState.crouched ? CONFIG.PLAYER.crouchRatio : 1;
+      playerState.heightRatio = THREE.MathUtils.clamp(
+        damp(playerState.heightRatio, targetRatio, 18, delta),
+        CONFIG.PLAYER.crouchRatio,
+        1
+      );
+      const currentHeight = baseHeight * playerState.heightRatio;
+
+      const staminaMax = CONFIG.STAMINA.max;
+      playerState.staminaDelay = Math.max(0, playerState.staminaDelay - delta);
+      playerState.staminaCombatDelay = Math.max(0, playerState.staminaCombatDelay - delta);
+
+      let sprinting = sprintHeld && moving && playerState.stamina > CONFIG.STAMINA.minSprint && !playerState.crouched;
+
+      if(sprinting){
+        playerState.stamina = Math.max(0, playerState.stamina - CONFIG.STAMINA.sprintDrain * delta);
         playerState.staminaDelay = CONFIG.STAMINA.regenDelay;
-      } else {
-        playerState.staminaDelay = CONFIG.STAMINA.regenDelay;
-      }
-    } else {
-      if(playerState.staminaDelay <= 0 && playerState.staminaCombatDelay <= 0){
+        if(playerState.stamina <= 0){
+          sprinting = false;
+        }
+      } else if(playerState.staminaDelay <= 0 && playerState.staminaCombatDelay <= 0){
         playerState.stamina = Math.min(staminaMax, playerState.stamina + CONFIG.STAMINA.regenRate * delta);
       }
-    }
-    updateStaminaIcon();
+      updateStaminaIcon();
 
-    const effectiveADS = getAiming() && !sprinting;
-    setADSFlag(effectiveADS);
+      if(!player.velocity || typeof player.velocity.y !== 'number'){
+        player.velocity = new THREE.Vector3(0, 0, 0);
+      }
+      if(typeof player.gravity !== 'number' || !isFinite(player.gravity)){
+        player.gravity = 9.81;
+      }
 
-    const adsTarget = effectiveADS ? 1 : 0;
-    const adsSpeed = playerState.crouched ? CONFIG.PLAYER.crouchAdsAcceleration : CONFIG.STANCE.adsSpeed;
-    const newAds = damp(getADSTransition(), adsTarget, adsSpeed, delta);
-    setADSTransition(newAds);
+      const jumpPressed = keyState['Space'] && !playerState.storeOpen;
+      if(jumpPressed && !playerState.jumpHeld){
+        if(playerState.crouched){
+          if(canStandFullHeight()){ playerState.crouched = false; }
+        }
+        if(player.onGround){
+          const jumpStrength = player.jumpStrength || player.jumpPower || 6.5;
+          player.velocity.y = jumpStrength;
+          player.onGround = false;
+          playerState.staminaDelay = Math.max(playerState.staminaDelay, 0.2);
+        }
+      }
+      playerState.jumpHeld = jumpPressed;
 
-    const targetFov = sprinting ? CONFIG.STANCE.sprintFov : THREE.MathUtils.lerp(CONFIG.STANCE.baseFov, CONFIG.STANCE.adsFov, newAds);
-    camera.fov = damp(camera.fov, playerState.crouched ? Math.min(targetFov, CONFIG.STANCE.crouchFov) : targetFov, CONFIG.STANCE.sprintCamDamp, delta);
-    camera.updateProjectionMatrix();
+      const effectiveADS = getAiming() && !sprinting;
+      setADSFlag(effectiveADS);
 
-    const baseHip = getSpreadBase(false);
-    const baseAds = getSpreadBase(true);
-    const spreadBase = effectiveADS ? baseAds : baseHip;
-    const spreadMax = effectiveADS ? weaponState.spreadMaxAds : weaponState.spreadMaxHip;
-    weaponState.spreadCurrent = THREE.MathUtils.clamp(weaponState.spreadCurrent, spreadBase, spreadMax);
+      const adsTarget = effectiveADS ? 1 : 0;
+      const adsSpeed = playerState.crouched ? CONFIG.PLAYER.crouchAdsAcceleration : CONFIG.STANCE.adsSpeed;
+      const newAds = damp(getADSTransition(), adsTarget, adsSpeed, delta);
+      setADSTransition(newAds);
 
-    const moveSpeed = (player.walkSpeed || movementConfig.playerWalk || 7.5) * crouchSpeedFactor * (sprinting ? (player.sprintMultiplier || 1.5) : 1);
-    let forward = 0; let strafe = 0;
-    if(keyState['KeyW']) forward += 1;
-    if(keyState['KeyS']) forward -= 1;
-    if(keyState['KeyD']) strafe += 1;
-    if(keyState['KeyA']) strafe -= 1;
+      const targetFov = sprinting ? CONFIG.STANCE.sprintFov : THREE.MathUtils.lerp(CONFIG.STANCE.baseFov, CONFIG.STANCE.adsFov, newAds);
+      const crouchFov = playerState.crouched ? Math.min(targetFov, CONFIG.STANCE.crouchFov) : targetFov;
+      camera.fov = damp(camera.fov, crouchFov, CONFIG.STANCE.sprintCamDamp, delta);
+      camera.updateProjectionMatrix();
 
-    tempVecA.set(strafe, 0, forward).normalize();
-    if(tempVecA.lengthSq() > 0){
-      tempVecA.applyQuaternion(controls.getObject().quaternion);
-      tempVecA.multiplyScalar(moveSpeed * delta);
-      controls.getObject().position.add(tempVecA);
-    }
+      const baseHip = getSpreadBase(false);
+      const baseAds = getSpreadBase(true);
+      const spreadBase = effectiveADS ? baseAds : baseHip;
+      const spreadMax = effectiveADS ? weaponState.spreadMaxAds : weaponState.spreadMaxHip;
+      weaponState.spreadCurrent = THREE.MathUtils.clamp(weaponState.spreadCurrent, spreadBase, spreadMax);
 
-    if(player.velocity){
+      const moveSpeed = (player.walkSpeed || movementConfig.playerWalk || 7.5) * crouchSpeedFactor * (sprinting ? (player.sprintMultiplier || 1.5) : 1);
+      let forward = 0; let strafe = 0;
+      if(keyState['KeyW']) forward += 1;
+      if(keyState['KeyS']) forward -= 1;
+      if(keyState['KeyD']) strafe += 1;
+      if(keyState['KeyA']) strafe -= 1;
+
+      tempVecA.set(strafe, 0, -forward).normalize();
+      if(tempVecA.lengthSq() > 0){
+        tempVecA.applyQuaternion(controls.getObject().quaternion);
+        tempVecA.multiplyScalar(moveSpeed * delta);
+        controls.getObject().position.add(tempVecA);
+      }
+
       player.velocity.y -= player.gravity * delta;
       controls.getObject().position.y += player.velocity.y * delta;
-      if(controls.getObject().position.y < CONFIG.PLAYER.baseHeight){
-        controls.getObject().position.y = CONFIG.PLAYER.baseHeight;
+      if(controls.getObject().position.y < currentHeight){
+        controls.getObject().position.y = currentHeight;
         player.velocity.y = 0;
         player.onGround = true;
+      } else if(player.velocity.y < -0.01){
+        player.onGround = false;
       }
-    }
 
-    if(player.isReloading){
-      player.reloadTimer -= delta;
-      if(player.reloadTimer <= 0){
-        const need = player.maxAmmo - player.ammo;
-        const toLoad = Math.min(need, player.reserve);
-        player.ammo += toLoad;
-        player.reserve -= toLoad;
-        updateAmmoDisplay();
-        player.isReloading = false;
+      if(playerCollider){
+        const colliderSize = tempVecD.set(1, currentHeight, 1);
+        playerCollider.setFromCenterAndSize(controls.getObject().position, colliderSize);
+        const statics = gatherStaticMeshes();
+        for(let i = 0; i < statics.length; i++){
+          const mesh = statics[i];
+          if(!mesh) continue;
+          tempBox.setFromObject(mesh);
+          if(playerCollider.intersectsBox(tempBox)){
+            controls.getObject().position.copy(previousPosition);
+            controls.getObject().position.y = Math.max(previousPosition.y, currentHeight);
+            if(previousPosition.y <= currentHeight + 0.001){
+              player.velocity.y = 0;
+              player.onGround = true;
+            } else {
+              player.velocity.y = Math.min(0, player.velocity.y);
+            }
+            break;
+          }
+        }
       }
+
+      if(player.isReloading){
+        player.reloadTimer -= delta;
+        if(player.reloadTimer <= 0){
+          const need = player.maxAmmo - player.ammo;
+          const toLoad = Math.min(need, player.reserve);
+          player.ammo += toLoad;
+          player.reserve -= toLoad;
+          updateAmmoDisplay();
+          player.isReloading = false;
+        }
+      }
+
+      const recoverRate = effectiveADS ? weaponState.recoveryAds : weaponState.recoveryHip;
+      weaponState.spreadCurrent = Math.max(spreadBase, weaponState.spreadCurrent - recoverRate * delta);
+
+      if(functions.updateWeaponPose) functions.updateWeaponPose(delta);
+      if(functions.updateRegen) functions.updateRegen(delta);
+    } finally {
+      releaseVec3(previousPosition);
     }
-
-    const recoverRate = effectiveADS ? weaponState.recoveryAds : weaponState.recoveryHip;
-    weaponState.spreadCurrent = Math.max(spreadBase, weaponState.spreadCurrent - recoverRate * delta);
-
-    if(functions.updateWeaponPose) functions.updateWeaponPose(delta);
-    if(functions.updateRegen) functions.updateRegen(delta);
   }
 
   function getSpreadBase(ads){
@@ -696,14 +945,83 @@ export function applyPatch(ctx){
   }
 
   function toggleCrouch(force){
-    if(force === false){ playerState.crouched = false; return; }
-    if(force === true){ playerState.crouched = true; return; }
+    if(force === false){
+      if(!playerState.crouched) return;
+      if(!canStandFullHeight()) return;
+      playerState.crouched = false;
+      return;
+    }
+    if(force === true){
+      playerState.crouched = true;
+      return;
+    }
+    if(playerState.crouched){
+      if(canStandFullHeight()){
+        playerState.crouched = false;
+      }
+      return;
+    }
     if(!player.onGround) return;
-    playerState.crouched = !playerState.crouched;
+    playerState.crouched = true;
+  }
+
+  function canStandFullHeight(){
+    if(!playerCollider) return true;
+    const baseHeight = player.height || CONFIG.PLAYER.baseHeight;
+    const center = tempVecF.copy(controls.getObject().position);
+    center.y = Math.max(center.y, baseHeight);
+    const size = tempVecG.set(1, baseHeight, 1);
+    crouchTestBox.setFromCenterAndSize(center, size);
+    const statics = gatherStaticMeshes();
+    for(let i = 0; i < statics.length; i++){
+      const mesh = statics[i];
+      if(!mesh) continue;
+      tempBox.setFromObject(mesh);
+      if(crouchTestBox.intersectsBox(tempBox)){
+        return false;
+      }
+    }
+    return true;
   }
 
   function damp(current, target, lambda, delta){
     return THREE.MathUtils.damp(current, target, lambda, delta);
+  }
+
+  function getCameraForward(out){
+    return out.set(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+  }
+
+  function getCameraRight(out){
+    return out.set(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+  }
+
+  function getCameraUp(out){
+    return out.set(0, 1, 0).applyQuaternion(camera.quaternion).normalize();
+  }
+
+  function getMuzzleWorldPosition(out){
+    const anchor = ctx.muzzleAnchor || PATCH_STATE.muzzleAnchor;
+    if(anchor?.getWorldPosition){
+      anchor.updateMatrixWorld?.(true);
+      return anchor.getWorldPosition(out);
+    }
+    if(ctx.muzzleFlash?.getWorldPosition){
+      return ctx.muzzleFlash.getWorldPosition(out);
+    }
+    const weaponGroup = ctx.muzzleFlash?.parent?.parent || ctx.muzzleFlash?.parent;
+    if(weaponGroup?.localToWorld){
+      tempVecG.set(0.18, -0.08, -0.92);
+      return weaponGroup.localToWorld(out.copy(tempVecG));
+    }
+    const forward = getCameraForward(tempVecF);
+    const right = getCameraRight(tempVecD);
+    const up = getCameraUp(tempVecE);
+    out.copy(camera.position);
+    out.addScaledVector(forward, 0.9);
+    out.addScaledVector(right, 0.18);
+    out.addScaledVector(up, -0.08);
+    return out;
   }
 
   // ---------------------------------------------------------------------------
@@ -743,13 +1061,13 @@ export function applyPatch(ctx){
     const origin = borrowVec3();
     camera.getWorldPosition(origin);
     const muzzlePos = borrowVec3();
-    if(ctx.muzzleWorldPosition){
-      muzzlePos.copy(ctx.muzzleWorldPosition);
-    } else {
-      muzzlePos.copy(origin);
+    getMuzzleWorldPosition(muzzlePos);
+    if(ctx.muzzleWorldPosition?.isVector3){
+      ctx.muzzleWorldPosition.copy(muzzlePos);
     }
-    if(ctx.muzzleFlash){
-      ctx.muzzleFlash.visible = true;
+    const flash = ctx.muzzleFlash;
+    if(flash){
+      flash.visible = true;
       setTimeout(()=>{ if(ctx.muzzleFlash) ctx.muzzleFlash.visible = false; }, 45);
     }
 
@@ -917,28 +1235,59 @@ export function applyPatch(ctx){
       return;
     }
     const p = difficulty.params;
-    const spawnRadius = world.size/2 - 6;
     const attempts = CONFIG.SPAWN.maxAttempts;
-    let pointFound = false;
     const spawnPoint = tempVecB;
-    for(let i=0;i<attempts;i++){
-      const angle = Math.random()*Math.PI*2;
-      const distance = THREE.MathUtils.randFloat(spawnRadius*0.45, spawnRadius);
-      tempVecA.set(Math.cos(angle)*distance, 0, Math.sin(angle)*distance);
-      if(validateSpawnPoint(tempVecA)){
-        spawnPoint.copy(tempVecA);
-        pointFound = true;
-        break;
+    let pointFound = false;
+    let chosenZone = pickSpawnZone();
+
+    if(chosenZone){
+      for(let i=0;i<attempts;i++){
+        const radius = Math.max(2, chosenZone.radius || 0);
+        const distance = Math.sqrt(Math.random()) * radius;
+        const angle = Math.random() * Math.PI * 2;
+        spawnPoint.set(
+          chosenZone.center.x + Math.cos(angle) * distance,
+          chosenZone.height || 0,
+          chosenZone.center.z + Math.sin(angle) * distance
+        );
+        if(validateSpawnPoint(spawnPoint, chosenZone)){
+          pointFound = true;
+          break;
+        }
+      }
+      if(!pointFound){
+        spawnPoint.copy(chosenZone.center);
+        spawnPoint.y = chosenZone.height || 0;
+        pointFound = validateSpawnPoint(spawnPoint, chosenZone);
       }
     }
+
     if(!pointFound){
-      spawnPoint.set(THREE.MathUtils.randFloatSpread(spawnRadius), 0, THREE.MathUtils.randFloatSpread(spawnRadius));
+      const spawnRadius = Math.max(20, (world.size || 60) / 2 - 6);
+      for(let i=0;i<attempts;i++){
+        const angle = Math.random()*Math.PI*2;
+        const distance = THREE.MathUtils.randFloat(spawnRadius*0.45, spawnRadius);
+        tempVecA.set(Math.cos(angle)*distance, 0, Math.sin(angle)*distance);
+        spawnPoint.copy(tempVecA);
+        if(validateSpawnPoint(spawnPoint)){
+          pointFound = true;
+          break;
+        }
+      }
     }
 
+    if(!pointFound){
+      const fallback = Math.max(10, (world.size || 60) * 0.4);
+      spawnPoint.set(THREE.MathUtils.randFloatSpread(fallback), 0, THREE.MathUtils.randFloatSpread(fallback));
+      chosenZone = null;
+    }
+
+    const spawnHeight = chosenZone?.height ?? spawnPoint.y ?? 0;
+    spawnPoint.y = spawnHeight;
     const bodyGeometry = new THREE.CapsuleGeometry(.6,1.2,6,12);
     const mat = ctx.enemyMaterialTemplate ? ctx.enemyMaterialTemplate.clone() : new THREE.MeshStandardMaterial({ color:0x223344 });
     const enemyMesh = new THREE.Mesh(bodyGeometry, mat);
-    enemyMesh.position.set(spawnPoint.x, 1.5, spawnPoint.z);
+    enemyMesh.position.set(spawnPoint.x, spawnHeight + 1.5, spawnPoint.z);
     enemyMesh.castShadow = enemyMesh.receiveShadow = true;
     scene.add(enemyMesh);
 
@@ -956,8 +1305,31 @@ export function applyPatch(ctx){
       suppressedUntil: 0,
       brain: createEnemyBrain(),
     };
+    enemy.spawnZone = chosenZone || null;
     enemyMesh.userData.enemy = enemy;
     enemies.push(enemy);
+  }
+
+  function pickSpawnZone(){
+    const zones = PATCH_STATE.enemySpawnZones || [];
+    if(!zones.length) return null;
+    const playerPos = controls.getObject().position;
+    const playerSpawn = PATCH_STATE.playerSpawn;
+    let bestZone = zones[0];
+    let bestScore = -Infinity;
+    for(let i=0;i<zones.length;i++){
+      const zone = zones[i];
+      const dx = zone.center.x - playerPos.x;
+      const dz = zone.center.z - playerPos.z;
+      const dist = Math.hypot(dx, dz);
+      const spawnDist = playerSpawn ? Math.hypot(zone.center.x - playerSpawn.x, zone.center.z - playerSpawn.z) : dist;
+      const score = dist + spawnDist * 0.5;
+      if(score > bestScore){
+        bestScore = score;
+        bestZone = zone;
+      }
+    }
+    return bestZone;
   }
 
   function createEnemyBrain(){
@@ -972,21 +1344,52 @@ export function applyPatch(ctx){
     };
   }
 
-  function validateSpawnPoint(point){
+  function validateSpawnPoint(point, zone){
     const playerPos = controls.getObject().position;
-    if(point.distanceTo(playerPos) < CONFIG.SPAWN.safeRadius){
+    const safeRadius = CONFIG.SPAWN.safeRadius;
+    if(point.distanceTo(playerPos) < safeRadius){
       return false;
     }
-    tempVecC.copy(point).setY(CONFIG.PLAYER.baseHeight);
-    helperRay.set(tempVecC, tempVecA.subVectors(playerPos, point).normalize());
+    if(PATCH_STATE.playerSpawn && point.distanceTo(PATCH_STATE.playerSpawn) < safeRadius * 0.9){
+      return false;
+    }
+
+    let activeZone = zone || null;
+    const zones = PATCH_STATE.enemySpawnZones || [];
+    if(activeZone){
+      tempVecG.copy(point).sub(activeZone.center).setY(0);
+      const radius = activeZone.radius || 0;
+      if(tempVecG.lengthSq() > radius * radius){
+        return false;
+      }
+    } else if(zones.length){
+      let inside = false;
+      for(let i=0;i<zones.length;i++){
+        const candidate = zones[i];
+        tempVecG.copy(point).sub(candidate.center).setY(0);
+        const radius = candidate.radius || 0;
+        if(tempVecG.lengthSq() <= radius * radius){
+          inside = true;
+          activeZone = candidate;
+          break;
+        }
+      }
+      if(!inside) return false;
+    }
+
     const statics = gatherStaticMeshes();
-    for(const mesh of statics){
+    tempVecC.copy(point);
+    tempVecC.y = (activeZone?.height ?? point.y ?? 0) + CONFIG.PLAYER.baseHeight * 0.5;
+    helperRay.set(tempVecC, tempVecA.subVectors(playerPos, point).normalize());
+    for(let i=0;i<statics.length;i++){
+      const mesh = statics[i];
+      if(!mesh) continue;
       const res = helperRay.intersectObject(mesh, false);
-      if(res.length){
+      if(res.length && res[0].distance > 0.25){
         return true;
       }
     }
-    return false;
+    return point.distanceTo(playerPos) >= safeRadius * 1.6;
   }
 
   function patchedUpdateEnemies(delta){
@@ -1245,18 +1648,28 @@ export function applyPatch(ctx){
   function patchedUpdateMinimap(){
     if(!minimapCtx) return;
     const now = performance.now();
-    const yawNode = yawObject || (typeof controls.getObject === 'function' ? controls.getObject() : controls);
-    const yaw = yawNode?.rotation?.y ?? 0;
-    const hdg = ((yaw % (Math.PI*2)) + Math.PI*2) % (Math.PI*2);
     const playerPos = controls.getObject().position;
-    const yawDiff = minimapState.lastYaw === null ? Infinity : Math.abs(shortestAngleDiff(hdg, minimapState.lastYaw));
+    const forward3 = tempVecF.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    forward3.y = 0;
+    if(forward3.lengthSq() < 1e-6){
+      forward3.set(0, 0, -1);
+    }
+    forward3.normalize();
+    const forward2 = tempVec2A.set(forward3.x, forward3.z);
+    if(forward2.lengthSq() < 1e-6){
+      forward2.set(0, -1);
+    } else {
+      forward2.normalize();
+    }
+    const heading = Math.atan2(forward2.x, forward2.y);
+    const yawDiff = minimapState.lastYaw === null ? Infinity : Math.abs(shortestAngleDiff(heading, minimapState.lastYaw));
     const posDiff = minimapState.lastPlayerX === null ? Infinity : Math.abs(playerPos.x - minimapState.lastPlayerX) + Math.abs(playerPos.z - minimapState.lastPlayerZ);
     const enemyCount = enemies.length;
     const timeDiff = now - minimapState.lastUpdate;
     const shouldUpdate = timeDiff > 120 || yawDiff > 0.01 || posDiff > 0.05 || enemyCount !== minimapState.lastEnemyCount;
     if(!shouldUpdate) return;
 
-    minimapState.lastYaw = hdg;
+    minimapState.lastYaw = heading;
     minimapState.lastPlayerX = playerPos.x;
     minimapState.lastPlayerZ = playerPos.z;
     minimapState.lastEnemyCount = enemyCount;
@@ -1264,7 +1677,8 @@ export function applyPatch(ctx){
 
     const canvas = minimapCtx.canvas;
     const size = canvas.width;
-    const scale = size / world.size;
+    const mapSize = Math.max(1, world.size || 60);
+    const scale = size / mapSize;
     const center = size * 0.5;
 
     minimapCtx.clearRect(0, 0, size, size);
@@ -1273,6 +1687,37 @@ export function applyPatch(ctx){
     minimapCtx.strokeStyle = 'rgba(255,255,255,.15)';
     minimapCtx.strokeRect(2, 2, size - 4, size - 4);
 
+    if(Array.isArray(world.obstacles)){
+      minimapCtx.fillStyle = 'rgba(255,255,255,.08)';
+      for(let i = 0; i < world.obstacles.length; i++){
+        const obstacle = world.obstacles[i];
+        if(!obstacle) continue;
+        tempBox.setFromObject(obstacle);
+        const oc = tempBox.getCenter(tempVecA);
+        const os = tempBox.getSize(tempVecB);
+        minimapCtx.fillRect(
+          center + oc.x * scale - (os.x * scale) / 2,
+          center + oc.z * scale - (os.z * scale) / 2,
+          Math.max(2, os.x * scale),
+          Math.max(2, os.z * scale)
+        );
+      }
+    }
+
+    if(Array.isArray(PATCH_STATE.enemySpawnZones) && PATCH_STATE.enemySpawnZones.length){
+      minimapCtx.strokeStyle = 'rgba(255,92,59,.25)';
+      minimapCtx.lineWidth = 1;
+      for(let i = 0; i < PATCH_STATE.enemySpawnZones.length; i++){
+        const zone = PATCH_STATE.enemySpawnZones[i];
+        const zx = center + zone.center.x * scale;
+        const zy = center + zone.center.z * scale;
+        minimapCtx.beginPath();
+        minimapCtx.arc(zx, zy, Math.max(4, (zone.radius || 0) * scale), 0, Math.PI * 2);
+        minimapCtx.stroke();
+      }
+      minimapCtx.lineWidth = 1;
+    }
+
     const px = center + playerPos.x * scale;
     const py = center + playerPos.z * scale;
     minimapCtx.fillStyle = '#50c8ff';
@@ -1280,16 +1725,30 @@ export function applyPatch(ctx){
     minimapCtx.arc(px, py, 6, 0, Math.PI * 2);
     minimapCtx.fill();
 
-    const coneLength = 26;
-    const left = hdg - 0.35;
-    const right = hdg + 0.35;
+    if(PATCH_STATE.playerSpawn){
+      const sx = center + PATCH_STATE.playerSpawn.x * scale;
+      const sy = center + PATCH_STATE.playerSpawn.z * scale;
+      minimapCtx.fillStyle = 'rgba(80,200,255,.35)';
+      minimapCtx.fillRect(sx - 3, sy - 3, 6, 6);
+    }
+
+    const halfFov = THREE.MathUtils.degToRad(camera.fov || CONFIG.STANCE.baseFov) * 0.5;
+    const leftVec = rotateVec2(tempVec2B, forward2, -halfFov);
+    const rightVec = rotateVec2(tempVec2C, forward2, halfFov);
+    const coneLength = Math.min(size * 0.35, 32);
     minimapCtx.beginPath();
     minimapCtx.moveTo(px, py);
-    minimapCtx.lineTo(px + Math.sin(left) * coneLength, py + Math.cos(left) * coneLength);
-    minimapCtx.lineTo(px + Math.sin(right) * coneLength, py + Math.cos(right) * coneLength);
+    minimapCtx.lineTo(px + leftVec.x * coneLength, py + leftVec.y * coneLength);
+    minimapCtx.lineTo(px + rightVec.x * coneLength, py + rightVec.y * coneLength);
     minimapCtx.closePath();
     minimapCtx.fillStyle = 'rgba(80,200,255,.2)';
     minimapCtx.fill();
+
+    minimapCtx.strokeStyle = 'rgba(80,200,255,.55)';
+    minimapCtx.beginPath();
+    minimapCtx.moveTo(px, py);
+    minimapCtx.lineTo(px + forward2.x * coneLength, py + forward2.y * coneLength);
+    minimapCtx.stroke();
 
     minimapCtx.fillStyle = '#ff5c3b';
     for(let i = 0; i < enemyCount; i++){
@@ -1315,6 +1774,15 @@ export function applyPatch(ctx){
     if(ui.minimapTexture){
       safeFlagTexture(ui.minimapTexture);
     }
+  }
+
+  function rotateVec2(target, source, angle){
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    const x = source.x;
+    const y = source.y;
+    target.set(x * c - y * s, x * s + y * c);
+    return target;
   }
 
   function setupCoverPoints(){
@@ -1489,7 +1957,7 @@ export function applyPatch(ctx){
     }
   };
 
-  const perfOverlay = CONFIG.PERF.debugOverlay ? createPerfOverlay() : null;
+  perfOverlay = CONFIG.PERF.debugOverlay ? createPerfOverlay() : null;
 
   function createPerfOverlay(){
     const el = document.createElement('div');
@@ -1544,7 +2012,8 @@ export function applyPatch(ctx){
   // ---------------------------------------------------------------------------
   // INPUT
   // ---------------------------------------------------------------------------
-  const boundFlags = globalNS.boundFlags = globalNS.boundFlags || { input:false };
+  const boundFlags = { input:false };
+  globalNS.boundFlags = boundFlags;
   if(!boundFlags.input){
     document.addEventListener('keydown', onKeyDown, false);
     document.addEventListener('keyup', onKeyUp, false);
@@ -1583,6 +2052,22 @@ export function applyPatch(ctx){
   // ---------------------------------------------------------------------------
   const originalOpenStore = functions.openStore || ctx.openStore;
   const originalCloseStore = functions.closeStore || ctx.closeStore;
+  const originalBindings = {
+    updatePlayer: originalUpdatePlayer,
+    hitscanShoot: originalHitscanShoot,
+    enemyHitscanShoot: originalEnemyHitscanShoot,
+    spawnEnemy: originalSpawnEnemy,
+    updateEnemies: originalUpdateEnemies,
+    moveTowards: originalMoveTowards,
+    updateMinimap: originalUpdateMinimap,
+    startNextRound: originalStartNextRound,
+    removeEnemy: originalRemoveEnemy,
+    damagePlayer: originalDamagePlayer,
+    showRoundBanner: originalShowRoundBanner,
+    animate: originalAnimate,
+    openStore: originalOpenStore,
+    closeStore: originalCloseStore,
+  };
 
   function openStore(fromBuyPhase){
     playerState.storeOpen = true;
@@ -1630,10 +2115,96 @@ export function applyPatch(ctx){
   startLoop();
 
   PATCH_STATE.CONFIG = CONFIG;
-  globalNS.state = { CONFIG, playerState, fireState };
+  globalNS.state = { CONFIG, playerState, fireState, enemySpawnZones: PATCH_STATE.enemySpawnZones, playerSpawn: PATCH_STATE.playerSpawn };
 
   updateEnemiesHud();
   updateArmorBadge();
+
+  globalNS.dispose = () => {
+    try{
+      if(typeof globalNS.stopLoop === 'function'){
+        globalNS.stopLoop();
+      }
+    }catch(err){
+      console.warn('[patch-001] Failed to stop loop during dispose.', err);
+    }
+
+    if(boundFlags.input){
+      document.removeEventListener('keydown', onKeyDown, false);
+      document.removeEventListener('keyup', onKeyUp, false);
+      boundFlags.input = false;
+    }
+
+    if(renderer.domElement && globalNS.contextBound){
+      renderer.domElement.removeEventListener('webglcontextlost', handleContextLost, false);
+      renderer.domElement.removeEventListener('webglcontextrestored', handleContextRestored, false);
+      globalNS.contextBound = false;
+    }
+
+    if(renderer.shadowMap){
+      renderer.shadowMap.enabled = originalShadowEnabled;
+    }
+
+    if(perfOverlay && typeof perfOverlay.remove === 'function'){
+      perfOverlay.remove();
+      perfOverlay = null;
+    }
+
+    if(ui.contextOverlay){
+      if(typeof ui.contextOverlay.remove === 'function'){
+        ui.contextOverlay.remove();
+      }
+      delete ui.contextOverlay;
+    }
+
+    if(Array.isArray(PATCH_STATE.weaponParts)){
+      for(const part of PATCH_STATE.weaponParts){
+        if(!part) continue;
+        part.parent?.remove(part);
+        part.geometry?.dispose?.();
+        if(part.material){
+          if(Array.isArray(part.material)){
+            part.material.forEach(disposeMaterial);
+          } else {
+            disposeMaterial(part.material);
+          }
+        }
+      }
+      PATCH_STATE.weaponParts = null;
+    }
+
+    if(PATCH_STATE.muzzleAnchor){
+      const anchor = PATCH_STATE.muzzleAnchor;
+      if(ctx.muzzleFlash && ctx.muzzleFlash.parent === anchor && anchor.parent){
+        anchor.parent.add(ctx.muzzleFlash);
+        ctx.muzzleFlash.position.copy(anchor.position);
+      }
+      anchor.parent?.remove(anchor);
+      PATCH_STATE.muzzleAnchor = null;
+      ctx.muzzleAnchor = null;
+    }
+
+    PATCH_STATE.enemySpawnZones = null;
+    PATCH_STATE.playerSpawn = null;
+
+    for(const [key, value] of Object.entries(originalBindings)){
+      if(value !== undefined && value !== null){
+        functions[key] = value;
+      } else {
+        delete functions[key];
+      }
+    }
+
+    PATCH_STATE.debug = false;
+
+    globalNS.boundFlags = { input:false };
+    globalNS.state = null;
+    globalNS.stopLoop = undefined;
+    globalNS.dispose = undefined;
+    globalNS.applied = false;
+  };
+
+  globalNS.applied = true;
 
   // ---------------------------------------------------------------------------
   // HELPERS
