@@ -43,6 +43,7 @@ export function applyPatch(ctx){
   }
 
   const originalShadowEnabled = renderer.shadowMap?.enabled ?? false;
+  const baseEnemyTexture = (ctx.enemyMaterialTemplate && ctx.enemyMaterialTemplate.map) || ctx.enemyUniformTexture || null;
 
   const CONFIG = {
     CONFIG_VERSION: '001',
@@ -1672,6 +1673,13 @@ export function applyPatch(ctx){
     const spawnHeight = spawnPoint.y;
     const bodyGeometry = PATCH_STATE.enemyGeometry;
     const mat = ctx.enemyMaterialTemplate ? ctx.enemyMaterialTemplate.clone() : new THREE.MeshStandardMaterial({ color:0x223344 });
+    const clonedMap = mat.map;
+    if(baseEnemyTexture){
+      mat.map = baseEnemyTexture;
+    }
+    if(clonedMap && clonedMap !== mat.map && typeof clonedMap.dispose === 'function'){
+      clonedMap.dispose();
+    }
     const enemyMesh = new THREE.Mesh(bodyGeometry, mat);
     enemyMesh.position.set(spawnPoint.x, spawnHeight + ENEMY_HALF_HEIGHT, spawnPoint.z);
     enemyMesh.castShadow = enemyMesh.receiveShadow = true;

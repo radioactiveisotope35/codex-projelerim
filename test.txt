@@ -344,6 +344,11 @@
         }
       }
       const mat=enemyMaterialTemplate.clone();
+      const clonedMap=mat.map;
+      mat.map=enemyUniformTexture;
+      if(clonedMap && clonedMap!==enemyUniformTexture && typeof clonedMap.dispose==='function'){
+        clonedMap.dispose();
+      }
       mat.color.setHSL(THREE.MathUtils.randFloat(.55,.62),.45,.55);
       const enemyMesh=new THREE.Mesh(enemyGeometry,mat); enemyMesh.position.set(spawnCandidate.x,1.5,spawnCandidate.z); enemyMesh.castShadow=enemyMesh.receiveShadow=true; scene.add(enemyMesh);
       const p = difficulty.params;
