@@ -405,10 +405,10 @@ export function applyPatch(ctx){
   const ENEMY_HEIGHT = 2.4;
   const ENEMY_HALF_HEIGHT = ENEMY_HEIGHT * 0.5;
   const ENEMY_PROFILE_PALETTES = [
-    { base: 0x2d3f5f, accent: 0x57d6ff, emissive: 0x071b2c },
-    { base: 0x3e2f55, accent: 0xff6d8a, emissive: 0x1c0618 },
-    { base: 0x354b2f, accent: 0x9cf36d, emissive: 0x0b1609 },
-    { base: 0x463b29, accent: 0xffc266, emissive: 0x1f1606 },
+    { base: 0x2d3f5f, accent: 0x57d6ff, emissive: 0x071b2c, skin: 0xf2c7a2, hair: 0x1b2331 },
+    { base: 0x3e2f55, accent: 0xff6d8a, emissive: 0x1c0618, skin: 0xeec0a7, hair: 0x1a1019 },
+    { base: 0x354b2f, accent: 0x9cf36d, emissive: 0x0b1609, skin: 0xeac9a3, hair: 0x2a2113 },
+    { base: 0x463b29, accent: 0xffc266, emissive: 0x1f1606, skin: 0xf6d3b3, hair: 0x2b1c10 },
   ];
   const DEFAULT_ENEMY_PROFILE = {
     aggression: 0.55,
@@ -524,6 +524,12 @@ export function applyPatch(ctx){
     const palette = getEnemyPalette(enemy.profile.paletteIndex);
     const primaryMaterial = enemy.primaryMaterial || getEnemyPrimaryMaterial(enemy);
     if(primaryMaterial){
+      if(!primaryMaterial.map || primaryMaterial.map === baseEnemyTexture){
+        const fabric = ensureEnemyFabricTexture();
+        primaryMaterial.map = fabric;
+        primaryMaterial.needsUpdate = true;
+        markSharedTexture(fabric);
+      }
       if(primaryMaterial.color?.setHex){
         primaryMaterial.color.setHex(palette.base);
       }
@@ -539,14 +545,22 @@ export function applyPatch(ctx){
       }
       primaryMaterial.needsUpdate = true;
     }
-    if(enemy.accentMaterial){
-      if(enemy.accentMaterial.color?.setHex){
-        enemy.accentMaterial.color.setHex(palette.accent);
+    const accentMaterial = enemy.accentMaterial || enemy.mesh?.userData?.accentMaterial;
+    if(accentMaterial){
+      if(!accentMaterial.map || accentMaterial.map === baseEnemyTexture){
+        const fabric = ensureEnemyFabricTexture();
+        accentMaterial.map = fabric;
+        accentMaterial.needsUpdate = true;
+        markSharedTexture(fabric);
       }
-      if(typeof enemy.accentMaterial.emissiveIntensity === 'number'){
-        enemy.accentMaterial.emissiveIntensity = THREE.MathUtils.clamp(0.25 + enemy.profile.aggression * 0.35, 0.25, 0.8);
+      if(accentMaterial.color?.setHex){
+        accentMaterial.color.setHex(palette.accent);
       }
-      enemy.accentMaterial.needsUpdate = true;
+      if(typeof accentMaterial.emissiveIntensity === 'number'){
+        accentMaterial.emissiveIntensity = THREE.MathUtils.clamp(0.25 + enemy.profile.aggression * 0.35, 0.25, 0.8);
+      }
+      accentMaterial.needsUpdate = true;
+      enemy.accentMaterial = accentMaterial;
     }
     if(enemy.visorMaterial){
       if(enemy.visorMaterial.color?.setHex){
@@ -558,6 +572,24 @@ export function applyPatch(ctx){
       }
       enemy.visorMaterial.needsUpdate = true;
     }
+    const skinMaterial = enemy.skinMaterial || enemy.mesh?.userData?.skinMaterial;
+    if(skinMaterial && skinMaterial.color?.setHex){
+      skinMaterial.color.setHex(palette.skin || 0xf2c7a2);
+      if(typeof skinMaterial.roughness === 'number'){
+        skinMaterial.roughness = 0.42;
+      }
+      skinMaterial.needsUpdate = true;
+      enemy.skinMaterial = skinMaterial;
+    }
+    const hairMaterial = enemy.hairMaterial || enemy.mesh?.userData?.hairMaterial;
+    if(hairMaterial && hairMaterial.color?.setHex){
+      hairMaterial.color.setHex(palette.hair || 0x2a1f18);
+      if(typeof hairMaterial.roughness === 'number'){
+        hairMaterial.roughness = 0.35;
+      }
+      hairMaterial.needsUpdate = true;
+      enemy.hairMaterial = hairMaterial;
+    }
     enemy.mesh.scale.set(
       enemy.profile.scale.x,
       enemy.profile.scale.y,
@@ -565,6 +597,8 @@ export function applyPatch(ctx){
     );
     enemy.mesh.userData.enemyPalette = palette;
     enemy.mesh.userData.primaryMaterial = primaryMaterial;
+    if(skinMaterial){ enemy.mesh.userData.skinMaterial = skinMaterial; }
+    if(hairMaterial){ enemy.mesh.userData.hairMaterial = hairMaterial; }
     enemy.primaryMaterial = primaryMaterial;
   }
 
@@ -655,6 +689,47 @@ export function applyPatch(ctx){
     }
   }
 
+  function ensureEnemyFabricTexture(){
+    if(globalNS.enemyFabricTexture && globalNS.enemyFabricTexture.isTexture){
+      markSharedTexture(globalNS.enemyFabricTexture);
+      return globalNS.enemyFabricTexture;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 256;
+    const ctx2d = canvas.getContext('2d');
+    if(ctx2d){
+      ctx2d.fillStyle = '#1b2534';
+      ctx2d.fillRect(0, 0, canvas.width, canvas.height);
+      const grad = ctx2d.createLinearGradient(0, 0, 0, canvas.height);
+      grad.addColorStop(0, '#233247');
+      grad.addColorStop(0.5, '#1d2a3c');
+      grad.addColorStop(1, '#151d29');
+      ctx2d.fillStyle = grad;
+      ctx2d.fillRect(0, 0, canvas.width, canvas.height);
+      ctx2d.strokeStyle = 'rgba(255,255,255,0.06)';
+      ctx2d.lineWidth = 2;
+      for(let i = -canvas.width; i < canvas.width; i += 18){
+        ctx2d.beginPath();
+        ctx2d.moveTo(i, 0);
+        ctx2d.lineTo(i + canvas.width, canvas.height);
+        ctx2d.stroke();
+      }
+      ctx2d.fillStyle = 'rgba(6,12,20,0.55)';
+      ctx2d.fillRect(canvas.width * 0.48, 0, canvas.width * 0.04, canvas.height);
+      ctx2d.fillStyle = 'rgba(120,180,255,0.18)';
+      ctx2d.fillRect(0, canvas.height * 0.18, canvas.width, 10);
+      ctx2d.fillRect(0, canvas.height * 0.62, canvas.width, 8);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    texture.anisotropy = Math.max(texture.anisotropy || 1, 4);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.needsUpdate = true;
+    globalNS.enemyFabricTexture = texture;
+    markSharedTexture(texture);
+    return texture;
+  }
+
   function applySharedEnemyTexture(material){
     if(!material || !baseEnemyTexture) return material;
     const previous = material.map;
@@ -671,8 +746,18 @@ export function applyPatch(ctx){
   }
 
   function createDefaultEnemyMaterial(){
-    const material = new THREE.MeshStandardMaterial({ color:0x223344 });
-    return applySharedEnemyTexture(material);
+    const fabric = ensureEnemyFabricTexture();
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x223344,
+      map: fabric,
+      roughness: 0.6,
+      metalness: 0.18,
+    });
+    markSharedTexture(fabric);
+    if(baseEnemyTexture){
+      applySharedEnemyTexture(material);
+    }
+    return material;
   }
 
   function instantiateEnemyMaterial(){
@@ -766,11 +851,15 @@ export function applyPatch(ctx){
 
     assets.torso = buildGeometry(THREE.CapsuleGeometry, [torsoRadius, Math.max(0, torsoHeight - torsoRadius * 2), 10, 18], 'torso capsule');
     assets.core = buildGeometry(THREE.CapsuleGeometry, [torsoRadius * 0.86, Math.max(0, torsoHeight * 0.4), 8, 14], 'core capsule');
-    assets.head = buildGeometry(THREE.SphereGeometry, [ENEMY_RADIUS * 0.62, 20, 16], 'head sphere');
+    assets.chestPlate = buildGeometry(THREE.BoxGeometry, [torsoRadius * 1.6, ENEMY_RADIUS * 1.2, ENEMY_RADIUS * 0.9], 'chest plate');
+    assets.head = buildGeometry(THREE.SphereGeometry, [ENEMY_RADIUS * 0.62, 24, 18], 'head sphere');
+    assets.facePlate = buildGeometry(THREE.CylinderGeometry, [ENEMY_RADIUS * 0.46, ENEMY_RADIUS * 0.46, ENEMY_RADIUS * 0.18, 18, 1, true], 'face plate');
+    assets.hair = buildGeometry(THREE.SphereGeometry, [ENEMY_RADIUS * 0.58, 22, 16, 0, Math.PI * 2, 0, Math.PI * 0.6], 'hair dome');
     assets.visor = buildGeometry(THREE.SphereGeometry, [ENEMY_RADIUS * 0.46, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.55], 'visor dome');
     assets.shoulder = buildGeometry(THREE.CylinderGeometry, [limbRadius * 1.1, limbRadius * 0.92, ENEMY_RADIUS * 0.95, 12, 1, true], 'shoulder cylinder');
     assets.arm = buildGeometry(THREE.CapsuleGeometry, [limbRadius, ENEMY_RADIUS * 1.1, 8, 12], 'arm capsule');
-    assets.forearm = buildGeometry(THREE.CapsuleGeometry, [limbRadius * 0.9, ENEMY_RADIUS, 8, 12], 'forearm capsule');
+    assets.forearm = buildGeometry(THREE.CapsuleGeometry, [limbRadius * 0.9, ENEMY_RADIUS * 0.95, 8, 12], 'forearm capsule');
+    assets.hand = buildGeometry(THREE.CapsuleGeometry, [limbRadius * 0.65, ENEMY_RADIUS * 0.32, 6, 10], 'hand capsule');
     assets.hip = buildGeometry(THREE.CylinderGeometry, [shinRadius * 1.2, shinRadius, ENEMY_RADIUS * 0.9, 10], 'hip cylinder');
     assets.leg = buildGeometry(THREE.CapsuleGeometry, [shinRadius, ENEMY_RADIUS * 1.25, 10, 14], 'leg capsule');
     assets.boot = buildGeometry(THREE.BoxGeometry, [shinRadius * 1.6, shinRadius * 0.8, shinRadius * 2.2], 'boot box');
@@ -809,16 +898,46 @@ export function applyPatch(ctx){
 
     const palette = getEnemyPalette(profile?.paletteIndex ?? 0);
     const baseMaterial = instantiateEnemyMaterial();
-    const bodyMaterial = (() => {
-      if(Array.isArray(baseMaterial)) return baseMaterial[0];
-      return baseMaterial;
-    })() || createDefaultEnemyMaterial();
-    const accentMaterial = bodyMaterial?.clone ? bodyMaterial.clone() : new THREE.MeshStandardMaterial({ color: palette.accent });
+    let bodyMaterial = null;
+    if(Array.isArray(baseMaterial)){
+      bodyMaterial = baseMaterial[0] || null;
+    } else {
+      bodyMaterial = baseMaterial || null;
+    }
+    if(!bodyMaterial){
+      bodyMaterial = createDefaultEnemyMaterial();
+    }
+    const fabric = ensureEnemyFabricTexture();
+    if(bodyMaterial && (!bodyMaterial.map || bodyMaterial.map === baseEnemyTexture)){
+      bodyMaterial.map = fabric;
+      bodyMaterial.needsUpdate = true;
+    }
+    let accentMaterial = bodyMaterial?.clone ? bodyMaterial.clone() : null;
+    if(!accentMaterial){
+      accentMaterial = new THREE.MeshStandardMaterial({
+        color: palette.accent,
+        roughness: 0.48,
+        metalness: 0.22,
+      });
+    } else {
+      accentMaterial.map = fabric;
+      accentMaterial.needsUpdate = true;
+    }
+    const skinMaterial = new THREE.MeshStandardMaterial({
+      color: palette.skin || 0xf2c7a2,
+      roughness: 0.42,
+      metalness: 0.08,
+    });
+    const hairMaterial = new THREE.MeshStandardMaterial({
+      color: palette.hair || 0x2a1f18,
+      roughness: 0.35,
+      metalness: 0.22,
+    });
     const visorMaterial = new THREE.MeshStandardMaterial({
       color: 0x7fb8ff,
       emissive: new THREE.Color(palette.accent || 0x4da3ff),
       emissiveIntensity: 0.8,
-      roughness: 0.25,
+      roughness: 0.2,
       metalness: 0.1,
       transparent: true,
       opacity: 0.82,
@@ -839,26 +958,43 @@ export function applyPatch(ctx){
 
     const torso = new THREE.Mesh(assets.torso, bodyMaterial);
     torso.name = 'enemy-torso';
-    torso.position.y = ENEMY_HALF_HEIGHT * 0.35;
+    torso.position.y = ENEMY_HALF_HEIGHT * 0.36;
     torso.castShadow = torso.receiveShadow = true;
     torso.userData.primaryMaterial = true;
     rig.add(torso);
 
     const core = new THREE.Mesh(assets.core, bodyMaterial);
     core.name = 'enemy-core';
-    core.position.y = ENEMY_HALF_HEIGHT * 0.6;
+    core.position.y = ENEMY_HALF_HEIGHT * 0.62;
     core.castShadow = core.receiveShadow = true;
     rig.add(core);
 
-    const head = new THREE.Mesh(assets.head, accentMaterial);
+    const chest = new THREE.Mesh(assets.chestPlate, accentMaterial);
+    chest.name = 'enemy-chest';
+    chest.position.set(0, ENEMY_HALF_HEIGHT * 0.75, ENEMY_RADIUS * 0.05);
+    rig.add(chest);
+
+    const head = new THREE.Mesh(assets.head, skinMaterial);
     head.name = 'enemy-head';
-    head.position.y = ENEMY_HEIGHT - ENEMY_RADIUS * 0.4;
+    head.position.y = ENEMY_HEIGHT - ENEMY_RADIUS * 0.35;
     head.castShadow = head.receiveShadow = true;
     rig.add(head);
 
+    const face = new THREE.Mesh(assets.facePlate, skinMaterial);
+    face.name = 'enemy-face';
+    face.position.set(0, head.position.y, ENEMY_RADIUS * 0.43);
+    face.rotation.x = Math.PI * 0.5;
+    face.material.side = THREE.DoubleSide;
+    rig.add(face);
+
+    const hair = new THREE.Mesh(assets.hair, hairMaterial);
+    hair.name = 'enemy-hair';
+    hair.position.set(0, head.position.y + ENEMY_RADIUS * 0.1, 0);
+    rig.add(hair);
+
     const visor = new THREE.Mesh(assets.visor, visorMaterial);
     visor.name = 'enemy-visor';
-    visor.position.set(0, head.position.y + ENEMY_RADIUS * 0.05, ENEMY_RADIUS * 0.25);
+    visor.position.set(0, head.position.y + ENEMY_RADIUS * 0.02, ENEMY_RADIUS * 0.25);
     visor.castShadow = false;
     visor.receiveShadow = false;
     rig.add(visor);
@@ -869,17 +1005,19 @@ export function applyPatch(ctx){
     buildLimb(assets.shoulder, accentMaterial, new THREE.Vector3(-shoulderOffset, shoulderHeight, 0), new THREE.Euler(Math.PI * 0.5, 0, -Math.PI * 0.05), 'enemy-shoulder-l');
 
     const armHeight = shoulderHeight - ENEMY_RADIUS * 0.1;
-    buildLimb(assets.arm, bodyMaterial, new THREE.Vector3(shoulderOffset * 1.02, armHeight - ENEMY_RADIUS * 0.5, 0.2), new THREE.Euler(Math.PI * 0.5, 0, Math.PI * 0.25), 'enemy-arm-r');
-    buildLimb(assets.arm, bodyMaterial, new THREE.Vector3(-shoulderOffset * 1.02, armHeight - ENEMY_RADIUS * 0.5, 0.2), new THREE.Euler(Math.PI * 0.5, 0, -Math.PI * 0.25), 'enemy-arm-l');
-    buildLimb(assets.forearm, bodyMaterial, new THREE.Vector3(shoulderOffset * 1.05, armHeight - ENEMY_RADIUS * 1.3, 0.35), new THREE.Euler(Math.PI * 0.55, 0, Math.PI * 0.18), 'enemy-forearm-r');
-    buildLimb(assets.forearm, bodyMaterial, new THREE.Vector3(-shoulderOffset * 1.05, armHeight - ENEMY_RADIUS * 1.3, 0.35), new THREE.Euler(Math.PI * 0.55, 0, -Math.PI * 0.18), 'enemy-forearm-l');
+    buildLimb(assets.arm, bodyMaterial, new THREE.Vector3(shoulderOffset * 1.02, armHeight - ENEMY_RADIUS * 0.45, 0.2), new THREE.Euler(Math.PI * 0.5, 0, Math.PI * 0.25), 'enemy-arm-r');
+    buildLimb(assets.arm, bodyMaterial, new THREE.Vector3(-shoulderOffset * 1.02, armHeight - ENEMY_RADIUS * 0.45, 0.2), new THREE.Euler(Math.PI * 0.5, 0, -Math.PI * 0.25), 'enemy-arm-l');
+    buildLimb(assets.forearm, bodyMaterial, new THREE.Vector3(shoulderOffset * 1.05, armHeight - ENEMY_RADIUS * 1.25, 0.35), new THREE.Euler(Math.PI * 0.58, 0, Math.PI * 0.18), 'enemy-forearm-r');
+    buildLimb(assets.forearm, bodyMaterial, new THREE.Vector3(-shoulderOffset * 1.05, armHeight - ENEMY_RADIUS * 1.25, 0.35), new THREE.Euler(Math.PI * 0.58, 0, -Math.PI * 0.18), 'enemy-forearm-l');
+    buildLimb(assets.hand, skinMaterial, new THREE.Vector3(shoulderOffset * 1.08, armHeight - ENEMY_RADIUS * 1.65, 0.45), new THREE.Euler(Math.PI * 0.5, 0, Math.PI * 0.12), 'enemy-hand-r');
+    buildLimb(assets.hand, skinMaterial, new THREE.Vector3(-shoulderOffset * 1.08, armHeight - ENEMY_RADIUS * 1.65, 0.45), new THREE.Euler(Math.PI * 0.5, 0, -Math.PI * 0.12), 'enemy-hand-l');
 
     const hipHeight = ENEMY_HALF_HEIGHT * 0.5;
     buildLimb(assets.hip, accentMaterial, new THREE.Vector3(0, hipHeight, 0), new THREE.Euler(Math.PI * 0.5, 0, 0), 'enemy-hip');
-    buildLimb(assets.leg, bodyMaterial, new THREE.Vector3(ENEMY_RADIUS * 0.55, hipHeight - ENEMY_RADIUS * 1.2, 0.05), new THREE.Euler(Math.PI * 0.5, 0, Math.PI * 0.08), 'enemy-leg-r');
-    buildLimb(assets.leg, bodyMaterial, new THREE.Vector3(-ENEMY_RADIUS * 0.55, hipHeight - ENEMY_RADIUS * 1.2, 0.05), new THREE.Euler(Math.PI * 0.5, 0, -Math.PI * 0.08), 'enemy-leg-l');
-    buildLimb(assets.boot, accentMaterial, new THREE.Vector3(ENEMY_RADIUS * 0.55, hipHeight - ENEMY_RADIUS * 2.1, ENEMY_RADIUS * 0.35), null, 'enemy-boot-r');
-    buildLimb(assets.boot, accentMaterial, new THREE.Vector3(-ENEMY_RADIUS * 0.55, hipHeight - ENEMY_RADIUS * 2.1, ENEMY_RADIUS * 0.35), null, 'enemy-boot-l');
+    buildLimb(assets.leg, bodyMaterial, new THREE.Vector3(ENEMY_RADIUS * 0.52, hipHeight - ENEMY_RADIUS * 1.2, 0.05), new THREE.Euler(Math.PI * 0.5, 0, Math.PI * 0.08), 'enemy-leg-r');
+    buildLimb(assets.leg, bodyMaterial, new THREE.Vector3(-ENEMY_RADIUS * 0.52, hipHeight - ENEMY_RADIUS * 1.2, 0.05), new THREE.Euler(Math.PI * 0.5, 0, -Math.PI * 0.08), 'enemy-leg-l');
+    buildLimb(assets.boot, accentMaterial, new THREE.Vector3(ENEMY_RADIUS * 0.52, hipHeight - ENEMY_RADIUS * 2.1, ENEMY_RADIUS * 0.32), null, 'enemy-boot-r');
+    buildLimb(assets.boot, accentMaterial, new THREE.Vector3(-ENEMY_RADIUS * 0.52, hipHeight - ENEMY_RADIUS * 2.1, ENEMY_RADIUS * 0.32), null, 'enemy-boot-l');
 
     rig.traverse(obj => {
       if(obj && obj.isMesh){
@@ -891,6 +1029,8 @@ export function applyPatch(ctx){
     rig.userData.primaryMaterial = bodyMaterial;
     rig.userData.accentMaterial = accentMaterial;
     rig.userData.visorMaterial = visorMaterial;
+    rig.userData.skinMaterial = skinMaterial;
+    rig.userData.hairMaterial = hairMaterial;
     rig.userData.palette = palette;
 
     return {
@@ -899,6 +1039,8 @@ export function applyPatch(ctx){
         primary: bodyMaterial,
         accent: accentMaterial,
         visor: visorMaterial,
+        skin: skinMaterial,
+        hair: hairMaterial,
       }
     };
   }
@@ -2587,6 +2729,8 @@ export function applyPatch(ctx){
     enemy.primaryMaterial = rigBuild.materials?.primary || getEnemyPrimaryMaterial(enemy);
     enemy.accentMaterial = rigBuild.materials?.accent || null;
     enemy.visorMaterial = rigBuild.materials?.visor || null;
+    enemy.skinMaterial = rigBuild.materials?.skin || enemyMesh.userData?.skinMaterial || null;
+    enemy.hairMaterial = rigBuild.materials?.hair || enemyMesh.userData?.hairMaterial || null;
     applyEnemyVisualProfile(enemy);
     enemyMesh.traverse(obj => {
       if(obj && obj.isMesh){
@@ -2643,7 +2787,7 @@ export function applyPatch(ctx){
   }
 
   function createEnemyBrain(zone, profile = DEFAULT_ENEMY_PROFILE){
-    const reactionBase = THREE.MathUtils.lerp(0.22, 0.08, THREE.MathUtils.clamp((profile.accuracy + profile.aggression) * 0.5, 0, 1));
+    const reactionBase = THREE.MathUtils.lerp(0.18, 0.06, THREE.MathUtils.clamp((profile.accuracy + profile.aggression) * 0.5, 0, 1));
     const vigilance = THREE.MathUtils.lerp(0.28, 0.78, profile.aggression * 0.6 + profile.resilience * 0.4);
     return {
       state: 'patrol',
@@ -2669,6 +2813,8 @@ export function applyPatch(ctx){
       reactionDelay: reactionBase,
       reactionTimer: reactionBase,
       reacquireBoost: Math.max(0.04, reactionBase * 0.35),
+      searchUntil: 0,
+      investigationTarget: new THREE.Vector3(),
     };
   }
 
@@ -2873,10 +3019,23 @@ export function applyPatch(ctx){
       }
 
       const alertActive = hasLine || brain.awareness > 0.45 || (brain.alertUntil || 0) > now;
+      if(alertActive && !hasLine){
+        brain.searchUntil = Math.max(brain.searchUntil || 0, now + 1800);
+        brain.investigationTarget.copy(brain.lastKnownPlayerPos);
+      } else if(hasLine){
+        brain.searchUntil = Math.max(brain.searchUntil || 0, now + 900);
+        brain.investigationTarget.copy(playerPos);
+      }
 
       switch(brain.state){
         case 'patrol': {
           const zone = enemy.spawnZone;
+          if((brain.searchUntil || 0) > now && !hasLine){
+            brain.state = 'flank';
+            brain.repositionUntil = Math.max(brain.repositionUntil, now + 600);
+            brain.hasCoverTarget = false;
+            break;
+          }
           if(
             now >= brain.nextWanderAt ||
             !isFinite(brain.wanderTarget.x) ||
@@ -2933,6 +3092,9 @@ export function applyPatch(ctx){
           }
           applyEnemyVelocity(enemy, tempVecF, delta, statics);
           if(hasLine){
+            const closeShotWindow = Math.max(0.035, brain.reactionDelay * 0.4);
+            brain.reactionTimer = Math.max(0, brain.reactionTimer - delta * (reactionPull + 6));
+            enemy.fireCooldown = Math.min(enemy.fireCooldown, brain.reactionTimer + closeShotWindow);
             const cooldownPull = THREE.MathUtils.lerp(1.4, 2.1, profile.aggression) + (reactionBias > 0 ? reactionBias * 3.2 : 0);
             enemy.fireCooldown = Math.max(0.01, enemy.fireCooldown - delta * cooldownPull);
           }
@@ -2947,6 +3109,9 @@ export function applyPatch(ctx){
           }
           if(enemy.fireCooldown <= 0){
             if(!suppressed && brain.reactionTimer > 0){
+              if(distance < engageRange * 1.3 || hasLine){
+                brain.reactionTimer = Math.max(0, brain.reactionTimer - delta * (reactionPull + 4));
+              }
               enemy.fireCooldown = Math.max(enemy.fireCooldown, brain.reactionTimer);
             } else {
               if(enemy.burstShotsLeft <= 0){
@@ -2977,6 +3142,8 @@ export function applyPatch(ctx){
             const cover = pickCoverPoint(mesh.position, toPlayerDir.lengthSq() > 1e-6 ? toPlayerDir : tempVecC.set(0, 0, 1));
             if(cover){
               brain.coverTarget.copy(cover);
+            } else if((brain.searchUntil || 0) > now){
+              brain.coverTarget.copy(brain.investigationTarget);
             } else {
               brain.coverTarget.copy(brain.lastKnownPlayerPos);
             }
@@ -3010,6 +3177,9 @@ export function applyPatch(ctx){
         brain.reactionTimer = Math.min(brain.reactionTimer, clampTarget);
       }
 
+      if(brain.searchUntil && now > brain.searchUntil){
+        brain.searchUntil = 0;
+      }
       enemy.state = brain.state;
     }
   }
@@ -3442,6 +3612,8 @@ export function applyPatch(ctx){
       enemy.primaryMaterial = null;
       enemy.accentMaterial = null;
       enemy.visorMaterial = null;
+      enemy.skinMaterial = null;
+      enemy.hairMaterial = null;
       enemies.splice(idx,1);
       const now = performance.now();
       game.score += 10;
