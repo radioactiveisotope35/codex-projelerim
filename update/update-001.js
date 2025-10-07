@@ -270,6 +270,8 @@ export function applyPatch(ctx){
     },
   };
 
+  const ENEMIES_DISABLED = false;
+
   // Merge external overrides if provided
   if(config && typeof config === 'object'){
     Object.assign(CONFIG.PERF, config.PERF || {});
@@ -401,33 +403,138 @@ export function applyPatch(ctx){
   const staticBoundsCache = new WeakMap();
   PATCH_STATE.staticBoundsCache = staticBoundsCache;
 
-  const ENEMY_RADIUS = 0.6;
-  const ENEMY_HEIGHT = 2.4;
+  const ENEMY_RADIUS = 0.55;
+  const ENEMY_HEIGHT = 1.92;
   const ENEMY_HALF_HEIGHT = ENEMY_HEIGHT * 0.5;
   const ENEMY_PROFILE_PALETTES = [
-    { base: 0x2d3f5f, accent: 0x57d6ff, emissive: 0x071b2c, skin: 0xf2c7a2, hair: 0x1b2331 },
-    { base: 0x3e2f55, accent: 0xff6d8a, emissive: 0x1c0618, skin: 0xeec0a7, hair: 0x1a1019 },
-    { base: 0x354b2f, accent: 0x9cf36d, emissive: 0x0b1609, skin: 0xeac9a3, hair: 0x2a2113 },
-    { base: 0x463b29, accent: 0xffc266, emissive: 0x1f1606, skin: 0xf6d3b3, hair: 0x2b1c10 },
+    { base: 0x33435f, accent: 0x63c8ff, emissive: 0x102338, skin: 0xf4cbb0, hair: 0x2a2f3d },
+    { base: 0x3d2f4f, accent: 0xff7291, emissive: 0x1c0b1c, skin: 0xf1c3aa, hair: 0x1d141f },
+    { base: 0x2f4a3b, accent: 0x8bee77, emissive: 0x0b1c10, skin: 0xf3d2b4, hair: 0x2f2517 },
+    { base: 0x4b3a28, accent: 0xffcd74, emissive: 0x1e1406, skin: 0xf7d8bb, hair: 0x2c1c10 },
+    { base: 0x2c3f4e, accent: 0xa689ff, emissive: 0x120b2a, skin: 0xf2cdb6, hair: 0x261930 },
   ];
   const DEFAULT_ENEMY_PROFILE = {
-    aggression: 0.55,
-    accuracy: 0.58,
-    resilience: 0.62,
-    aggressionValue: lerpRange(CONFIG.AI.aggressionRange, 0.55),
-    accuracyValue: lerpRange(CONFIG.AI.accuracyRange, 0.58),
-    resilienceValue: lerpRange(CONFIG.AI.resilienceRange, 0.62),
-    preferredRange: THREE.MathUtils.lerp(CONFIG.AI.preferredRange[0], CONFIG.AI.preferredRange[1], 0.55),
-    damageScale: 1,
-    burst: [2, 3],
-    burstCadence: [0.06, 0.12],
-    restCadence: [0.2, 0.28],
-    scale: { x: 1, y: 1, z: 1 },
+    archetype: 'vanguard',
+    aggression: 0.62,
+    accuracy: 0.64,
+    resilience: 0.66,
+    aggressionValue: lerpRange(CONFIG.AI.aggressionRange, 0.62),
+    accuracyValue: lerpRange(CONFIG.AI.accuracyRange, 0.64),
+    resilienceValue: lerpRange(CONFIG.AI.resilienceRange, 0.66),
+    preferredRange: THREE.MathUtils.lerp(CONFIG.AI.preferredRange[0], CONFIG.AI.preferredRange[1], 0.6),
+    damageScale: 1.18,
+    burst: [4, 6],
+    burstCadence: [0.048, 0.1],
+    restCadence: [0.18, 0.26],
+    scale: { x: 1.04, y: 1.06, z: 1.02 },
     paletteIndex: 0,
-    aimJitter: THREE.MathUtils.lerp(CONFIG.AI.aimJitter[1], CONFIG.AI.aimJitter[0], 0.58),
-    leadTime: CONFIG.AI.leadFactor,
-    suppressionResist: 1,
+    aimJitter: THREE.MathUtils.lerp(CONFIG.AI.aimJitter[1], CONFIG.AI.aimJitter[0], 0.64),
+    leadTime: CONFIG.AI.leadFactor * 1.05,
+    suppressionResist: 1.12,
   };
+
+  const NEW_ENEMY_ARCHETYPES = [
+    {
+      id: 'vanguard',
+      weight: 1.1,
+      palette: 0,
+      aggression: [0.42, 0.68],
+      accuracy: [0.48, 0.72],
+      resilience: [0.46, 0.62],
+      burst: [3, 5],
+      burstCadence: [0.05, 0.11],
+      restCadence: [0.2, 0.28],
+      preferredRange: [12, 22],
+      damageScale: [0.95, 1.2],
+      lead: [0.7, 1.05],
+      suppression: [0.9, 1.2],
+      scale: {
+        x: [0.94, 1.05],
+        y: [0.98, 1.1],
+        z: [0.92, 1.04],
+      },
+    },
+    {
+      id: 'lancer',
+      weight: 0.85,
+      palette: 1,
+      aggression: [0.55, 0.78],
+      accuracy: [0.5, 0.68],
+      resilience: [0.5, 0.7],
+      burst: [4, 6],
+      burstCadence: [0.045, 0.09],
+      restCadence: [0.18, 0.26],
+      preferredRange: [8, 18],
+      damageScale: [1, 1.28],
+      lead: [0.78, 1.18],
+      suppression: [0.95, 1.25],
+      scale: {
+        x: [0.98, 1.08],
+        y: [1, 1.08],
+        z: [0.95, 1.02],
+      },
+    },
+    {
+      id: 'warden',
+      weight: 0.75,
+      palette: 2,
+      aggression: [0.36, 0.58],
+      accuracy: [0.52, 0.76],
+      resilience: [0.62, 0.86],
+      burst: [3, 4],
+      burstCadence: [0.06, 0.12],
+      restCadence: [0.24, 0.34],
+      preferredRange: [16, 28],
+      damageScale: [1.05, 1.32],
+      lead: [0.8, 1.24],
+      suppression: [1.05, 1.32],
+      scale: {
+        x: [1.02, 1.12],
+        y: [1.04, 1.15],
+        z: [1, 1.12],
+      },
+    },
+    {
+      id: 'skirmisher',
+      weight: 1.15,
+      palette: 3,
+      aggression: [0.48, 0.82],
+      accuracy: [0.42, 0.64],
+      resilience: [0.4, 0.58],
+      burst: [5, 7],
+      burstCadence: [0.04, 0.085],
+      restCadence: [0.16, 0.25],
+      preferredRange: [6, 16],
+      damageScale: [0.9, 1.1],
+      lead: [0.68, 1],
+      suppression: [0.85, 1.05],
+      scale: {
+        x: [0.9, 1.02],
+        y: [0.94, 1.02],
+        z: [0.9, 1],
+      },
+    },
+    {
+      id: 'arbitrator',
+      weight: 0.6,
+      palette: 4,
+      aggression: [0.5, 0.76],
+      accuracy: [0.62, 0.86],
+      resilience: [0.54, 0.74],
+      burst: [3, 4],
+      burstCadence: [0.048, 0.1],
+      restCadence: [0.2, 0.3],
+      preferredRange: [18, 32],
+      damageScale: [1.1, 1.4],
+      lead: [0.85, 1.3],
+      suppression: [1, 1.35],
+      scale: {
+        x: [1, 1.12],
+        y: [1.02, 1.18],
+        z: [0.98, 1.1],
+      },
+    },
+  ];
 
   const ROUND_DIRECTIVES = PATCH_STATE.roundDirectives || (PATCH_STATE.roundDirectives = {
     aggressionBias: 0,
@@ -450,56 +557,78 @@ export function applyPatch(ctx){
 
   function getEnemyPalette(index){
     if(!ENEMY_PROFILE_PALETTES.length){
-      return { base: 0x233246, accent: 0x6dd3ff, emissive: 0x05101a };
+      return { base: 0x2c3f4e, accent: 0x6bcfff, emissive: 0x0c1725, skin: 0xf2cdb6, hair: 0x261930 };
     }
     const safeIndex = Math.abs(Math.floor(index || 0)) % ENEMY_PROFILE_PALETTES.length;
     return ENEMY_PROFILE_PALETTES[safeIndex];
   }
 
+  function randomRange(range){
+    if(Array.isArray(range) && range.length >= 2){
+      return THREE.MathUtils.lerp(range[0], range[1], Math.random());
+    }
+    return typeof range === 'number' ? range : 0;
+  }
+
+  function pickArchetype(stage){
+    let total = 0;
+    const weights = NEW_ENEMY_ARCHETYPES.map((archetype) => {
+      const stageBonus = THREE.MathUtils.lerp(1, 1.3, stage);
+      const weight = (archetype.weight || 1) * stageBonus;
+      total += weight;
+      return weight;
+    });
+    let choice = Math.random() * total;
+    for(let i = 0; i < NEW_ENEMY_ARCHETYPES.length; i++){
+      choice -= weights[i];
+      if(choice <= 0){
+        return NEW_ENEMY_ARCHETYPES[i];
+      }
+    }
+    return NEW_ENEMY_ARCHETYPES[NEW_ENEMY_ARCHETYPES.length - 1];
+  }
+
   function buildEnemyProfile(round = 1){
-    const stage = THREE.MathUtils.clamp((round - 1) / 12, 0, 1);
+    const stage = THREE.MathUtils.clamp((round - 1) / 10, 0, 1);
+    const archetype = pickArchetype(stage);
     const aggroBias = ROUND_DIRECTIVES.aggressionBias || 0;
     const accBias = ROUND_DIRECTIVES.accuracyBias || 0;
     const resBias = ROUND_DIRECTIVES.resilienceBias || 0;
-    const aggression = THREE.MathUtils.clamp(Math.random() * 0.4 + stage * 0.6 + aggroBias, 0, 1);
-    const accuracy = THREE.MathUtils.clamp(Math.random() * 0.45 + stage * 0.55 + accBias, 0, 1);
-    const resilience = THREE.MathUtils.clamp(Math.random() * 0.35 + stage * 0.55 + resBias, 0, 1);
+    const aggression = THREE.MathUtils.clamp(randomRange(archetype.aggression) + stage * 0.1 + aggroBias, 0, 1);
+    const accuracy = THREE.MathUtils.clamp(randomRange(archetype.accuracy) + stage * 0.12 + accBias, 0, 1);
+    const resilience = THREE.MathUtils.clamp(randomRange(archetype.resilience) + stage * 0.08 + resBias, 0, 1);
     const aggressionValue = lerpRange(CONFIG.AI.aggressionRange, aggression);
     const accuracyValue = lerpRange(CONFIG.AI.accuracyRange, accuracy);
     const resilienceValue = lerpRange(CONFIG.AI.resilienceRange, resilience);
-    const paletteIndex = Math.floor(Math.random() * ENEMY_PROFILE_PALETTES.length);
+    const paletteIndex = archetype.palette ?? Math.floor(Math.random() * ENEMY_PROFILE_PALETTES.length);
     const preferredRange = lerpRange(
       CONFIG.AI.preferredRange,
-      THREE.MathUtils.clamp(accuracy * 0.6 + (1 - aggression) * 0.35, 0, 1)
+      THREE.MathUtils.clamp(randomRange(archetype.preferredRange) / 32, 0, 1)
     );
     const damageScale = lerpRange(
       CONFIG.AI.damageScale,
-      THREE.MathUtils.clamp((aggression * 0.45 + resilience * 0.7) / 1.15, 0, 1)
+      THREE.MathUtils.clamp(randomRange(archetype.damageScale) - 0.8, 0, 1)
     );
     const burstBias = ROUND_DIRECTIVES.burstBias || 0;
     const restBias = ROUND_DIRECTIVES.restBias || 0;
-    const burstCountMin = Math.max(2, Math.round(THREE.MathUtils.lerp(1.8, 3.1, aggression * 0.7 + stage * 0.35 + burstBias * 0.5)));
-    const burstCountMax = burstCountMin + Math.max(1, Math.round(THREE.MathUtils.lerp(1, 2, accuracy * 0.6 + aggression * 0.25 + burstBias * 0.4)));
-    const cadenceWeight = THREE.MathUtils.clamp(accuracy * 0.6 + aggression * 0.2 + burstBias * 0.2, 0, 1);
-    const burstCadence = [
-      Math.max(0.045, THREE.MathUtils.lerp(0.05, 0.08, 1 - cadenceWeight)),
-      Math.max(0.06, THREE.MathUtils.lerp(0.1, 0.16, 1 - accuracy - restBias * 0.2)),
-    ];
-    const restCadenceBase = THREE.MathUtils.lerp(0.18, 0.32, 1 - resilience * 0.65 - restBias * 0.3);
-    const restCadence = [
-      Math.max(0.14, restCadenceBase * 0.7),
-      Math.max(restCadenceBase, restCadenceBase + THREE.MathUtils.lerp(0.04, 0.1, 1 - aggression)),
-    ];
+    const burstMinBase = Math.max(2, Math.round(randomRange(archetype.burst)));
+    const burstCountMin = burstMinBase + Math.max(0, Math.round(burstBias));
+    const burstCountMax = Math.max(burstCountMin + 1, burstCountMin + Math.round(Math.random() * 2 + stage * 2));
+    const cadenceFloor = Math.max(0.038, randomRange(archetype.burstCadence) * THREE.MathUtils.lerp(1, 0.85, accuracy));
+    const cadenceCeil = Math.max(cadenceFloor + 0.015, randomRange(archetype.burstCadence) * THREE.MathUtils.lerp(1.1, 1.4, 1 - accuracy));
+    const restFloor = Math.max(0.14, randomRange(archetype.restCadence) * THREE.MathUtils.lerp(0.85, 1.15, 1 - aggression));
+    const restCeil = Math.max(restFloor + 0.06, restFloor + THREE.MathUtils.lerp(0.04, 0.12, 1 - resilience));
     const scale = {
-      x: THREE.MathUtils.lerp(0.88, 1.14, aggression * 0.65 + resilience * 0.35),
-      y: THREE.MathUtils.lerp(0.94, 1.12, resilience),
-      z: THREE.MathUtils.lerp(0.9, 1.08, (1 - accuracy) * 0.4 + aggression * 0.4),
+      x: THREE.MathUtils.lerp(archetype.scale.x[0], archetype.scale.x[1], Math.random()),
+      y: THREE.MathUtils.lerp(archetype.scale.y[0], archetype.scale.y[1], Math.random()),
+      z: THREE.MathUtils.lerp(archetype.scale.z[0], archetype.scale.z[1], Math.random()),
     };
     const aimJitter = THREE.MathUtils.lerp(CONFIG.AI.aimJitter[1], CONFIG.AI.aimJitter[0], accuracy);
-    const leadTime = CONFIG.AI.leadFactor * THREE.MathUtils.lerp(0.55, 1.2, accuracy) * (ROUND_DIRECTIVES.velocityScale || 1);
-    const suppressionResist = THREE.MathUtils.lerp(0.75, 1.2, resilience);
+    const leadTime = CONFIG.AI.leadFactor * THREE.MathUtils.lerp(archetype.lead[0], archetype.lead[1], accuracy) * (ROUND_DIRECTIVES.velocityScale || 1);
+    const suppressionResist = THREE.MathUtils.lerp(archetype.suppression[0], archetype.suppression[1], resilience);
     const damageScaleBias = 1 + (ROUND_DIRECTIVES.damageBias || 0);
     return {
+      archetype: archetype.id,
       aggression,
       accuracy,
       resilience,
@@ -509,8 +638,8 @@ export function applyPatch(ctx){
       preferredRange,
       damageScale: damageScale * damageScaleBias,
       burst: [burstCountMin, burstCountMax],
-      burstCadence,
-      restCadence,
+      burstCadence: [Math.max(0.04, cadenceFloor - burstBias * 0.01), cadenceCeil],
+      restCadence: [Math.max(0.14, restFloor - restBias * 0.02), restCeil + restBias * 0.04],
       scale,
       paletteIndex,
       aimJitter,
@@ -519,87 +648,178 @@ export function applyPatch(ctx){
     };
   }
 
+  const sentinelTextureCache = globalNS.sentinelTextureCache || (globalNS.sentinelTextureCache = new Map());
+
+  function ensureSentinelTexture(key, generator){
+    if(sentinelTextureCache.has(key)){
+      const tex = sentinelTextureCache.get(key);
+      markSharedTexture(tex);
+      return tex;
+    }
+    const texture = generator();
+    if(texture){
+      sentinelTextureCache.set(key, texture);
+      markSharedTexture(texture);
+    }
+    return texture;
+  }
+
+  function createSentinelFabricTexture(palette){
+    const key = `fabric:${palette.base.toString(16)}:${palette.accent.toString(16)}`;
+    return ensureSentinelTexture(key, () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 256;
+      const ctx2d = canvas.getContext('2d');
+      if(ctx2d){
+        const base = new THREE.Color(palette.base);
+        const accent = new THREE.Color(palette.accent);
+        ctx2d.fillStyle = `#${base.getHexString()}`;
+        ctx2d.fillRect(0, 0, canvas.width, canvas.height);
+        const grad = ctx2d.createLinearGradient(0, 0, 0, canvas.height);
+        grad.addColorStop(0, `#${base.clone().multiplyScalar(1.05).getHexString()}`);
+        grad.addColorStop(0.55, `#${base.clone().multiplyScalar(0.92).getHexString()}`);
+        grad.addColorStop(1, `#${base.clone().multiplyScalar(0.78).getHexString()}`);
+        ctx2d.fillStyle = grad;
+        ctx2d.fillRect(0, 0, canvas.width, canvas.height);
+        ctx2d.globalAlpha = 0.32;
+        ctx2d.strokeStyle = `#${accent.clone().lerp(base, 0.55).getHexString()}`;
+        ctx2d.lineWidth = 2;
+        for(let i = -canvas.width; i < canvas.width; i += 24){
+          ctx2d.beginPath();
+          ctx2d.moveTo(i, 0);
+          ctx2d.lineTo(i + canvas.width, canvas.height);
+          ctx2d.stroke();
+        }
+        ctx2d.globalAlpha = 0.18;
+        ctx2d.fillStyle = `#${accent.getHexString()}`;
+        ctx2d.fillRect(0, canvas.height * 0.2, canvas.width, 12);
+        ctx2d.fillRect(0, canvas.height * 0.58, canvas.width, 10);
+        ctx2d.globalAlpha = 1;
+      }
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+      texture.anisotropy = Math.max(texture.anisotropy || 1, 4);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.needsUpdate = true;
+      return texture;
+    });
+  }
+
+  function createSentinelTrimTexture(palette){
+    const key = `trim:${palette.accent.toString(16)}:${palette.emissive.toString(16)}`;
+    return ensureSentinelTexture(key, () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 128;
+      const ctx2d = canvas.getContext('2d');
+      if(ctx2d){
+        ctx2d.fillStyle = `#${new THREE.Color(palette.accent).getHexString()}`;
+        ctx2d.fillRect(0, 0, canvas.width, canvas.height);
+        ctx2d.globalAlpha = 0.45;
+        ctx2d.fillStyle = `#${new THREE.Color(palette.emissive).getHexString()}`;
+        for(let i = 0; i < 8; i++){
+          ctx2d.fillRect(0, i * 16, canvas.width, 6);
+        }
+        ctx2d.globalAlpha = 0.15;
+        ctx2d.fillStyle = '#ffffff';
+        ctx2d.fillRect(0, 0, canvas.width, 6);
+        ctx2d.fillRect(0, canvas.height - 6, canvas.width, 6);
+        ctx2d.globalAlpha = 1;
+      }
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+      texture.anisotropy = Math.max(texture.anisotropy || 1, 2);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.needsUpdate = true;
+      return texture;
+    });
+  }
+
   function applyEnemyVisualProfile(enemy){
     if(!enemy?.mesh || !enemy.profile) return;
     const palette = getEnemyPalette(enemy.profile.paletteIndex);
-    const primaryMaterial = enemy.primaryMaterial || getEnemyPrimaryMaterial(enemy);
-    if(primaryMaterial){
-      if(!primaryMaterial.map || primaryMaterial.map === baseEnemyTexture){
-        const fabric = ensureEnemyFabricTexture();
-        primaryMaterial.map = fabric;
-        primaryMaterial.needsUpdate = true;
-        markSharedTexture(fabric);
+    const materials = enemy.mesh.userData?.materials || {};
+    const fabric = createSentinelFabricTexture(palette);
+    const trim = createSentinelTrimTexture(palette);
+
+    const bodyMaterial = enemy.primaryMaterial || materials.body || getEnemyPrimaryMaterial(enemy);
+    if(bodyMaterial){
+      if(bodyMaterial.map !== fabric){
+        bodyMaterial.map = fabric;
+        bodyMaterial.needsUpdate = true;
       }
-      if(primaryMaterial.color?.setHex){
-        primaryMaterial.color.setHex(palette.base);
+      if(bodyMaterial.color?.setHex){
+        bodyMaterial.color.setHex(palette.base);
       }
-      if(primaryMaterial.emissive?.setHex){
-        primaryMaterial.emissive.setHex(palette.emissive);
-        primaryMaterial.emissiveIntensity = THREE.MathUtils.clamp(0.32 + enemy.profile.accuracy * 0.45, 0.3, 0.9);
+      if(bodyMaterial.emissive?.setHex){
+        bodyMaterial.emissive.setHex(palette.emissive);
+        bodyMaterial.emissiveIntensity = THREE.MathUtils.clamp(0.28 + enemy.profile.accuracy * 0.5, 0.3, 0.95);
       }
-      if(typeof primaryMaterial.metalness === 'number'){
-        primaryMaterial.metalness = THREE.MathUtils.clamp(0.22 + enemy.profile.accuracy * 0.35, 0.12, 0.68);
+      if(typeof bodyMaterial.metalness === 'number'){
+        bodyMaterial.metalness = THREE.MathUtils.clamp(0.28 + enemy.profile.accuracy * 0.25, 0.22, 0.62);
       }
-      if(typeof primaryMaterial.roughness === 'number'){
-        primaryMaterial.roughness = THREE.MathUtils.clamp(0.48 - enemy.profile.accuracy * 0.18, 0.16, 0.6);
+      if(typeof bodyMaterial.roughness === 'number'){
+        bodyMaterial.roughness = THREE.MathUtils.clamp(0.42 - enemy.profile.accuracy * 0.18, 0.18, 0.55);
       }
-      primaryMaterial.needsUpdate = true;
+      bodyMaterial.needsUpdate = true;
+      enemy.primaryMaterial = bodyMaterial;
     }
-    const accentMaterial = enemy.accentMaterial || enemy.mesh?.userData?.accentMaterial;
+
+    const accentMaterial = enemy.accentMaterial || materials.accent || enemy.mesh?.userData?.accentMaterial;
     if(accentMaterial){
-      if(!accentMaterial.map || accentMaterial.map === baseEnemyTexture){
-        const fabric = ensureEnemyFabricTexture();
-        accentMaterial.map = fabric;
+      if(accentMaterial.map !== trim){
+        accentMaterial.map = trim;
         accentMaterial.needsUpdate = true;
-        markSharedTexture(fabric);
       }
       if(accentMaterial.color?.setHex){
         accentMaterial.color.setHex(palette.accent);
       }
-      if(typeof accentMaterial.emissiveIntensity === 'number'){
-        accentMaterial.emissiveIntensity = THREE.MathUtils.clamp(0.25 + enemy.profile.aggression * 0.35, 0.25, 0.8);
+      if(accentMaterial.emissive?.setHex){
+        accentMaterial.emissive.setHex(palette.emissive);
+        accentMaterial.emissiveIntensity = THREE.MathUtils.clamp(0.4 + enemy.profile.aggression * 0.45, 0.35, 1.0);
       }
       accentMaterial.needsUpdate = true;
       enemy.accentMaterial = accentMaterial;
     }
-    if(enemy.visorMaterial){
-      if(enemy.visorMaterial.color?.setHex){
-        enemy.visorMaterial.color.setHex(palette.accent || 0xaed9ff);
-      }
-      if(enemy.visorMaterial.emissive?.setHex){
-        enemy.visorMaterial.emissive.setHex(palette.accent);
-        enemy.visorMaterial.emissiveIntensity = THREE.MathUtils.clamp(0.6 + enemy.profile.accuracy * 0.35, 0.6, 1.1);
-      }
-      enemy.visorMaterial.needsUpdate = true;
+
+    const visorMaterial = enemy.visorMaterial || materials.visor || enemy.mesh?.userData?.visorMaterial;
+    if(visorMaterial){
+      visorMaterial.color?.setHex(palette.accent);
+      visorMaterial.emissive?.setHex(palette.accent);
+      visorMaterial.emissiveIntensity = THREE.MathUtils.clamp(0.75 + enemy.profile.accuracy * 0.4, 0.75, 1.3);
+      visorMaterial.needsUpdate = true;
+      enemy.visorMaterial = visorMaterial;
     }
-    const skinMaterial = enemy.skinMaterial || enemy.mesh?.userData?.skinMaterial;
-    if(skinMaterial && skinMaterial.color?.setHex){
-      skinMaterial.color.setHex(palette.skin || 0xf2c7a2);
+
+    const skinMaterial = enemy.skinMaterial || materials.skin || enemy.mesh?.userData?.skinMaterial;
+    if(skinMaterial){
+      skinMaterial.color?.setHex(palette.skin || 0xf2c7a2);
       if(typeof skinMaterial.roughness === 'number'){
         skinMaterial.roughness = 0.42;
       }
       skinMaterial.needsUpdate = true;
       enemy.skinMaterial = skinMaterial;
     }
-    const hairMaterial = enemy.hairMaterial || enemy.mesh?.userData?.hairMaterial;
-    if(hairMaterial && hairMaterial.color?.setHex){
-      hairMaterial.color.setHex(palette.hair || 0x2a1f18);
+
+    const hairMaterial = enemy.hairMaterial || materials.hair || enemy.mesh?.userData?.hairMaterial;
+    if(hairMaterial){
+      hairMaterial.color?.setHex(palette.hair || 0x2a1f18);
       if(typeof hairMaterial.roughness === 'number'){
-        hairMaterial.roughness = 0.35;
+        hairMaterial.roughness = 0.32;
       }
       hairMaterial.needsUpdate = true;
       enemy.hairMaterial = hairMaterial;
     }
-    enemy.mesh.scale.set(
-      enemy.profile.scale.x,
-      enemy.profile.scale.y,
-      enemy.profile.scale.z
-    );
+
+    enemy.mesh.scale.set(enemy.profile.scale.x, enemy.profile.scale.y, enemy.profile.scale.z);
     enemy.mesh.userData.enemyPalette = palette;
-    enemy.mesh.userData.primaryMaterial = primaryMaterial;
-    if(skinMaterial){ enemy.mesh.userData.skinMaterial = skinMaterial; }
-    if(hairMaterial){ enemy.mesh.userData.hairMaterial = hairMaterial; }
-    enemy.primaryMaterial = primaryMaterial;
+    if(enemy.mesh.userData){
+      enemy.mesh.userData.materials = enemy.mesh.userData.materials || {};
+      if(bodyMaterial) enemy.mesh.userData.materials.body = bodyMaterial;
+      if(accentMaterial) enemy.mesh.userData.materials.accent = accentMaterial;
+      if(visorMaterial) enemy.mesh.userData.materials.visor = visorMaterial;
+      if(skinMaterial) enemy.mesh.userData.materials.skin = skinMaterial;
+      if(hairMaterial) enemy.mesh.userData.materials.hair = hairMaterial;
+    }
   }
 
   function updateEnemySummary(enemy, delta){
@@ -662,7 +882,52 @@ export function applyPatch(ctx){
     weaponState.spreadCurrent = THREE.MathUtils.clamp(weaponState.spreadCurrent, minBase, maxCap);
   }
 
+  function setPeacefulState(){
+    if(!game) return;
+    game.spawnQueue = 0;
+    game.phaseQueue = 0;
+    game.enemiesRemaining = 0;
+    if(Array.isArray(game.pendingPhases)){
+      game.pendingPhases.length = 0;
+    } else {
+      game.pendingPhases = [];
+    }
+    game.roundPhase = null;
+    game.roundPhaseLabel = '';
+    if(game.state !== 'over' && game.state !== 'buyPhase'){
+      game.state = 'peaceful';
+    }
+    if(playerState.buyPhase){
+      playerState.buyPhase = false;
+      hideBuyBanner();
+    }
+    if(playerState.storeOpen){
+      closeStore();
+    }
+    updateEnemiesHud();
+  }
+
+  function purgeEnemies(){
+    if(!Array.isArray(enemies)){
+      setPeacefulState();
+      return;
+    }
+    const snapshot = enemies.slice();
+    for(let i = 0; i < snapshot.length; i++){
+      const enemy = snapshot[i];
+      if(!enemy) continue;
+      enemy.__suppressLoot = true;
+      enemy.__suppressRoundCheck = true;
+      patchedRemoveEnemy(enemy);
+    }
+    setPeacefulState();
+  }
+
   function retrofitExistingEnemies(){
+    if(ENEMIES_DISABLED){
+      purgeEnemies();
+      return;
+    }
     if(!Array.isArray(enemies)) return;
     const round = game?.round || 1;
     for(let i = 0; i < enemies.length; i++){
@@ -680,6 +945,25 @@ export function applyPatch(ctx){
         enemy.preferredRange = profile.preferredRange;
         enemy.damageScalar = profile.damageScale;
       }
+      if(enemy.mesh && !enemy.mesh.userData?.materials){
+        const previousPos = enemy.mesh.position ? enemy.mesh.position.clone() : null;
+        scene.remove(enemy.mesh);
+        const rebuilt = buildEnemyRig(enemy.profile);
+        if(rebuilt?.group){
+          enemy.mesh = rebuilt.group;
+          enemy.primaryMaterial = rebuilt.materials?.primary || null;
+          enemy.accentMaterial = rebuilt.materials?.accent || null;
+          enemy.visorMaterial = rebuilt.materials?.visor || null;
+          enemy.skinMaterial = rebuilt.materials?.skin || null;
+          enemy.hairMaterial = rebuilt.materials?.hair || null;
+          if(previousPos){
+            enemy.mesh.position.copy(previousPos);
+          } else {
+            enemy.mesh.position.set(0, ENEMY_HALF_HEIGHT, 0);
+          }
+          scene.add(enemy.mesh);
+        }
+      }
       if(enemy.mesh){
         applyEnemyVisualProfile(enemy);
         enemy.mesh.userData.enemyProfile = enemy.profile;
@@ -689,143 +973,31 @@ export function applyPatch(ctx){
     }
   }
 
-  function ensureEnemyFabricTexture(){
-    if(globalNS.enemyFabricTexture && globalNS.enemyFabricTexture.isTexture){
-      markSharedTexture(globalNS.enemyFabricTexture);
-      return globalNS.enemyFabricTexture;
-    }
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = 256;
-    const ctx2d = canvas.getContext('2d');
-    if(ctx2d){
-      ctx2d.fillStyle = '#1b2534';
-      ctx2d.fillRect(0, 0, canvas.width, canvas.height);
-      const grad = ctx2d.createLinearGradient(0, 0, 0, canvas.height);
-      grad.addColorStop(0, '#233247');
-      grad.addColorStop(0.5, '#1d2a3c');
-      grad.addColorStop(1, '#151d29');
-      ctx2d.fillStyle = grad;
-      ctx2d.fillRect(0, 0, canvas.width, canvas.height);
-      ctx2d.strokeStyle = 'rgba(255,255,255,0.06)';
-      ctx2d.lineWidth = 2;
-      for(let i = -canvas.width; i < canvas.width; i += 18){
-        ctx2d.beginPath();
-        ctx2d.moveTo(i, 0);
-        ctx2d.lineTo(i + canvas.width, canvas.height);
-        ctx2d.stroke();
-      }
-      ctx2d.fillStyle = 'rgba(6,12,20,0.55)';
-      ctx2d.fillRect(canvas.width * 0.48, 0, canvas.width * 0.04, canvas.height);
-      ctx2d.fillStyle = 'rgba(120,180,255,0.18)';
-      ctx2d.fillRect(0, canvas.height * 0.18, canvas.width, 10);
-      ctx2d.fillRect(0, canvas.height * 0.62, canvas.width, 8);
-    }
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-    texture.anisotropy = Math.max(texture.anisotropy || 1, 4);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.needsUpdate = true;
-    globalNS.enemyFabricTexture = texture;
-    markSharedTexture(texture);
-    return texture;
+  function ensureEnemyFabricTexture(paletteOverride){
+    const palette = paletteOverride || getEnemyPalette(0);
+    return createSentinelFabricTexture(palette);
   }
 
   function applySharedEnemyTexture(material){
-    if(!material || !baseEnemyTexture) return material;
-    const previous = material.map;
-    if(previous && previous !== baseEnemyTexture && typeof previous.dispose === 'function' && !sharedTextures.has(previous)){
-      try{
-        previous.dispose();
-      }catch(err){
-        console.warn('[patch-001] Failed to dispose previous enemy material map.', err);
-      }
-    }
-    material.map = baseEnemyTexture;
-    material.needsUpdate = true;
+    if(!material) return material;
     return material;
   }
 
   function createDefaultEnemyMaterial(){
-    const fabric = ensureEnemyFabricTexture();
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x223344,
+    const palette = getEnemyPalette(0);
+    const fabric = ensureEnemyFabricTexture(palette);
+    return new THREE.MeshStandardMaterial({
+      color: palette.base,
       map: fabric,
-      roughness: 0.6,
-      metalness: 0.18,
+      roughness: 0.48,
+      metalness: 0.28,
+      emissive: new THREE.Color(palette.emissive),
+      emissiveIntensity: 0.3,
     });
-    markSharedTexture(fabric);
-    if(baseEnemyTexture){
-      applySharedEnemyTexture(material);
-    }
-    return material;
   }
 
   function instantiateEnemyMaterial(){
-    const template = ctx.enemyMaterialTemplate;
-    if(!template){
-      return createDefaultEnemyMaterial();
-    }
-
-    if(Array.isArray(template)){
-      const materials = [];
-      for(let i=0;i<template.length;i++){
-        const src = template[i];
-        let clone = null;
-        if(src && typeof src.clone === 'function'){
-          try{
-            clone = src.clone();
-          }catch(err){
-            console.warn('[patch-001] Failed to clone enemy material template entry.', err);
-            clone = null;
-          }
-        }
-        if((!clone || clone === src) && src && src.isMaterial){
-          try{
-            clone = new src.constructor();
-            if(clone && clone.copy){
-              clone.copy(src);
-            }
-          }catch(err){
-            console.warn('[patch-001] Failed to copy enemy material template entry.', err);
-            clone = null;
-          }
-        }
-        if(!clone || clone === src){
-          clone = createDefaultEnemyMaterial();
-        } else {
-          applySharedEnemyTexture(clone);
-        }
-        materials.push(clone);
-      }
-      return materials;
-    }
-
-    let clone = null;
-    if(template && typeof template.clone === 'function'){
-      try{
-        clone = template.clone();
-      }catch(err){
-        console.warn('[patch-001] Failed to clone enemy material template.', err);
-        clone = null;
-      }
-    }
-    if((!clone || clone === template) && template && template.isMaterial){
-      try{
-        clone = new template.constructor();
-        if(clone && clone.copy){
-          clone.copy(template);
-        }
-      }catch(err){
-        console.warn('[patch-001] Failed to copy enemy material template.', err);
-        clone = null;
-      }
-    }
-    if(!clone || clone === template){
-      clone = createDefaultEnemyMaterial();
-    } else {
-      applySharedEnemyTexture(clone);
-    }
-    return clone;
+    return createDefaultEnemyMaterial();
   }
 
   function ensureEnemyRigAssets(){
@@ -834,35 +1006,32 @@ export function applyPatch(ctx){
     }
 
     const assets = {};
-    const torsoRadius = ENEMY_RADIUS * 0.95;
-    const torsoHeight = Math.max(ENEMY_HEIGHT * 0.55, ENEMY_HEIGHT - ENEMY_RADIUS * 1.4);
-    const limbRadius = ENEMY_RADIUS * 0.38;
-    const shinRadius = ENEMY_RADIUS * 0.32;
-
-    const buildGeometry = (builder, args, label) => {
-      try{
-        return new builder(...args);
-      }catch(err){
-        console.warn(`[patch-001] Failed to create ${label} geometry, falling back to box.`, err);
-        const size = args[0] || ENEMY_RADIUS;
-        return new THREE.BoxGeometry(size, args[1] || size, size);
-      }
-    };
-
-    assets.torso = buildGeometry(THREE.CapsuleGeometry, [torsoRadius, Math.max(0, torsoHeight - torsoRadius * 2), 10, 18], 'torso capsule');
-    assets.core = buildGeometry(THREE.CapsuleGeometry, [torsoRadius * 0.86, Math.max(0, torsoHeight * 0.4), 8, 14], 'core capsule');
-    assets.chestPlate = buildGeometry(THREE.BoxGeometry, [torsoRadius * 1.6, ENEMY_RADIUS * 1.2, ENEMY_RADIUS * 0.9], 'chest plate');
-    assets.head = buildGeometry(THREE.SphereGeometry, [ENEMY_RADIUS * 0.62, 24, 18], 'head sphere');
-    assets.facePlate = buildGeometry(THREE.CylinderGeometry, [ENEMY_RADIUS * 0.46, ENEMY_RADIUS * 0.46, ENEMY_RADIUS * 0.18, 18, 1, true], 'face plate');
-    assets.hair = buildGeometry(THREE.SphereGeometry, [ENEMY_RADIUS * 0.58, 22, 16, 0, Math.PI * 2, 0, Math.PI * 0.6], 'hair dome');
-    assets.visor = buildGeometry(THREE.SphereGeometry, [ENEMY_RADIUS * 0.46, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.55], 'visor dome');
-    assets.shoulder = buildGeometry(THREE.CylinderGeometry, [limbRadius * 1.1, limbRadius * 0.92, ENEMY_RADIUS * 0.95, 12, 1, true], 'shoulder cylinder');
-    assets.arm = buildGeometry(THREE.CapsuleGeometry, [limbRadius, ENEMY_RADIUS * 1.1, 8, 12], 'arm capsule');
-    assets.forearm = buildGeometry(THREE.CapsuleGeometry, [limbRadius * 0.9, ENEMY_RADIUS * 0.95, 8, 12], 'forearm capsule');
-    assets.hand = buildGeometry(THREE.CapsuleGeometry, [limbRadius * 0.65, ENEMY_RADIUS * 0.32, 6, 10], 'hand capsule');
-    assets.hip = buildGeometry(THREE.CylinderGeometry, [shinRadius * 1.2, shinRadius, ENEMY_RADIUS * 0.9, 10], 'hip cylinder');
-    assets.leg = buildGeometry(THREE.CapsuleGeometry, [shinRadius, ENEMY_RADIUS * 1.25, 10, 14], 'leg capsule');
-    assets.boot = buildGeometry(THREE.BoxGeometry, [shinRadius * 1.6, shinRadius * 0.8, shinRadius * 2.2], 'boot box');
+    const torsoHeight = ENEMY_HEIGHT * 0.48;
+    const torsoWidth = ENEMY_RADIUS * 1.9;
+    const torsoDepth = ENEMY_RADIUS * 1.2;
+    const pelvisHeight = ENEMY_HEIGHT * 0.2;
+    const limbLength = ENEMY_HEIGHT * 0.38;
+    const limbRadius = ENEMY_RADIUS * 0.32;
+    assets.torso = new THREE.BoxGeometry(torsoWidth, torsoHeight, torsoDepth);
+    assets.pelvis = new THREE.BoxGeometry(torsoWidth * 0.8, pelvisHeight * 0.85, torsoDepth * 0.9);
+    assets.backplate = new THREE.BoxGeometry(torsoWidth * 0.9, torsoHeight * 0.5, torsoDepth * 0.5);
+    assets.chestPlate = new THREE.BoxGeometry(torsoWidth * 1.05, torsoHeight * 0.45, torsoDepth * 0.6);
+    assets.shoulderBridge = new THREE.BoxGeometry(torsoWidth * 0.9, ENEMY_HEIGHT * 0.08, torsoDepth * 1.5);
+    assets.shoulder = new THREE.CylinderGeometry(ENEMY_RADIUS * 0.48, ENEMY_RADIUS * 0.42, ENEMY_HEIGHT * 0.18, 14, 1, true);
+    assets.armUpper = new THREE.CapsuleGeometry(limbRadius, limbLength * 0.6, 8, 12);
+    assets.armLower = new THREE.CapsuleGeometry(limbRadius * 0.9, limbLength * 0.62, 8, 12);
+    assets.forearmGuard = new THREE.BoxGeometry(ENEMY_RADIUS * 0.55, ENEMY_HEIGHT * 0.16, ENEMY_RADIUS * 0.7);
+    assets.hand = new THREE.BoxGeometry(ENEMY_RADIUS * 0.6, ENEMY_HEIGHT * 0.14, ENEMY_RADIUS * 0.36);
+    assets.neck = new THREE.CylinderGeometry(ENEMY_RADIUS * 0.22, ENEMY_RADIUS * 0.2, ENEMY_HEIGHT * 0.08, 12);
+    assets.head = new THREE.SphereGeometry(ENEMY_RADIUS * 0.55, 26, 20);
+    assets.face = new THREE.CylinderGeometry(ENEMY_RADIUS * 0.46, ENEMY_RADIUS * 0.46, ENEMY_HEIGHT * 0.18, 20, 1, true);
+    assets.hair = new THREE.SphereGeometry(ENEMY_RADIUS * 0.6, 24, 18, 0, Math.PI * 2, 0, Math.PI * 0.5);
+    assets.visor = new THREE.SphereGeometry(ENEMY_RADIUS * 0.5, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.48);
+    assets.thigh = new THREE.CapsuleGeometry(ENEMY_RADIUS * 0.36, limbLength * 0.7, 10, 14);
+    assets.shin = new THREE.CapsuleGeometry(ENEMY_RADIUS * 0.32, limbLength * 0.7, 10, 14);
+    assets.guard = new THREE.BoxGeometry(ENEMY_RADIUS * 0.7, ENEMY_HEIGHT * 0.16, ENEMY_RADIUS * 0.9);
+    assets.boot = new THREE.BoxGeometry(ENEMY_RADIUS * 0.9, ENEMY_HEIGHT * 0.08, ENEMY_RADIUS * 0.96);
+    assets.collision = new THREE.CapsuleGeometry(ENEMY_RADIUS, ENEMY_HEIGHT * 0.5, 12, 20);
 
     for(const key of Object.keys(assets)){
       const geom = assets[key];
@@ -871,13 +1040,13 @@ export function applyPatch(ctx){
     }
 
     PATCH_STATE.enemyRigAssets = assets;
-    PATCH_STATE.enemyGeometry = assets.torso;
+    PATCH_STATE.enemyGeometry = assets.collision;
     return assets;
   }
 
   function ensureEnemyGeometry(){
     const assets = ensureEnemyRigAssets();
-    return assets.torso;
+    return assets.collision;
   }
 
   function isSharedEnemyGeometry(geometry){
@@ -894,135 +1063,102 @@ export function applyPatch(ctx){
   function buildEnemyRig(profile){
     const assets = ensureEnemyRigAssets();
     const rig = new THREE.Group();
-    rig.name = 'enemy-rig';
+    rig.name = 'sentinel-frame';
 
     const palette = getEnemyPalette(profile?.paletteIndex ?? 0);
-    const baseMaterial = instantiateEnemyMaterial();
-    let bodyMaterial = null;
-    if(Array.isArray(baseMaterial)){
-      bodyMaterial = baseMaterial[0] || null;
-    } else {
-      bodyMaterial = baseMaterial || null;
-    }
-    if(!bodyMaterial){
-      bodyMaterial = createDefaultEnemyMaterial();
-    }
-    const fabric = ensureEnemyFabricTexture();
-    if(bodyMaterial && (!bodyMaterial.map || bodyMaterial.map === baseEnemyTexture)){
-      bodyMaterial.map = fabric;
-      bodyMaterial.needsUpdate = true;
-    }
-    let accentMaterial = bodyMaterial?.clone ? bodyMaterial.clone() : null;
-    if(!accentMaterial){
-      accentMaterial = new THREE.MeshStandardMaterial({
-        color: palette.accent,
-        roughness: 0.48,
-        metalness: 0.22,
-      });
-    } else {
-      accentMaterial.map = fabric;
-      accentMaterial.needsUpdate = true;
-    }
+    const fabric = createSentinelFabricTexture(palette);
+    const trim = createSentinelTrimTexture(palette);
+    const bodyMaterial = new THREE.MeshStandardMaterial({
+      color: palette.base,
+      map: fabric,
+      roughness: 0.44,
+      metalness: 0.32,
+      emissive: new THREE.Color(palette.emissive),
+      emissiveIntensity: 0.32,
+    });
+    const accentMaterial = new THREE.MeshStandardMaterial({
+      color: palette.accent,
+      map: trim,
+      roughness: 0.3,
+      metalness: 0.52,
+      emissive: new THREE.Color(palette.emissive),
+      emissiveIntensity: 0.45,
+    });
+    const visorMaterial = new THREE.MeshStandardMaterial({
+      color: palette.accent,
+      emissive: new THREE.Color(palette.accent),
+      emissiveIntensity: 0.85,
+      roughness: 0.18,
+      metalness: 0.28,
+      transparent: true,
+      opacity: 0.86,
+    });
     const skinMaterial = new THREE.MeshStandardMaterial({
-      color: palette.skin || 0xf2c7a2,
+      color: palette.skin,
       roughness: 0.42,
       metalness: 0.08,
     });
     const hairMaterial = new THREE.MeshStandardMaterial({
-      color: palette.hair || 0x2a1f18,
-      roughness: 0.35,
-      metalness: 0.22,
-    });
-    const visorMaterial = new THREE.MeshStandardMaterial({
-      color: 0x7fb8ff,
-      emissive: new THREE.Color(palette.accent || 0x4da3ff),
-      emissiveIntensity: 0.8,
-      roughness: 0.2,
-      metalness: 0.1,
-      transparent: true,
-      opacity: 0.82,
+      color: palette.hair,
+      roughness: 0.32,
+      metalness: 0.16,
     });
 
-    const buildLimb = (geometry, material, position, rotation, name) => {
+    const addMesh = (geometry, material, position, rotation = null, name = '') => {
       const mesh = new THREE.Mesh(geometry, material);
-      mesh.name = name;
-      mesh.position.copy(position);
-      if(rotation){
-        mesh.rotation.set(rotation.x, rotation.y, rotation.z);
-      }
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
+      mesh.castShadow = mesh.receiveShadow = true;
+      if(name) mesh.name = name;
+      if(position) mesh.position.copy(position);
+      if(rotation) mesh.rotation.set(rotation.x, rotation.y, rotation.z);
       rig.add(mesh);
       return mesh;
     };
 
-    const torso = new THREE.Mesh(assets.torso, bodyMaterial);
-    torso.name = 'enemy-torso';
-    torso.position.y = ENEMY_HALF_HEIGHT * 0.36;
-    torso.castShadow = torso.receiveShadow = true;
-    torso.userData.primaryMaterial = true;
-    rig.add(torso);
+    const baseY = -ENEMY_HALF_HEIGHT;
+    const pelvisY = baseY + ENEMY_HEIGHT * 0.28;
+    const torsoY = pelvisY + (assets.torso.parameters?.height || ENEMY_HEIGHT * 0.48) * 0.5;
+    const shoulderY = pelvisY + ENEMY_HEIGHT * 0.42;
+    const headY = pelvisY + ENEMY_HEIGHT * 0.68;
 
-    const core = new THREE.Mesh(assets.core, bodyMaterial);
-    core.name = 'enemy-core';
-    core.position.y = ENEMY_HALF_HEIGHT * 0.62;
-    core.castShadow = core.receiveShadow = true;
-    rig.add(core);
+    addMesh(assets.pelvis, bodyMaterial, new THREE.Vector3(0, pelvisY, 0), null, 'sentinel-pelvis');
+    addMesh(assets.torso, bodyMaterial, new THREE.Vector3(0, torsoY, 0), null, 'sentinel-torso');
+    addMesh(assets.backplate, accentMaterial, new THREE.Vector3(0, torsoY, -ENEMY_RADIUS * 0.2), null, 'sentinel-backplate');
+    addMesh(assets.chestPlate, accentMaterial, new THREE.Vector3(0, torsoY + ENEMY_RADIUS * 0.2, ENEMY_RADIUS * 0.3), null, 'sentinel-chestplate');
+    addMesh(assets.shoulderBridge, accentMaterial, new THREE.Vector3(0, shoulderY, 0), new THREE.Euler(0, 0, Math.PI / 2), 'sentinel-shoulder-bridge');
 
-    const chest = new THREE.Mesh(assets.chestPlate, accentMaterial);
-    chest.name = 'enemy-chest';
-    chest.position.set(0, ENEMY_HALF_HEIGHT * 0.75, ENEMY_RADIUS * 0.05);
-    rig.add(chest);
+    const shoulderOffset = ENEMY_RADIUS * 0.85;
+    addMesh(assets.shoulder, accentMaterial, new THREE.Vector3(-shoulderOffset, shoulderY, 0), new THREE.Euler(0, 0, Math.PI / 2), 'sentinel-shoulder-left');
+    addMesh(assets.shoulder, accentMaterial, new THREE.Vector3(shoulderOffset, shoulderY, 0), new THREE.Euler(0, 0, Math.PI / 2), 'sentinel-shoulder-right');
 
-    const head = new THREE.Mesh(assets.head, skinMaterial);
-    head.name = 'enemy-head';
-    head.position.y = ENEMY_HEIGHT - ENEMY_RADIUS * 0.35;
-    head.castShadow = head.receiveShadow = true;
-    rig.add(head);
+    addMesh(assets.armUpper, bodyMaterial, new THREE.Vector3(-shoulderOffset, shoulderY - 0.12, 0), null, 'sentinel-arm-upper-left');
+    addMesh(assets.armUpper, bodyMaterial, new THREE.Vector3(shoulderOffset, shoulderY - 0.12, 0), null, 'sentinel-arm-upper-right');
+    addMesh(assets.armLower, bodyMaterial, new THREE.Vector3(-shoulderOffset, shoulderY - 0.38, 0), null, 'sentinel-arm-lower-left');
+    addMesh(assets.armLower, bodyMaterial, new THREE.Vector3(shoulderOffset, shoulderY - 0.38, 0), null, 'sentinel-arm-lower-right');
+    addMesh(assets.forearmGuard, accentMaterial, new THREE.Vector3(-shoulderOffset, shoulderY - 0.34, ENEMY_RADIUS * 0.12), null, 'sentinel-arm-guard-left');
+    addMesh(assets.forearmGuard, accentMaterial, new THREE.Vector3(shoulderOffset, shoulderY - 0.34, ENEMY_RADIUS * 0.12), null, 'sentinel-arm-guard-right');
+    addMesh(assets.hand, accentMaterial, new THREE.Vector3(-shoulderOffset, shoulderY - 0.58, 0.05), null, 'sentinel-hand-left');
+    addMesh(assets.hand, accentMaterial, new THREE.Vector3(shoulderOffset, shoulderY - 0.58, 0.05), null, 'sentinel-hand-right');
 
-    const face = new THREE.Mesh(assets.facePlate, skinMaterial);
-    face.name = 'enemy-face';
-    face.position.set(0, head.position.y, ENEMY_RADIUS * 0.43);
-    face.rotation.x = Math.PI * 0.5;
-    face.material.side = THREE.DoubleSide;
-    rig.add(face);
+    const legOffset = ENEMY_RADIUS * 0.5;
+    addMesh(assets.thigh, bodyMaterial, new THREE.Vector3(-legOffset, baseY + ENEMY_HEIGHT * 0.18, 0), null, 'sentinel-thigh-left');
+    addMesh(assets.thigh, bodyMaterial, new THREE.Vector3(legOffset, baseY + ENEMY_HEIGHT * 0.18, 0), null, 'sentinel-thigh-right');
+    addMesh(assets.guard, accentMaterial, new THREE.Vector3(-legOffset, baseY + ENEMY_HEIGHT * 0.2, ENEMY_RADIUS * 0.08), null, 'sentinel-guard-left');
+    addMesh(assets.guard, accentMaterial, new THREE.Vector3(legOffset, baseY + ENEMY_HEIGHT * 0.2, ENEMY_RADIUS * 0.08), null, 'sentinel-guard-right');
+    addMesh(assets.shin, bodyMaterial, new THREE.Vector3(-legOffset, baseY - ENEMY_HEIGHT * 0.02, 0), null, 'sentinel-shin-left');
+    addMesh(assets.shin, bodyMaterial, new THREE.Vector3(legOffset, baseY - ENEMY_HEIGHT * 0.02, 0), null, 'sentinel-shin-right');
+    addMesh(assets.boot, accentMaterial, new THREE.Vector3(-legOffset, baseY - ENEMY_HEIGHT * 0.22, ENEMY_RADIUS * 0.16), null, 'sentinel-boot-left');
+    addMesh(assets.boot, accentMaterial, new THREE.Vector3(legOffset, baseY - ENEMY_HEIGHT * 0.22, ENEMY_RADIUS * 0.16), null, 'sentinel-boot-right');
 
-    const hair = new THREE.Mesh(assets.hair, hairMaterial);
-    hair.name = 'enemy-hair';
-    hair.position.set(0, head.position.y + ENEMY_RADIUS * 0.1, 0);
-    rig.add(hair);
+    addMesh(assets.neck, bodyMaterial, new THREE.Vector3(0, shoulderY + 0.08, 0), null, 'sentinel-neck');
+    addMesh(assets.head, skinMaterial, new THREE.Vector3(0, headY, 0), null, 'sentinel-head');
+    addMesh(assets.face, visorMaterial, new THREE.Vector3(0, headY, ENEMY_RADIUS * 0.52), new THREE.Euler(Math.PI / 2, 0, 0), 'sentinel-face');
+    addMesh(assets.hair, hairMaterial, new THREE.Vector3(0, headY + ENEMY_RADIUS * 0.18, -ENEMY_RADIUS * 0.05), null, 'sentinel-hair');
+    addMesh(assets.visor, visorMaterial, new THREE.Vector3(0, headY, ENEMY_RADIUS * 0.5), null, 'sentinel-visor');
 
-    const visor = new THREE.Mesh(assets.visor, visorMaterial);
-    visor.name = 'enemy-visor';
-    visor.position.set(0, head.position.y + ENEMY_RADIUS * 0.02, ENEMY_RADIUS * 0.25);
-    visor.castShadow = false;
-    visor.receiveShadow = false;
-    rig.add(visor);
-
-    const shoulderOffset = ENEMY_RADIUS * 1.05;
-    const shoulderHeight = ENEMY_HEIGHT * 0.62;
-    buildLimb(assets.shoulder, accentMaterial, new THREE.Vector3(shoulderOffset, shoulderHeight, 0), new THREE.Euler(Math.PI * 0.5, 0, Math.PI * 0.05), 'enemy-shoulder-r');
-    buildLimb(assets.shoulder, accentMaterial, new THREE.Vector3(-shoulderOffset, shoulderHeight, 0), new THREE.Euler(Math.PI * 0.5, 0, -Math.PI * 0.05), 'enemy-shoulder-l');
-
-    const armHeight = shoulderHeight - ENEMY_RADIUS * 0.1;
-    buildLimb(assets.arm, bodyMaterial, new THREE.Vector3(shoulderOffset * 1.02, armHeight - ENEMY_RADIUS * 0.45, 0.2), new THREE.Euler(Math.PI * 0.5, 0, Math.PI * 0.25), 'enemy-arm-r');
-    buildLimb(assets.arm, bodyMaterial, new THREE.Vector3(-shoulderOffset * 1.02, armHeight - ENEMY_RADIUS * 0.45, 0.2), new THREE.Euler(Math.PI * 0.5, 0, -Math.PI * 0.25), 'enemy-arm-l');
-    buildLimb(assets.forearm, bodyMaterial, new THREE.Vector3(shoulderOffset * 1.05, armHeight - ENEMY_RADIUS * 1.25, 0.35), new THREE.Euler(Math.PI * 0.58, 0, Math.PI * 0.18), 'enemy-forearm-r');
-    buildLimb(assets.forearm, bodyMaterial, new THREE.Vector3(-shoulderOffset * 1.05, armHeight - ENEMY_RADIUS * 1.25, 0.35), new THREE.Euler(Math.PI * 0.58, 0, -Math.PI * 0.18), 'enemy-forearm-l');
-    buildLimb(assets.hand, skinMaterial, new THREE.Vector3(shoulderOffset * 1.08, armHeight - ENEMY_RADIUS * 1.65, 0.45), new THREE.Euler(Math.PI * 0.5, 0, Math.PI * 0.12), 'enemy-hand-r');
-    buildLimb(assets.hand, skinMaterial, new THREE.Vector3(-shoulderOffset * 1.08, armHeight - ENEMY_RADIUS * 1.65, 0.45), new THREE.Euler(Math.PI * 0.5, 0, -Math.PI * 0.12), 'enemy-hand-l');
-
-    const hipHeight = ENEMY_HALF_HEIGHT * 0.5;
-    buildLimb(assets.hip, accentMaterial, new THREE.Vector3(0, hipHeight, 0), new THREE.Euler(Math.PI * 0.5, 0, 0), 'enemy-hip');
-    buildLimb(assets.leg, bodyMaterial, new THREE.Vector3(ENEMY_RADIUS * 0.52, hipHeight - ENEMY_RADIUS * 1.2, 0.05), new THREE.Euler(Math.PI * 0.5, 0, Math.PI * 0.08), 'enemy-leg-r');
-    buildLimb(assets.leg, bodyMaterial, new THREE.Vector3(-ENEMY_RADIUS * 0.52, hipHeight - ENEMY_RADIUS * 1.2, 0.05), new THREE.Euler(Math.PI * 0.5, 0, -Math.PI * 0.08), 'enemy-leg-l');
-    buildLimb(assets.boot, accentMaterial, new THREE.Vector3(ENEMY_RADIUS * 0.52, hipHeight - ENEMY_RADIUS * 2.1, ENEMY_RADIUS * 0.32), null, 'enemy-boot-r');
-    buildLimb(assets.boot, accentMaterial, new THREE.Vector3(-ENEMY_RADIUS * 0.52, hipHeight - ENEMY_RADIUS * 2.1, ENEMY_RADIUS * 0.32), null, 'enemy-boot-l');
-
-    rig.traverse(obj => {
+    rig.traverse((obj) => {
       if(obj && obj.isMesh){
-        obj.castShadow = obj.castShadow ?? true;
-        obj.receiveShadow = obj.receiveShadow ?? true;
+        obj.castShadow = true;
+        obj.receiveShadow = true;
       }
     });
 
@@ -1031,7 +1167,13 @@ export function applyPatch(ctx){
     rig.userData.visorMaterial = visorMaterial;
     rig.userData.skinMaterial = skinMaterial;
     rig.userData.hairMaterial = hairMaterial;
-    rig.userData.palette = palette;
+    rig.userData.materials = {
+      body: bodyMaterial,
+      accent: accentMaterial,
+      visor: visorMaterial,
+      skin: skinMaterial,
+      hair: hairMaterial,
+    };
 
     return {
       group: rig,
@@ -1050,6 +1192,9 @@ export function applyPatch(ctx){
     if(enemy.primaryMaterial) return enemy.primaryMaterial;
     const mesh = enemy.mesh;
     if(!mesh) return null;
+    if(mesh.userData?.materials?.body){
+      return mesh.userData.materials.body;
+    }
     if(mesh.userData?.primaryMaterial && mesh.userData.primaryMaterial.isMaterial){
       return mesh.userData.primaryMaterial;
     }
@@ -2583,6 +2728,10 @@ export function applyPatch(ctx){
   }
 
   function patchedSpawnEnemy(){
+    if(ENEMIES_DISABLED){
+      purgeEnemies();
+      return false;
+    }
     const rigAssets = ensureEnemyRigAssets();
     if(!rigAssets){
       registerSpawnFailure();
@@ -2790,8 +2939,11 @@ export function applyPatch(ctx){
   }
 
   function createEnemyBrain(zone, profile = DEFAULT_ENEMY_PROFILE){
-    const reactionBase = THREE.MathUtils.lerp(0.18, 0.06, THREE.MathUtils.clamp((profile.accuracy + profile.aggression) * 0.5, 0, 1));
-    const vigilance = THREE.MathUtils.lerp(0.28, 0.78, profile.aggression * 0.6 + profile.resilience * 0.4);
+    const reactionScalar = THREE.MathUtils.clamp(profile.accuracy * 0.6 + profile.aggression * 0.4, 0, 1);
+    const reactionFloor = CONFIG.AI.reactionFloor ?? 0.05;
+    const reactionCeil = CONFIG.AI.reactionCeil ?? 0.16;
+    const reactionBase = THREE.MathUtils.lerp(reactionCeil, reactionFloor, reactionScalar);
+    const vigilance = THREE.MathUtils.lerp(0.35, 0.82, profile.aggression * 0.6 + profile.resilience * 0.4);
     return {
       state: 'patrol',
       zone: zone || null,
@@ -2815,7 +2967,7 @@ export function applyPatch(ctx){
       vigilance,
       reactionDelay: reactionBase,
       reactionTimer: reactionBase,
-      reacquireBoost: Math.max(0.04, reactionBase * 0.35),
+      reacquireBoost: Math.max(0.03, reactionBase * 0.28),
       searchUntil: 0,
       investigationTarget: new THREE.Vector3(),
     };
@@ -2908,6 +3060,14 @@ export function applyPatch(ctx){
   }
 
   function patchedUpdateEnemies(delta){
+    if(ENEMIES_DISABLED){
+      if(Array.isArray(enemies) && enemies.length){
+        purgeEnemies();
+      } else if(game?.state !== 'peaceful'){
+        setPeacefulState();
+      }
+      return;
+    }
     const now = performance.now();
     pruneLosCache(now);
     const playerPos = controls.getObject().position;
@@ -3360,6 +3520,9 @@ export function applyPatch(ctx){
   }
 
   function buildRoundScript(round, params){
+    if(ENEMIES_DISABLED){
+      return { total: 0, phases: [] };
+    }
     const baseTotal = params.spawnBase + Math.floor(round * params.spawnScale);
     const total = Math.max(4, baseTotal);
     const intensity = THREE.MathUtils.clamp((round - 1) / 10, 0, 1);
@@ -3467,6 +3630,10 @@ export function applyPatch(ctx){
   }
 
   function activateNextPhase(initial = false){
+    if(ENEMIES_DISABLED){
+      applyPhaseDirectives(null);
+      return false;
+    }
     if(!Array.isArray(game.pendingPhases) || !game.pendingPhases.length){
       applyPhaseDirectives(null);
       return false;
@@ -3485,6 +3652,20 @@ export function applyPatch(ctx){
   }
 
   function patchedStartNextRound(){
+    if(ENEMIES_DISABLED){
+      if(playerState.buyPhase){
+        endBuyPhase();
+      }
+      resetSpawnFailureCounters();
+      const previousRound = Number.isFinite(game.round) ? game.round : 0;
+      game.round = previousRound + 1;
+      ui.roundEl && (ui.roundEl.textContent = `Round: ${game.round}`);
+      setPeacefulState();
+      game.roundStartAt = performance.now();
+      applyPhaseDirectives(null);
+      patchedShowRoundBanner('BÖLGE GÜVENDE');
+      return;
+    }
     if(playerState.buyPhase){
       endBuyPhase();
     }
@@ -3625,8 +3806,13 @@ export function applyPatch(ctx){
     if(!enemy) return;
     const idx = enemies.indexOf(enemy);
     if(idx !== -1){
+      const skipRoundCheck = enemy.__suppressRoundCheck === true;
       unregisterEnemyProfile(enemy);
-      maybeDropLoot(enemy.mesh?.position || controls.getObject().position);
+      const shouldDropLoot = enemy.__suppressLoot !== true;
+      enemy.__suppressLoot = false;
+      if(shouldDropLoot){
+        maybeDropLoot(enemy.mesh?.position || controls.getObject().position);
+      }
       scene.remove(enemy.mesh);
       if(enemy.mesh){
         enemy.mesh.traverse?.((obj) => {
@@ -3643,6 +3829,8 @@ export function applyPatch(ctx){
       enemy.skinMaterial = null;
       enemy.hairMaterial = null;
       enemies.splice(idx,1);
+      delete enemy.__suppressLoot;
+      delete enemy.__suppressRoundCheck;
       const now = performance.now();
       game.score += 10;
       ui.scoreEl && (ui.scoreEl.textContent = `Skor: ${game.score}`);
@@ -3655,7 +3843,9 @@ export function applyPatch(ctx){
       updateCreditLine();
       game.enemiesRemaining = Math.max(0, game.enemiesRemaining - 1);
       updateEnemiesHud();
-      maybeEndRound();
+      if(!skipRoundCheck){
+        maybeEndRound();
+      }
     }
   }
 
