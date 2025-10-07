@@ -522,18 +522,41 @@ export function applyPatch(ctx){
   function applyEnemyVisualProfile(enemy){
     if(!enemy?.mesh || !enemy.profile) return;
     const palette = getEnemyPalette(enemy.profile.paletteIndex);
-    const material = Array.isArray(enemy.mesh.material) ? enemy.mesh.material[0] : enemy.mesh.material;
-    if(material){
-      if(material.color?.setHex){
-        material.color.setHex(palette.base);
+    const primaryMaterial = enemy.primaryMaterial || getEnemyPrimaryMaterial(enemy);
+    if(primaryMaterial){
+      if(primaryMaterial.color?.setHex){
+        primaryMaterial.color.setHex(palette.base);
       }
-      if(material.emissive?.setHex){
-        material.emissive.setHex(palette.emissive);
-        material.emissiveIntensity = THREE.MathUtils.clamp(0.28 + enemy.profile.accuracy * 0.45, 0.25, 0.85);
+      if(primaryMaterial.emissive?.setHex){
+        primaryMaterial.emissive.setHex(palette.emissive);
+        primaryMaterial.emissiveIntensity = THREE.MathUtils.clamp(0.32 + enemy.profile.accuracy * 0.45, 0.3, 0.9);
       }
-      material.metalness = THREE.MathUtils.clamp(0.22 + enemy.profile.accuracy * 0.35, 0.12, 0.68);
-      material.roughness = THREE.MathUtils.clamp(0.48 - enemy.profile.accuracy * 0.18, 0.16, 0.6);
-      material.needsUpdate = true;
+      if(typeof primaryMaterial.metalness === 'number'){
+        primaryMaterial.metalness = THREE.MathUtils.clamp(0.22 + enemy.profile.accuracy * 0.35, 0.12, 0.68);
+      }
+      if(typeof primaryMaterial.roughness === 'number'){
+        primaryMaterial.roughness = THREE.MathUtils.clamp(0.48 - enemy.profile.accuracy * 0.18, 0.16, 0.6);
+      }
+      primaryMaterial.needsUpdate = true;
+    }
+    if(enemy.accentMaterial){
+      if(enemy.accentMaterial.color?.setHex){
+        enemy.accentMaterial.color.setHex(palette.accent);
+      }
+      if(typeof enemy.accentMaterial.emissiveIntensity === 'number'){
+        enemy.accentMaterial.emissiveIntensity = THREE.MathUtils.clamp(0.25 + enemy.profile.aggression * 0.35, 0.25, 0.8);
+      }
+      enemy.accentMaterial.needsUpdate = true;
+    }
+    if(enemy.visorMaterial){
+      if(enemy.visorMaterial.color?.setHex){
+        enemy.visorMaterial.color.setHex(palette.accent || 0xaed9ff);
+      }
+      if(enemy.visorMaterial.emissive?.setHex){
+        enemy.visorMaterial.emissive.setHex(palette.accent);
+        enemy.visorMaterial.emissiveIntensity = THREE.MathUtils.clamp(0.6 + enemy.profile.accuracy * 0.35, 0.6, 1.1);
+      }
+      enemy.visorMaterial.needsUpdate = true;
     }
     enemy.mesh.scale.set(
       enemy.profile.scale.x,
@@ -541,6 +564,8 @@ export function applyPatch(ctx){
       enemy.profile.scale.z
     );
     enemy.mesh.userData.enemyPalette = palette;
+    enemy.mesh.userData.primaryMaterial = primaryMaterial;
+    enemy.primaryMaterial = primaryMaterial;
   }
 
   function updateEnemySummary(enemy, delta){
@@ -718,73 +743,193 @@ export function applyPatch(ctx){
     return clone;
   }
 
-  function ensureEnemyGeometry(){
-    if(PATCH_STATE.enemyGeometry){
-      return PATCH_STATE.enemyGeometry;
+  function ensureEnemyRigAssets(){
+    if(PATCH_STATE.enemyRigAssets){
+      return PATCH_STATE.enemyRigAssets;
     }
 
-    const cylinderHeight = Math.max(0, ENEMY_HEIGHT - ENEMY_RADIUS * 2);
-    const radialSegments = 12;
-    const heightSegments = 6;
+    const assets = {};
+    const torsoRadius = ENEMY_RADIUS * 0.95;
+    const torsoHeight = Math.max(ENEMY_HEIGHT * 0.55, ENEMY_HEIGHT - ENEMY_RADIUS * 1.4);
+    const limbRadius = ENEMY_RADIUS * 0.38;
+    const shinRadius = ENEMY_RADIUS * 0.32;
 
-    let geometry = null;
-
-    const tryBuild = (builder, label) => {
-      if(geometry || typeof builder !== 'function'){
-        return;
-      }
+    const buildGeometry = (builder, args, label) => {
       try{
-        geometry = new builder(ENEMY_RADIUS, cylinderHeight, heightSegments, radialSegments);
+        return new builder(...args);
       }catch(err){
-        console.warn(`[patch-001] Failed to create ${label} enemy geometry.`, err);
-        geometry = null;
+        console.warn(`[patch-001] Failed to create ${label} geometry, falling back to box.`, err);
+        const size = args[0] || ENEMY_RADIUS;
+        return new THREE.BoxGeometry(size, args[1] || size, size);
       }
     };
 
-    tryBuild(THREE.CapsuleGeometry, 'CapsuleGeometry');
-    tryBuild(THREE.CapsuleBufferGeometry, 'CapsuleBufferGeometry');
+    assets.torso = buildGeometry(THREE.CapsuleGeometry, [torsoRadius, Math.max(0, torsoHeight - torsoRadius * 2), 10, 18], 'torso capsule');
+    assets.core = buildGeometry(THREE.CapsuleGeometry, [torsoRadius * 0.86, Math.max(0, torsoHeight * 0.4), 8, 14], 'core capsule');
+    assets.head = buildGeometry(THREE.SphereGeometry, [ENEMY_RADIUS * 0.62, 20, 16], 'head sphere');
+    assets.visor = buildGeometry(THREE.SphereGeometry, [ENEMY_RADIUS * 0.46, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.55], 'visor dome');
+    assets.shoulder = buildGeometry(THREE.CylinderGeometry, [limbRadius * 1.1, limbRadius * 0.92, ENEMY_RADIUS * 0.95, 12, 1, true], 'shoulder cylinder');
+    assets.arm = buildGeometry(THREE.CapsuleGeometry, [limbRadius, ENEMY_RADIUS * 1.1, 8, 12], 'arm capsule');
+    assets.forearm = buildGeometry(THREE.CapsuleGeometry, [limbRadius * 0.9, ENEMY_RADIUS, 8, 12], 'forearm capsule');
+    assets.hip = buildGeometry(THREE.CylinderGeometry, [shinRadius * 1.2, shinRadius, ENEMY_RADIUS * 0.9, 10], 'hip cylinder');
+    assets.leg = buildGeometry(THREE.CapsuleGeometry, [shinRadius, ENEMY_RADIUS * 1.25, 10, 14], 'leg capsule');
+    assets.boot = buildGeometry(THREE.BoxGeometry, [shinRadius * 1.6, shinRadius * 0.8, shinRadius * 2.2], 'boot box');
 
-    if(!geometry){
-      try{
-        geometry = new THREE.CylinderGeometry(ENEMY_RADIUS, ENEMY_RADIUS, Math.max(ENEMY_HEIGHT, ENEMY_RADIUS * 2), radialSegments, 1, false);
-        if(!PATCH_STATE.enemyGeometryFallbackLogged){
-          PATCH_STATE.enemyGeometryFallbackLogged = true;
-          console.warn('[patch-001] Falling back to cylinder enemy geometry; capsule geometry unavailable.');
-        }
-      }catch(err){
-        console.error('[patch-001] Failed to create fallback enemy geometry.', err);
-        geometry = null;
+    for(const key of Object.keys(assets)){
+      const geom = assets[key];
+      geom.computeBoundingBox?.();
+      geom.computeBoundingSphere?.();
+    }
+
+    PATCH_STATE.enemyRigAssets = assets;
+    PATCH_STATE.enemyGeometry = assets.torso;
+    return assets;
+  }
+
+  function ensureEnemyGeometry(){
+    const assets = ensureEnemyRigAssets();
+    return assets.torso;
+  }
+
+  function isSharedEnemyGeometry(geometry){
+    if(!geometry) return false;
+    const assets = ensureEnemyRigAssets();
+    for(const key of Object.keys(assets)){
+      if(assets[key] === geometry){
+        return true;
       }
     }
+    return false;
+  }
 
-    if(geometry && geometry.attributes?.position){
-      const pos = geometry.attributes.position;
-      for(let i = 0; i < pos.count; i++){
-        const y = pos.getY(i);
-        const normalized = THREE.MathUtils.clamp((y + ENEMY_HALF_HEIGHT) / Math.max(ENEMY_HEIGHT, 1e-3), 0, 1);
-        let scale = 1;
-        if(normalized > 0.65){
-          scale = THREE.MathUtils.lerp(0.82, 0.58, (normalized - 0.65) / 0.35);
-        } else if(normalized > 0.35){
-          scale = THREE.MathUtils.lerp(1.28, 0.9, (normalized - 0.35) / 0.3);
-        } else {
-          scale = THREE.MathUtils.lerp(1.06, 0.92, normalized / 0.35);
-        }
-        const shoulder = Math.sin(normalized * Math.PI) * 0.06;
-        pos.setX(i, pos.getX(i) * (scale + shoulder));
-        pos.setZ(i, pos.getZ(i) * (scale + shoulder));
+  function buildEnemyRig(profile){
+    const assets = ensureEnemyRigAssets();
+    const rig = new THREE.Group();
+    rig.name = 'enemy-rig';
+
+    const palette = getEnemyPalette(profile?.paletteIndex ?? 0);
+    const baseMaterial = instantiateEnemyMaterial();
+    const bodyMaterial = (() => {
+      if(Array.isArray(baseMaterial)) return baseMaterial[0];
+      return baseMaterial;
+    })() || createDefaultEnemyMaterial();
+    const accentMaterial = bodyMaterial?.clone ? bodyMaterial.clone() : new THREE.MeshStandardMaterial({ color: palette.accent });
+    const visorMaterial = new THREE.MeshStandardMaterial({
+      color: 0x7fb8ff,
+      emissive: new THREE.Color(palette.accent || 0x4da3ff),
+      emissiveIntensity: 0.8,
+      roughness: 0.25,
+      metalness: 0.1,
+      transparent: true,
+      opacity: 0.82,
+    });
+
+    const buildLimb = (geometry, material, position, rotation, name) => {
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.name = name;
+      mesh.position.copy(position);
+      if(rotation){
+        mesh.rotation.set(rotation.x, rotation.y, rotation.z);
       }
-      geometry.computeVertexNormals?.();
-      pos.needsUpdate = true;
-    }
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      rig.add(mesh);
+      return mesh;
+    };
 
-    if(geometry){
-      geometry.computeBoundingBox?.();
-      geometry.computeBoundingSphere?.();
-      PATCH_STATE.enemyGeometry = geometry;
-    }
+    const torso = new THREE.Mesh(assets.torso, bodyMaterial);
+    torso.name = 'enemy-torso';
+    torso.position.y = ENEMY_HALF_HEIGHT * 0.35;
+    torso.castShadow = torso.receiveShadow = true;
+    torso.userData.primaryMaterial = true;
+    rig.add(torso);
 
-    return geometry;
+    const core = new THREE.Mesh(assets.core, bodyMaterial);
+    core.name = 'enemy-core';
+    core.position.y = ENEMY_HALF_HEIGHT * 0.6;
+    core.castShadow = core.receiveShadow = true;
+    rig.add(core);
+
+    const head = new THREE.Mesh(assets.head, accentMaterial);
+    head.name = 'enemy-head';
+    head.position.y = ENEMY_HEIGHT - ENEMY_RADIUS * 0.4;
+    head.castShadow = head.receiveShadow = true;
+    rig.add(head);
+
+    const visor = new THREE.Mesh(assets.visor, visorMaterial);
+    visor.name = 'enemy-visor';
+    visor.position.set(0, head.position.y + ENEMY_RADIUS * 0.05, ENEMY_RADIUS * 0.25);
+    visor.castShadow = false;
+    visor.receiveShadow = false;
+    rig.add(visor);
+
+    const shoulderOffset = ENEMY_RADIUS * 1.05;
+    const shoulderHeight = ENEMY_HEIGHT * 0.62;
+    buildLimb(assets.shoulder, accentMaterial, new THREE.Vector3(shoulderOffset, shoulderHeight, 0), new THREE.Euler(Math.PI * 0.5, 0, Math.PI * 0.05), 'enemy-shoulder-r');
+    buildLimb(assets.shoulder, accentMaterial, new THREE.Vector3(-shoulderOffset, shoulderHeight, 0), new THREE.Euler(Math.PI * 0.5, 0, -Math.PI * 0.05), 'enemy-shoulder-l');
+
+    const armHeight = shoulderHeight - ENEMY_RADIUS * 0.1;
+    buildLimb(assets.arm, bodyMaterial, new THREE.Vector3(shoulderOffset * 1.02, armHeight - ENEMY_RADIUS * 0.5, 0.2), new THREE.Euler(Math.PI * 0.5, 0, Math.PI * 0.25), 'enemy-arm-r');
+    buildLimb(assets.arm, bodyMaterial, new THREE.Vector3(-shoulderOffset * 1.02, armHeight - ENEMY_RADIUS * 0.5, 0.2), new THREE.Euler(Math.PI * 0.5, 0, -Math.PI * 0.25), 'enemy-arm-l');
+    buildLimb(assets.forearm, bodyMaterial, new THREE.Vector3(shoulderOffset * 1.05, armHeight - ENEMY_RADIUS * 1.3, 0.35), new THREE.Euler(Math.PI * 0.55, 0, Math.PI * 0.18), 'enemy-forearm-r');
+    buildLimb(assets.forearm, bodyMaterial, new THREE.Vector3(-shoulderOffset * 1.05, armHeight - ENEMY_RADIUS * 1.3, 0.35), new THREE.Euler(Math.PI * 0.55, 0, -Math.PI * 0.18), 'enemy-forearm-l');
+
+    const hipHeight = ENEMY_HALF_HEIGHT * 0.5;
+    buildLimb(assets.hip, accentMaterial, new THREE.Vector3(0, hipHeight, 0), new THREE.Euler(Math.PI * 0.5, 0, 0), 'enemy-hip');
+    buildLimb(assets.leg, bodyMaterial, new THREE.Vector3(ENEMY_RADIUS * 0.55, hipHeight - ENEMY_RADIUS * 1.2, 0.05), new THREE.Euler(Math.PI * 0.5, 0, Math.PI * 0.08), 'enemy-leg-r');
+    buildLimb(assets.leg, bodyMaterial, new THREE.Vector3(-ENEMY_RADIUS * 0.55, hipHeight - ENEMY_RADIUS * 1.2, 0.05), new THREE.Euler(Math.PI * 0.5, 0, -Math.PI * 0.08), 'enemy-leg-l');
+    buildLimb(assets.boot, accentMaterial, new THREE.Vector3(ENEMY_RADIUS * 0.55, hipHeight - ENEMY_RADIUS * 2.1, ENEMY_RADIUS * 0.35), null, 'enemy-boot-r');
+    buildLimb(assets.boot, accentMaterial, new THREE.Vector3(-ENEMY_RADIUS * 0.55, hipHeight - ENEMY_RADIUS * 2.1, ENEMY_RADIUS * 0.35), null, 'enemy-boot-l');
+
+    rig.traverse(obj => {
+      if(obj && obj.isMesh){
+        obj.castShadow = obj.castShadow ?? true;
+        obj.receiveShadow = obj.receiveShadow ?? true;
+      }
+    });
+
+    rig.userData.primaryMaterial = bodyMaterial;
+    rig.userData.accentMaterial = accentMaterial;
+    rig.userData.visorMaterial = visorMaterial;
+    rig.userData.palette = palette;
+
+    return {
+      group: rig,
+      materials: {
+        primary: bodyMaterial,
+        accent: accentMaterial,
+        visor: visorMaterial,
+      }
+    };
+  }
+
+  function getEnemyPrimaryMaterial(enemy){
+    if(!enemy) return null;
+    if(enemy.primaryMaterial) return enemy.primaryMaterial;
+    const mesh = enemy.mesh;
+    if(!mesh) return null;
+    if(mesh.userData?.primaryMaterial && mesh.userData.primaryMaterial.isMaterial){
+      return mesh.userData.primaryMaterial;
+    }
+    if(mesh.isMesh){
+      return Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+    }
+    if(mesh.isGroup){
+      let found = null;
+      mesh.traverse(child => {
+        if(found || !child || !child.isMesh) return;
+        if(child.userData?.primaryMaterial){
+          found = Array.isArray(child.material) ? child.material[0] : child.material;
+        }
+      });
+      if(found) return found;
+      mesh.traverse(child => {
+        if(found || !child || !child.isMesh) return;
+        found = Array.isArray(child.material) ? child.material[0] : child.material;
+      });
+      return found;
+    }
+    return null;
   }
 
   function getStaticBounds(mesh, forceUpdate = false){
@@ -1953,8 +2098,11 @@ export function applyPatch(ctx){
     damage *= enemy.damageScalar || 1;
     enemy.health -= damage;
     const now = performance.now();
-    enemy.brain = enemy.brain || createEnemyBrain(enemy.spawnZone);
+    enemy.brain = enemy.brain || createEnemyBrain(enemy.spawnZone, enemy.profile || DEFAULT_ENEMY_PROFILE);
     enemy.brain.lastHitAt = now;
+    enemy.brain.alertUntil = Math.max(enemy.brain.alertUntil, now + 900);
+    enemy.brain.awareness = Math.min(1, enemy.brain.awareness + 0.35);
+    enemy.brain.reactionTimer = Math.min(enemy.brain.reactionTimer, enemy.brain.reactionDelay * 0.45);
     const suppressionScalar = enemy.profile?.suppressionResist || 1;
     enemy.suppressedUntil = now + CONFIG.AI.suppressedTime * 1000 * suppressionScalar;
     const headshot = localY >= 1.0;
@@ -1962,9 +2110,19 @@ export function applyPatch(ctx){
     if(functions.screenShake) functions.screenShake(headshot ? 0.02 : 0.012, 0.06);
     if(enemy.health <= 0){
       removeEnemyLocal(enemy);
-    } else if(enemy.mesh?.material?.emissive){
-      enemy.mesh.material.emissive.setHex(0xff3333);
-      setTimeout(()=>{ if(enemy.mesh) enemy.mesh.material.emissive.setHex(0x050b14); }, 90);
+    } else {
+      const flickerMaterial = getEnemyPrimaryMaterial(enemy);
+      if(flickerMaterial?.emissive?.setHex){
+        const original = flickerMaterial.emissive.getHex();
+        flickerMaterial.emissive.setHex(0xff3333);
+        flickerMaterial.emissiveIntensity = Math.max(flickerMaterial.emissiveIntensity ?? 0.4, 0.65);
+        setTimeout(()=>{
+          if(enemy.mesh && flickerMaterial?.emissive?.setHex){
+            flickerMaterial.emissive.setHex(original);
+            flickerMaterial.emissiveIntensity = THREE.MathUtils.clamp(0.35 + (enemy.profile?.accuracy || 0) * 0.4, 0.35, 0.85);
+          }
+        }, 120);
+      }
     }
     return true;
   }
@@ -2283,8 +2441,8 @@ export function applyPatch(ctx){
   }
 
   function patchedSpawnEnemy(){
-    const bodyGeometry = ensureEnemyGeometry();
-    if(!bodyGeometry){
+    const rigAssets = ensureEnemyRigAssets();
+    if(!rigAssets){
       registerSpawnFailure();
       game.spawnDelay = Math.max(game.spawnDelay, nextSpawnDelay());
       return false;
@@ -2365,12 +2523,6 @@ export function applyPatch(ctx){
     }
 
     const spawnHeight = spawnPoint.y;
-    const enemyMaterial = instantiateEnemyMaterial();
-    const enemyMesh = new THREE.Mesh(bodyGeometry, enemyMaterial);
-    enemyMesh.position.set(spawnPoint.x, spawnHeight + ENEMY_HALF_HEIGHT, spawnPoint.z);
-    enemyMesh.castShadow = enemyMesh.receiveShadow = true;
-    scene.add(enemyMesh);
-
     const baseHealth = CONFIG.AI.baseHealth + game.round * CONFIG.AI.healthPerRound;
     const engageClamp = Number.isFinite(CONFIG.AI.engageDelay) ? CONFIG.AI.engageDelay : 0.3;
     const firstShotValues = [];
@@ -2398,6 +2550,16 @@ export function applyPatch(ctx){
     const patrolMultiplier = THREE.MathUtils.lerp(0.72, 1.08, profile.resilience * 0.5 + profile.accuracy * 0.3);
     const initialCooldown = Math.max(initialFireDelay, profile.restCadence[0] * 0.85);
 
+    const rigBuild = buildEnemyRig(profile);
+    const enemyMesh = rigBuild?.group;
+    if(!enemyMesh){
+      registerSpawnFailure();
+      game.spawnDelay = Math.max(game.spawnDelay, nextSpawnDelay());
+      return false;
+    }
+    enemyMesh.position.set(spawnPoint.x, spawnHeight + ENEMY_HALF_HEIGHT, spawnPoint.z);
+    scene.add(enemyMesh);
+
     const enemy = {
       mesh: enemyMesh,
       health: enemyHealth,
@@ -2409,7 +2571,7 @@ export function applyPatch(ctx){
       burstShotsLeft: 0,
       aimSpread: Math.max(THREE.MathUtils.degToRad(0.45), p.aimSpread * THREE.MathUtils.lerp(1.05, 0.62, profile.accuracy)),
       suppressedUntil: 0,
-      brain: createEnemyBrain(chosenZone),
+      brain: createEnemyBrain(chosenZone, profile),
       groundHeight: spawnHeight,
       profile,
       weaponPattern: {
@@ -2422,7 +2584,15 @@ export function applyPatch(ctx){
       damageScalar: profile.damageScale,
     };
     enemy.spawnZone = chosenZone || null;
+    enemy.primaryMaterial = rigBuild.materials?.primary || getEnemyPrimaryMaterial(enemy);
+    enemy.accentMaterial = rigBuild.materials?.accent || null;
+    enemy.visorMaterial = rigBuild.materials?.visor || null;
     applyEnemyVisualProfile(enemy);
+    enemyMesh.traverse(obj => {
+      if(obj && obj.isMesh){
+        obj.userData.enemy = enemy;
+      }
+    });
     enemyMesh.userData.enemyProfile = profile;
     enemyMesh.userData.enemy = enemy;
     enemies.push(enemy);
@@ -2472,7 +2642,9 @@ export function applyPatch(ctx){
     return bestZone;
   }
 
-  function createEnemyBrain(zone){
+  function createEnemyBrain(zone, profile = DEFAULT_ENEMY_PROFILE){
+    const reactionBase = THREE.MathUtils.lerp(0.22, 0.08, THREE.MathUtils.clamp((profile.accuracy + profile.aggression) * 0.5, 0, 1));
+    const vigilance = THREE.MathUtils.lerp(0.28, 0.78, profile.aggression * 0.6 + profile.resilience * 0.4);
     return {
       state: 'patrol',
       zone: zone || null,
@@ -2492,6 +2664,11 @@ export function applyPatch(ctx){
       alertUntil: 0,
       seeingPlayer: false,
       lastSeenAt: -Infinity,
+      awareness: 0,
+      vigilance,
+      reactionDelay: reactionBase,
+      reactionTimer: reactionBase,
+      reacquireBoost: Math.max(0.04, reactionBase * 0.35),
     };
   }
 
@@ -2592,7 +2769,7 @@ export function applyPatch(ctx){
       const enemy = enemies[i];
       const mesh = enemy.mesh;
       if(!mesh) continue;
-      const brain = enemy.brain || (enemy.brain = createEnemyBrain(enemy.spawnZone));
+      const brain = enemy.brain || (enemy.brain = createEnemyBrain(enemy.spawnZone, enemy.profile || DEFAULT_ENEMY_PROFILE));
       const previousState = brain.state;
       mesh.position.y = desiredEnemyCenterY(enemy);
       clampEnemyToZone(enemy);
@@ -2615,6 +2792,16 @@ export function applyPatch(ctx){
         losCache.set(losKey, { value: hasLine, time: now });
       }
 
+      const profile = enemy.profile || DEFAULT_ENEMY_PROFILE;
+      const directives = ROUND_DIRECTIVES || {};
+      const reactionBias = directives.reactionBias || 0;
+      const reactionFloor = Number.isFinite(CONFIG.AI.reactionFloor) ? CONFIG.AI.reactionFloor : 0.05;
+      const reactionCeil = Number.isFinite(CONFIG.AI.reactionCeil) ? CONFIG.AI.reactionCeil : 0.16;
+      const awarenessMemorySec = Number.isFinite(CONFIG.AI.awarenessMemory) ? CONFIG.AI.awarenessMemory : 0.9;
+      const awarenessMemoryMs = Math.max(awarenessMemorySec * 1000, 200);
+      brain.reactionDelay = THREE.MathUtils.clamp(brain.reactionDelay + reactionBias * -0.05, reactionFloor, reactionCeil);
+      brain.reactionTimer = Math.min(brain.reactionTimer, brain.reactionDelay);
+
       const suppressed = enemy.suppressedUntil > now;
       enemy.fireCooldown = Math.max(0, enemy.fireCooldown - delta);
       if(hasLine){
@@ -2622,7 +2809,6 @@ export function applyPatch(ctx){
         brain.lastKnownPlayerPos.y = desiredEnemyCenterY(enemy);
       }
 
-      const profile = enemy.profile || DEFAULT_ENEMY_PROFILE;
       const weaponPattern = enemy.weaponPattern || {
         burstMin: DEFAULT_ENEMY_PROFILE.burst?.[0] ?? 2,
         burstMax: DEFAULT_ENEMY_PROFILE.burst?.[1] ?? 3,
@@ -2642,47 +2828,51 @@ export function applyPatch(ctx){
       const strafeAggression = THREE.MathUtils.clamp(profile.aggression * 0.8 + profile.accuracy * 0.2, 0, 1);
       const retreatAggression = THREE.MathUtils.clamp(1 - profile.resilience * 0.6, 0, 1);
       const suppressionResist = profile.suppressionResist || 1;
-      const directives = ROUND_DIRECTIVES || {};
       const detectionSkill = THREE.MathUtils.clamp(profile.accuracy * 0.6 + profile.aggression * 0.4 + (directives.awarenessBonus || 0), 0, 1);
-      const reactionFloor = Number.isFinite(CONFIG.AI.reactionFloor) ? CONFIG.AI.reactionFloor : 0.05;
-      const reactionCeil = Number.isFinite(CONFIG.AI.reactionCeil) ? CONFIG.AI.reactionCeil : 0.16;
-      const awarenessMemorySec = Number.isFinite(CONFIG.AI.awarenessMemory) ? CONFIG.AI.awarenessMemory : 0.9;
-      const awarenessMemoryMs = Math.max(awarenessMemorySec * 1000, 200);
-      const reactionBias = directives.reactionBias || 0;
       const alertDistanceBase = Number.isFinite(CONFIG.AI.alertDistance) ? CONFIG.AI.alertDistance : engageRange;
       const alertDistance = alertDistanceBase * (1 + THREE.MathUtils.clamp(directives.awarenessBonus || 0, 0, 0.8));
-      const previouslySeeing = brain.seeingPlayer === true;
+      const awarenessGain = THREE.MathUtils.lerp(1.6, 3.2, profile.aggression * 0.7 + profile.accuracy * 0.3);
+      const awarenessLoss = THREE.MathUtils.lerp(0.4, 0.9, 1 - profile.resilience * 0.5);
+      const reactionPull = THREE.MathUtils.lerp(3.2, 6.2, profile.aggression * 0.6 + profile.accuracy * 0.4 + Math.max(0, reactionBias));
+      const reacquireWindow = Math.max(0.02, brain.reactionDelay * 0.35);
+      const memoryHold = awarenessMemoryMs * THREE.MathUtils.lerp(0.55, 0.9, detectionSkill);
       if(hasLine){
-        brain.lastSeenAt = now;
-        brain.seeingPlayer = true;
-        const reactionTarget = Math.max(0.015, THREE.MathUtils.lerp(reactionCeil, reactionFloor, detectionSkill) - reactionBias * 0.6);
-        if(!previouslySeeing){
-          enemy.fireCooldown = Math.min(enemy.fireCooldown, reactionTarget);
+        if(now - brain.lastSeenAt > 140){
+          enemy.fireCooldown = Math.min(enemy.fireCooldown, reacquireWindow);
           enemy.burstShotsLeft = Math.max(enemy.burstShotsLeft, 1);
         }
-        const alertExtension = awarenessMemoryMs * THREE.MathUtils.lerp(0.7, 1.2, detectionSkill);
+        brain.awareness = Math.min(1, brain.awareness + delta * awarenessGain);
+        brain.reactionTimer = Math.max(0, brain.reactionTimer - delta * reactionPull);
+        brain.lastSeenAt = now;
+        brain.seeingPlayer = true;
         const directiveHold = (directives.awarenessBonus || 0) * 320;
-        brain.alertUntil = Math.max(brain.alertUntil || 0, now + alertExtension + directiveHold);
-        enemy.fireCooldown = Math.min(enemy.fireCooldown, Math.max(0.01, reactionTarget));
-      } else if(previouslySeeing && now - brain.lastSeenAt > 180){
-        brain.seeingPlayer = false;
+        brain.alertUntil = Math.max(brain.alertUntil || 0, now + awarenessMemoryMs * THREE.MathUtils.lerp(0.8, 1.3, detectionSkill) + directiveHold);
+      } else {
+        const sinceSeen = now - brain.lastSeenAt;
+        brain.awareness = Math.max(0, brain.awareness - delta * (awarenessLoss + (brain.awareness > 0.55 ? 0.7 : 0.35)));
+        brain.reactionTimer = Math.min(brain.reactionDelay, brain.reactionTimer + delta * 0.7);
+        if(sinceSeen < memoryHold){
+          brain.alertUntil = Math.max(brain.alertUntil || 0, brain.lastSeenAt + memoryHold);
+        } else if(brain.alertUntil && now > brain.alertUntil){
+          brain.awareness = Math.max(0, brain.awareness - delta * 1.1);
+        }
+        if(sinceSeen > 220){
+          brain.seeingPlayer = false;
+        }
       }
 
       if(distance < alertDistance){
+        brain.awareness = Math.min(1, brain.awareness + delta * 2.2 + 0.2);
         const closeBonus = THREE.MathUtils.lerp(520, 320, detectionSkill) + (directives.awarenessBonus || 0) * 280;
         brain.alertUntil = Math.max(brain.alertUntil || 0, now + closeBonus);
-      } else if(brain.alertUntil && now > brain.alertUntil && brain.lastSeenAt > 0){
-        const memoryHold = awarenessMemoryMs * THREE.MathUtils.lerp(0.35, 0.75, detectionSkill);
-        if(now - brain.lastSeenAt < memoryHold){
-          brain.alertUntil = now + memoryHold * 0.35;
-        }
       }
 
       if(!hasLine && distance < engageRange * THREE.MathUtils.lerp(1.05, 1.45, directives.awarenessBonus || 0)){
-        brain.alertUntil = Math.max(brain.alertUntil || 0, now + 260 + (directives.awarenessBonus || 0) * 380);
+        brain.alertUntil = Math.max(brain.alertUntil || 0, now + 380 + (directives.awarenessBonus || 0) * 320);
+        brain.awareness = Math.min(1, brain.awareness + 0.25);
       }
 
-      const alertActive = hasLine || (brain.alertUntil || 0) > now;
+      const alertActive = hasLine || brain.awareness > 0.45 || (brain.alertUntil || 0) > now;
 
       switch(brain.state){
         case 'patrol': {
@@ -2756,21 +2946,29 @@ export function applyPatch(ctx){
             break;
           }
           if(enemy.fireCooldown <= 0){
-            if(enemy.burstShotsLeft <= 0){
-              enemy.burstShotsLeft = THREE.MathUtils.randInt(burstMin, burstMax);
+            if(!suppressed && brain.reactionTimer > 0){
+              enemy.fireCooldown = Math.max(enemy.fireCooldown, brain.reactionTimer);
+            } else {
+              if(enemy.burstShotsLeft <= 0){
+                enemy.burstShotsLeft = THREE.MathUtils.randInt(burstMin, burstMax);
+              }
+              patchedEnemyHitscanShoot(enemy, delta, {
+                suppressed,
+                distance,
+                toPlayerDir,
+                now,
+                playerPos,
+                profile,
+              });
+              enemy.burstShotsLeft -= 1;
+              if(enemy.burstShotsLeft > 0){
+                enemy.fireCooldown = THREE.MathUtils.randFloat(burstCadence[0], burstCadence[1]);
+                brain.reactionTimer = Math.max(0, brain.reactionDelay * 0.25);
+              } else {
+                enemy.fireCooldown = THREE.MathUtils.randFloat(restCadence[0], restCadence[1]);
+                brain.reactionTimer = Math.max(0, brain.reactionDelay * THREE.MathUtils.lerp(0.4, 0.7, 1 - profile.aggression));
+              }
             }
-            patchedEnemyHitscanShoot(enemy, delta, {
-              suppressed,
-              distance,
-              toPlayerDir,
-              now,
-              playerPos,
-              profile,
-            });
-            enemy.burstShotsLeft -= 1;
-            enemy.fireCooldown = enemy.burstShotsLeft > 0
-              ? THREE.MathUtils.randFloat(burstCadence[0], burstCadence[1])
-              : THREE.MathUtils.randFloat(restCadence[0], restCadence[1]);
           }
           break;
         }
@@ -2803,11 +3001,13 @@ export function applyPatch(ctx){
         const engageDelay = engageClamp * THREE.MathUtils.lerp(0.85, 1.15, 1 - profile.aggression);
         const immediate = Math.max(0.02, engageDelay - Math.max(0, reactionBias) * 0.5);
         enemy.fireCooldown = Math.min(enemy.fireCooldown, immediate);
+        brain.reactionTimer = Math.min(brain.reactionTimer, immediate);
       }
       if(brain.state === 'attack' && hasLine && enemy.fireCooldown > reengageClamp){
         const clampTarget = reengageClamp * THREE.MathUtils.lerp(0.75, 1.05, 1 - profile.accuracy) * Math.max(0.45, 1 - reactionBias * 0.8);
         const cooldownPull = delta * THREE.MathUtils.lerp(1.2, 1.8, profile.aggression) * (1 + Math.max(0, reactionBias) * 1.8);
         enemy.fireCooldown = Math.max(clampTarget, enemy.fireCooldown - cooldownPull);
+        brain.reactionTimer = Math.min(brain.reactionTimer, clampTarget);
       }
 
       enemy.state = brain.state;
@@ -3231,17 +3431,17 @@ export function applyPatch(ctx){
       maybeDropLoot(enemy.mesh?.position || controls.getObject().position);
       scene.remove(enemy.mesh);
       if(enemy.mesh){
-        if(enemy.mesh.geometry && enemy.mesh.geometry !== PATCH_STATE.enemyGeometry){
-          enemy.mesh.geometry.dispose?.();
-        }
-        if(enemy.mesh.material){
-          if(Array.isArray(enemy.mesh.material)){
-            enemy.mesh.material.forEach(m=>disposeMaterial(m));
-          } else {
-            disposeMaterial(enemy.mesh.material);
+        enemy.mesh.traverse?.((obj) => {
+          if(!obj || !obj.isMesh) return;
+          if(obj.geometry && !isSharedEnemyGeometry(obj.geometry)){
+            obj.geometry.dispose?.();
           }
-        }
+          disposeMaterial(obj.material);
+        });
       }
+      enemy.primaryMaterial = null;
+      enemy.accentMaterial = null;
+      enemy.visorMaterial = null;
       enemies.splice(idx,1);
       const now = performance.now();
       game.score += 10;
