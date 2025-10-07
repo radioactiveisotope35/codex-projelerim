@@ -42,6 +42,16 @@ export function applyPatch(ctx){
     return;
   }
 
+  if(Array.isArray(lootItems)){
+    lootItems.length = 0;
+  }
+  if(functions.updateLoot){
+    functions.updateLoot = () => {};
+  }
+  if(functions.maybeDropLoot){
+    functions.maybeDropLoot = () => {};
+  }
+
   if(scene.fog){
     scene.fog.color?.set?.(0x192b42);
     if(typeof scene.fog.near === 'number') scene.fog.near = Math.min(scene.fog.near, 70);
@@ -217,9 +227,13 @@ export function applyPatch(ctx){
       roundClearDelay: 3,
     },
     ECONOMY: {
-      baseKill: 30,
-      headshotBonus: 20,
-      streakBonus: 30,
+      baseKill: 50,
+      roundBonus: 12,
+      headshotBonus: 30,
+      streakBonus: 40,
+      roundClear: 140,
+      roundClearScale: 45,
+      marketRoundScale: 55,
       streakWindow: 5200,
     },
     STORE: {
@@ -1580,14 +1594,15 @@ export function applyPatch(ctx){
       enemyCorner.y = enemyGround;
     }
     const cornerCenter = new THREE.Vector3(enemyCorner.x, enemyCorner.y, enemyCorner.z);
-    const safeRadius = Math.max(ENEMY_RADIUS + 0.5, CONFIG.SPAWN.safeRadius ? CONFIG.SPAWN.safeRadius * 0.85 : 0);
-    const maxSpanRadius = Math.max(ENEMY_RADIUS + 0.5, Math.min(spanX, spanZ) * 0.35);
-    const cornerRadius = Math.max(6, safeRadius, maxSpanRadius);
+    const safeRadius = Math.max(ENEMY_RADIUS + 0.5, CONFIG.SPAWN.safeRadius ? CONFIG.SPAWN.safeRadius * 0.5 : 0);
+    const maxSpanRadius = Math.max(ENEMY_RADIUS + 0.5, Math.min(spanX, spanZ) * 0.2);
+    const cornerRadius = Math.max(4.5, Math.min(10, safeRadius), maxSpanRadius);
     const zone = clampZoneToSpawnBounds({
       center: cornerCenter,
       radius: cornerRadius,
       height: cornerCenter.y,
-    }) || { center: cornerCenter, radius: cornerRadius, height: cornerCenter.y };
+      strict: true,
+    }) || { center: cornerCenter, radius: cornerRadius, height: cornerCenter.y, strict: true };
     PATCH_STATE.enemyOppositePoint = zone.center.clone();
     PATCH_STATE.enemySpawnZones = [zone];
     return true;
@@ -2202,6 +2217,14 @@ export function applyPatch(ctx){
     lastKillTime: -Infinity,
     headshotStreak: 0,
     armorCharges: 0,
+    maxArmorCharges: 0,
+    killCount: 0,
+    damageMultiplier: 1,
+    muzzleVelocityScale: 1,
+    weaponLevel: 0,
+    healthLevel: 0,
+    armorLevel: 0,
+    baseMaxHealth: 0,
     mods: { recoil: false, reload: false },
     intermission: false,
     intermissionTimer: 0,
@@ -2211,8 +2234,22 @@ export function applyPatch(ctx){
     storePausedLoop: false,
     manualPause: false,
     fireTempo: CONFIG.WEAPONS.fireRate,
+    statsOpen: false,
   };
   player.credits = player.credits || 0;
+
+  const baseMaxHealth = Number.isFinite(player.maxHealth)
+    ? Math.max(1, player.maxHealth)
+    : (Number.isFinite(player.health) ? Math.max(1, player.health) : 100);
+  player.maxHealth = baseMaxHealth;
+  player.health = Number.isFinite(player.health) ? Math.min(player.health, player.maxHealth) : player.maxHealth;
+  playerState.baseMaxHealth = baseMaxHealth;
+
+  player.maxAmmo = Number.isFinite(player.maxAmmo) ? Math.max(1, player.maxAmmo) : Math.max(1, CONFIG.WEAPONS.magazineSize || 30);
+  player.ammo = Number.isFinite(player.ammo) ? player.ammo : player.maxAmmo;
+  player.reserve = Number.isFinite(player.reserve) ? Math.max(0, player.reserve) : player.maxAmmo * 6;
+  playerState.maxArmorCharges = Math.max(playerState.maxArmorCharges || 0, playerState.armorCharges || 0);
+  playerState.armorCharges = Math.min(playerState.maxArmorCharges, playerState.armorCharges || 0);
 
   const weaponState = {
     baseHip: CONFIG.WEAPONS.spreadHip,
@@ -2222,6 +2259,10 @@ export function applyPatch(ctx){
     spreadCurrent: CONFIG.WEAPONS.spreadHip,
     recoveryHip: CONFIG.WEAPONS.spreadRecovery,
     recoveryAds: CONFIG.WEAPONS.spreadRecoveryADS,
+    baseHipRef: CONFIG.WEAPONS.spreadHip,
+    baseAdsRef: CONFIG.WEAPONS.spreadADS,
+    maxHipRef: CONFIG.WEAPONS.spreadHipMax,
+    maxAdsRef: CONFIG.WEAPONS.spreadADSMax,
   };
 
   recalcPlayerTuning();
@@ -2618,14 +2659,15 @@ export function applyPatch(ctx){
       flash.visible = true;
       setTimeout(()=>{ if(ctx.muzzleFlash) ctx.muzzleFlash.visible = false; }, 45);
     }
-    const tracerEnd = borrowVec3().copy(muzzlePos).addScaledVector(tempVecA, CONFIG.WEAPONS.tracerSegment);
+    const aimPoint = borrowVec3().copy(camera.position).addScaledVector(tempVecA, 100);
+    const direction = borrowVec3().copy(aimPoint).sub(muzzlePos).normalize();
+    const tracerEnd = borrowVec3().copy(muzzlePos).addScaledVector(direction, CONFIG.WEAPONS.tracerSegment);
     spawnTracer(muzzlePos, tracerEnd, { color: 0xfff3a0, life: CONFIG.PERF.tracerLifetime * 1.3 });
 
-    const direction = borrowVec3().copy(tempVecA);
     spawnProjectile({
       origin: muzzlePos,
       direction,
-      speed: CONFIG.WEAPONS.muzzleVelocity * (ROUND_DIRECTIVES.velocityScale || 1),
+      speed: CONFIG.WEAPONS.muzzleVelocity * (ROUND_DIRECTIVES.velocityScale || 1) * (playerState.muzzleVelocityScale || 1),
       gravity: CONFIG.WEAPONS.projectileGravity,
       drag: CONFIG.WEAPONS.projectileDrag,
       owner: 'player',
@@ -2649,13 +2691,14 @@ export function applyPatch(ctx){
     releaseVec3(muzzlePos);
     releaseVec3(tracerEnd);
     releaseVec3(direction);
+    releaseVec3(aimPoint);
   }
 
   function handlePlayerProjectileEnemyHit(projectile, enemy, hit){
     if(!enemy || !enemy.mesh) return true;
     const point = hit.point || enemy.mesh.position;
     const localY = point.y - enemy.mesh.position.y;
-    let damage = computeBaseDamage(localY);
+    let damage = computeBaseDamage(localY) * (playerState.damageMultiplier || 1);
     const distance = projectile.origin.distanceTo(point);
     damage *= applyDamageFalloff(distance);
     damage *= enemy.damageScalar || 1;
@@ -2672,6 +2715,7 @@ export function applyPatch(ctx){
     if(functions.showHitmarker) functions.showHitmarker();
     if(functions.screenShake) functions.screenShake(headshot ? 0.02 : 0.012, 0.06);
     if(enemy.health <= 0){
+      enemy.__killInfo = { headshot, byPlayer: true };
       removeEnemyLocal(enemy);
     } else {
       const flickerMaterial = getEnemyPrimaryMaterial(enemy);
@@ -2707,12 +2751,7 @@ export function applyPatch(ctx){
   }
 
   function computeBaseDamage(localY){
-    if(localY >= 1.0){
-      playerState.headshotStreak += 1;
-      playerState.lastKillTime = performance.now();
-      return 110;
-    }
-    playerState.headshotStreak = 0;
+    if(localY >= 1.0) return 110;
     if(localY >= 0.3) return 35;
     return 22;
   }
@@ -2758,9 +2797,12 @@ export function applyPatch(ctx){
               const enemy = hit.object?.userData?.enemy || enemies.find(en => en.mesh === hit.object);
               if(enemy){
                 const localY = hit.point.y - enemy.mesh.position.y;
-                let dmg = computeBaseDamage(localY) * CONFIG.WEAPONS.ricochetDamageScale;
+                let dmg = computeBaseDamage(localY) * (playerState.damageMultiplier || 1) * CONFIG.WEAPONS.ricochetDamageScale;
                 enemy.health -= dmg;
-                if(enemy.health <= 0) removeEnemyLocal(enemy);
+                if(enemy.health <= 0){
+                  enemy.__killInfo = { headshot: localY >= 1.0, byPlayer: true };
+                  removeEnemyLocal(enemy);
+                }
               }
             }
             break;
@@ -2788,10 +2830,13 @@ export function applyPatch(ctx){
           const enemy = nh.object?.userData?.enemy || enemies.find(en => en.mesh === nh.object);
           if(enemy){
             const localY = nh.point.y - enemy.mesh.position.y;
-            let dmg = computeBaseDamage(localY) * CONFIG.WEAPONS.penetrationDamageScale;
+            let dmg = computeBaseDamage(localY) * (playerState.damageMultiplier || 1) * CONFIG.WEAPONS.penetrationDamageScale;
             dmg *= applyDamageFalloff(origin.distanceTo(endPoint));
             enemy.health -= dmg;
-            if(enemy.health <= 0) removeEnemyLocal(enemy);
+            if(enemy.health <= 0){
+              enemy.__killInfo = { headshot: localY >= 1.0, byPlayer: true };
+              removeEnemyLocal(enemy);
+            }
           }
         }
       }
@@ -2905,6 +2950,16 @@ export function applyPatch(ctx){
     const zoneHeight = enemy.spawnZone?.height;
     const base = isFinite(enemy.groundHeight) ? enemy.groundHeight : (isFinite(zoneHeight) ? zoneHeight : (enemy.mesh.position.y - ENEMY_HALF_HEIGHT));
     return base + ENEMY_HALF_HEIGHT;
+  }
+
+  function updateEnemyGrounding(enemy, statics){
+    if(!enemy || !enemy.mesh) return;
+    tempVecE.set(enemy.mesh.position.x, enemy.groundHeight ?? (enemy.mesh.position.y - ENEMY_HALF_HEIGHT), enemy.mesh.position.z);
+    const sampled = resolveSpawnHeight(tempVecE, enemy.spawnZone, statics);
+    if(Number.isFinite(sampled)){
+      enemy.groundHeight = sampled;
+      enemy.mesh.position.y = sampled + ENEMY_HALF_HEIGHT;
+    }
   }
 
   function zoneOccupancyInfo(zone){
@@ -3592,6 +3647,7 @@ export function applyPatch(ctx){
       if(!mesh) continue;
       const brain = enemy.brain || (enemy.brain = createEnemyBrain(enemy.spawnZone, enemy.profile || DEFAULT_ENEMY_PROFILE));
       const previousState = brain.state;
+      updateEnemyGrounding(enemy, statics);
       mesh.position.y = desiredEnemyCenterY(enemy);
       clampEnemyToZone(enemy);
 
@@ -4226,6 +4282,9 @@ export function applyPatch(ctx){
       if(playerState.intermission){
         endIntermission();
       }
+      if(playerState.storeOpen){
+        closeStore();
+      }
       resetSpawnFailureCounters();
       const previousRound = Number.isFinite(game.round) ? game.round : 0;
       game.round = previousRound + 1;
@@ -4239,6 +4298,9 @@ export function applyPatch(ctx){
     }
     if(playerState.intermission){
       endIntermission();
+    }
+    if(playerState.storeOpen){
+      closeStore();
     }
     resetSpawnFailureCounters();
     const params = difficulty.params;
@@ -4340,6 +4402,18 @@ export function applyPatch(ctx){
     updateEnemiesHud();
     showBuyBanner();
     updateBuyBanner();
+    const roundReward = computeRoundClearReward();
+    if(roundReward > 0){
+      awardCredits(roundReward, 'Round ödülü', { refresh: false });
+    }
+    if(!playerState.storeOpen){
+      openStore(true);
+    } else if(marketState.visible){
+      refreshMarketUi();
+    }
+    if(roundReward > 0 && marketState.visible){
+      setMarketMessage(`Round ödülü +₺${roundReward}`, false);
+    }
   }
 
   function endIntermission(){
@@ -4380,17 +4454,349 @@ export function applyPatch(ctx){
   // ---------------------------------------------------------------------------
   // ECONOMY / STORE
   // ---------------------------------------------------------------------------
+  const marketState = {
+    overlay: null,
+    panel: null,
+    list: null,
+    meta: null,
+    message: null,
+    visible: false,
+    items: null,
+  };
+
+  const MARKET_ITEM_TEMPLATES = [
+    {
+      id: 'weapon',
+      name: 'Silah Güçlendirmesi',
+      description: 'Silah hasarını ve mermi hızını arttırır, nişan dağılmasını azaltır.',
+      baseCost: 240,
+      costGrowth: 1.4,
+      roundScale: 45,
+      maxLevel: 6,
+      apply(level){
+        playerState.weaponLevel = level;
+        playerState.damageMultiplier = 1 + level * 0.15;
+        playerState.muzzleVelocityScale = 1 + level * 0.08;
+        const hipScale = Math.max(0.6, 1 - level * 0.05);
+        const adsScale = Math.max(0.55, 1 - level * 0.07);
+        const hipMaxScale = Math.max(0.55, 1 - level * 0.06);
+        const adsMaxScale = Math.max(0.5, 1 - level * 0.08);
+        weaponState.baseHip = weaponState.baseHipRef * hipScale;
+        weaponState.baseAds = weaponState.baseAdsRef * adsScale;
+        weaponState.spreadMaxHip = weaponState.maxHipRef * hipMaxScale;
+        weaponState.spreadMaxAds = weaponState.maxAdsRef * adsMaxScale;
+        weaponState.spreadCurrent = Math.min(weaponState.spreadCurrent, weaponState.spreadMaxHip);
+      },
+    },
+    {
+      id: 'armor',
+      name: 'Zırh Takviyesi',
+      description: 'Ek zırh yükleri kazandırır ve mevcut zırhı doldurur.',
+      baseCost: 190,
+      costGrowth: 1.35,
+      roundScale: 35,
+      maxLevel: 5,
+      apply(level){
+        playerState.armorLevel = level;
+        playerState.maxArmorCharges = level + 1;
+        playerState.armorCharges = playerState.maxArmorCharges;
+        updateArmorBadge();
+      },
+    },
+    {
+      id: 'vitality',
+      name: 'Biyotik Güçlendirme',
+      description: 'Maksimum sağlığı yükseltir ve anlık iyileşme sağlar.',
+      baseCost: 220,
+      costGrowth: 1.5,
+      roundScale: 40,
+      maxLevel: 5,
+      apply(level){
+        playerState.healthLevel = level;
+        const newMax = Math.round(playerState.baseMaxHealth * (1 + level * 0.2));
+        player.maxHealth = newMax;
+        player.health = Math.min(newMax, player.health + Math.round(newMax * 0.5));
+        if(typeof functions.updateHealth === 'function'){
+          try { functions.updateHealth(player.health, player.maxHealth); }
+          catch(err){ console.warn('[patch-001] updateHealth failed', err); }
+        }
+      },
+    },
+  ];
+
+  function getPlayerUpgradeLevel(id){
+    switch(id){
+      case 'weapon': return playerState.weaponLevel || 0;
+      case 'armor': return playerState.armorLevel || 0;
+      case 'vitality': return playerState.healthLevel || 0;
+      default: return 0;
+    }
+  }
+
+  function ensureMarketItems(){
+    if(!marketState.items){
+      marketState.items = MARKET_ITEM_TEMPLATES.map(template => ({
+        template,
+        level: getPlayerUpgradeLevel(template.id),
+      }));
+    }
+    return marketState.items;
+  }
+
+  function getMarketRound(){
+    const current = Math.max(1, game.round || 1);
+    return playerState.intermission ? current + 1 : current;
+  }
+
+  function computeMarketCost(item){
+    const template = item.template;
+    const round = getMarketRound();
+    const base = template.baseCost * Math.pow(template.costGrowth, item.level);
+    const roundBoost = (round - 1) * (template.roundScale ?? CONFIG.ECONOMY.marketRoundScale ?? 0);
+    return Math.round(base + roundBoost);
+  }
+
+  function ensureMarketOverlay(){
+    if(marketState.overlay || !ui.hud) return marketState.overlay;
+    const overlay = document.createElement('div');
+    overlay.id = 'marketOverlay';
+    overlay.style.position = 'absolute';
+    overlay.style.inset = '0';
+    overlay.style.display = 'none';
+    overlay.style.placeItems = 'center';
+    overlay.style.background = 'rgba(0,0,0,.6)';
+    overlay.style.backdropFilter = 'blur(6px)';
+    overlay.style.pointerEvents = 'none';
+
+    const panel = document.createElement('div');
+    panel.style.minWidth = 'min(560px, 90vw)';
+    panel.style.maxWidth = 'min(640px, 92vw)';
+    panel.style.background = 'rgba(8,15,25,.82)';
+    panel.style.border = '1px solid rgba(255,255,255,.12)';
+    panel.style.borderRadius = '16px';
+    panel.style.padding = '24px 28px';
+    panel.style.boxShadow = '0 18px 48px rgba(0,0,0,.35)';
+    panel.style.pointerEvents = 'auto';
+
+    const title = document.createElement('h2');
+    title.textContent = 'Round Pazarı';
+    title.style.margin = '0 0 12px 0';
+    title.style.fontSize = '24px';
+    title.style.letterSpacing = '0.08em';
+
+    const meta = document.createElement('div');
+    meta.style.fontSize = '14px';
+    meta.style.opacity = '0.8';
+    meta.style.marginBottom = '18px';
+
+    const list = document.createElement('div');
+    list.style.display = 'grid';
+    list.style.gap = '16px';
+
+    const message = document.createElement('div');
+    message.style.marginTop = '18px';
+    message.style.fontSize = '13px';
+    message.style.minHeight = '18px';
+    message.style.letterSpacing = '0.04em';
+
+    panel.appendChild(title);
+    panel.appendChild(meta);
+    panel.appendChild(list);
+    panel.appendChild(message);
+    overlay.appendChild(panel);
+    ui.hud.appendChild(overlay);
+
+    marketState.overlay = overlay;
+    marketState.panel = panel;
+    marketState.list = list;
+    marketState.meta = meta;
+    marketState.message = message;
+    return overlay;
+  }
+
+  function setMarketMessage(text, isError = false){
+    if(!marketState.message) return;
+    marketState.message.textContent = text || '';
+    marketState.message.style.color = isError ? '#ff7b7b' : '#9ad0ff';
+  }
+
+  function refreshMarketMeta(){
+    if(!marketState.meta) return;
+    marketState.meta.textContent = `Round ${getMarketRound()} • Krediler: ₺${player.credits}`;
+  }
+
+  function renderMarketItem(item){
+    const template = item.template;
+    item.level = getPlayerUpgradeLevel(template.id);
+    const maxed = item.level >= template.maxLevel;
+    const cost = maxed ? 0 : computeMarketCost(item);
+
+    const row = document.createElement('div');
+    row.style.border = '1px solid rgba(255,255,255,.12)';
+    row.style.borderRadius = '12px';
+    row.style.padding = '16px';
+    row.style.background = 'rgba(12,20,32,.65)';
+    row.style.display = 'grid';
+    row.style.gap = '8px';
+
+    const header = document.createElement('div');
+    header.style.display = 'flex';
+    header.style.justifyContent = 'space-between';
+    header.style.alignItems = 'center';
+
+    const name = document.createElement('span');
+    name.textContent = template.name;
+    name.style.fontWeight = '600';
+    name.style.letterSpacing = '0.04em';
+
+    const level = document.createElement('span');
+    level.textContent = `Seviye ${item.level}/${template.maxLevel}`;
+    level.style.fontSize = '13px';
+    level.style.opacity = '0.8';
+
+    header.appendChild(name);
+    header.appendChild(level);
+
+    const desc = document.createElement('p');
+    desc.textContent = template.description;
+    desc.style.margin = '0';
+    desc.style.fontSize = '13px';
+    desc.style.opacity = '0.75';
+
+    const button = document.createElement('button');
+    button.textContent = maxed ? 'Maksimum seviye' : `Satın Al — ₺${cost}`;
+    button.style.padding = '10px 16px';
+    button.style.borderRadius = '8px';
+    button.style.border = '1px solid rgba(255,255,255,.2)';
+    button.style.background = maxed ? 'rgba(255,255,255,.08)' : 'linear-gradient(90deg,#2a95ff,#00c8ff)';
+    button.style.color = maxed ? '#cfd6e6' : '#04121f';
+    button.style.cursor = maxed ? 'default' : 'pointer';
+    button.disabled = maxed || player.credits < cost;
+    button.addEventListener('click', () => purchaseMarketItem(template.id));
+    if(!maxed && player.credits < cost){
+      button.style.filter = 'grayscale(0.6)';
+      button.title = 'Yetersiz kredi';
+    }
+
+    row.appendChild(header);
+    row.appendChild(desc);
+    row.appendChild(button);
+    return row;
+  }
+
+  function refreshMarketUi(){
+    ensureMarketOverlay();
+    if(!marketState.list) return;
+    const items = ensureMarketItems();
+    marketState.list.innerHTML = '';
+    for(const item of items){
+      marketState.list.appendChild(renderMarketItem(item));
+    }
+    refreshMarketMeta();
+  }
+
+  function spendCredits(cost, options = {}){
+    const price = Math.max(0, Math.round(cost || 0));
+    if((player.credits || 0) < price){
+      return false;
+    }
+    player.credits -= price;
+    updateCredits();
+    updateCreditLine();
+    if(marketState.visible){
+      refreshMarketMeta();
+      if(options.refresh !== false){
+        refreshMarketUi();
+      }
+      if(options.label){
+        setMarketMessage(`${options.label} -₺${price}`, true);
+      }
+    }
+    updateStatsOverlay(true);
+    return true;
+  }
+
+  function awardCredits(amount, label, options = {}){
+    const value = Math.max(0, Math.round(amount || 0));
+    if(!value) return 0;
+    player.credits = Math.max(0, (player.credits || 0) + value);
+    updateCredits();
+    updateCreditLine();
+    if(marketState.visible){
+      refreshMarketMeta();
+      if(options.refresh !== false){
+        refreshMarketUi();
+      }
+      if(label){
+        setMarketMessage(`${label} +₺${value}`, false);
+      }
+    }
+    updateStatsOverlay(true);
+    return value;
+  }
+
+  function purchaseMarketItem(id){
+    const items = ensureMarketItems();
+    const item = items.find(it => it.template.id === id);
+    if(!item) return;
+    item.level = getPlayerUpgradeLevel(id);
+    if(item.level >= item.template.maxLevel){
+      setMarketMessage('Bu yükseltme maksimum seviyede.', true);
+      return;
+    }
+    const cost = computeMarketCost(item);
+    if(!spendCredits(cost, { refresh: false })){
+      setMarketMessage('Yetersiz kredi.', true);
+      return;
+    }
+    item.level += 1;
+    item.template.apply(item.level);
+    setMarketMessage(`${item.template.name} seviye ${item.level}.`, false);
+    refreshMarketUi();
+    updateStatsOverlay(true);
+  }
+
+  function showMarketOverlay(){
+    ensureMarketOverlay();
+    refreshMarketUi();
+    if(!marketState.overlay) return;
+    marketState.overlay.style.display = 'grid';
+    marketState.overlay.style.pointerEvents = 'auto';
+    marketState.visible = true;
+    controls.unlock?.();
+  }
+
+  function hideMarketOverlay(){
+    if(!marketState.overlay) return;
+    marketState.overlay.style.display = 'none';
+    marketState.overlay.style.pointerEvents = 'none';
+    marketState.visible = false;
+  }
+
+  function computeKillReward(headshot){
+    const round = Math.max(1, game.round || 1);
+    const base = (CONFIG.ECONOMY.baseKill || 0) + (round - 1) * (CONFIG.ECONOMY.roundBonus || 0);
+    let reward = base;
+    if(headshot){
+      reward += CONFIG.ECONOMY.headshotBonus || 0;
+    }
+    if(playerState.headshotStreak >= 3){
+      reward += CONFIG.ECONOMY.streakBonus || 0;
+    }
+    return Math.max(0, Math.round(reward));
+  }
+
+  function computeRoundClearReward(){
+    const round = Math.max(1, game.round || 1);
+    return Math.max(0, Math.round((CONFIG.ECONOMY.roundClear || 0) + (round - 1) * (CONFIG.ECONOMY.roundClearScale || 0)));
+  }
+
   function patchedRemoveEnemy(enemy){
     if(!enemy) return;
     const idx = enemies.indexOf(enemy);
     if(idx !== -1){
       const skipRoundCheck = enemy.__suppressRoundCheck === true;
       unregisterEnemyProfile(enemy);
-      const shouldDropLoot = enemy.__suppressLoot !== true;
-      enemy.__suppressLoot = false;
-      if(shouldDropLoot){
-        maybeDropLoot(enemy.mesh?.position || controls.getObject().position);
-      }
       scene.remove(enemy.mesh);
       if(enemy.mesh){
         enemy.mesh.traverse?.((obj) => {
@@ -4412,13 +4818,24 @@ export function applyPatch(ctx){
       const now = performance.now();
       game.score += 10;
       ui.scoreEl && (ui.scoreEl.textContent = `Skor: ${game.score}`);
-      const headshot = now - playerState.lastKillTime < CONFIG.ECONOMY.streakWindow && playerState.headshotStreak > 1;
-      let reward = CONFIG.ECONOMY.baseKill;
-      if(headshot) reward += CONFIG.ECONOMY.headshotBonus;
-      if(playerState.headshotStreak >= 3) reward += CONFIG.ECONOMY.streakBonus;
-      player.credits = (player.credits || 0) + reward;
-      updateCredits();
-      updateCreditLine();
+      const killInfo = enemy.__killInfo || {};
+      const byPlayer = killInfo.byPlayer === true;
+      if(byPlayer){
+        const headshot = !!killInfo.headshot;
+        if(headshot){
+          playerState.headshotStreak = (playerState.headshotStreak || 0) + 1;
+        } else {
+          playerState.headshotStreak = 0;
+        }
+        playerState.lastKillTime = now;
+        playerState.killCount = (playerState.killCount || 0) + 1;
+        const reward = computeKillReward(headshot);
+        if(reward > 0){
+          awardCredits(reward, headshot ? 'Kafadan tek' : 'Eliminasyon');
+        }
+        updateStatsOverlay(true);
+      }
+      enemy.__killInfo = null;
       game.enemiesRemaining = Math.max(0, game.enemiesRemaining - 1);
       updateEnemiesHud();
       if(!skipRoundCheck){
@@ -4696,7 +5113,113 @@ export function applyPatch(ctx){
       ui.hud.appendChild(badge);
       ui.armorBadge = badge;
     }
-    ui.armorBadge.textContent = playerState.armorCharges > 0 ? `Armor: ${playerState.armorCharges}` : '';
+    const current = Math.max(0, playerState.armorCharges || 0);
+    const maxCharges = Math.max(current, playerState.maxArmorCharges || 0);
+    ui.armorBadge.textContent = maxCharges > 0 ? `Zırh: ${current}/${maxCharges}` : '';
+  }
+
+  const statsOverlayState = {
+    overlay: null,
+    lines: null,
+  };
+
+  function ensureStatsOverlay(){
+    if(statsOverlayState.overlay) return statsOverlayState.overlay;
+    if(!ui.hud) return null;
+    const overlay = document.createElement('div');
+    overlay.id = 'statsOverlay';
+    overlay.style.position = 'absolute';
+    overlay.style.left = '24px';
+    overlay.style.top = '180px';
+    overlay.style.padding = '16px';
+    overlay.style.minWidth = '220px';
+    overlay.style.background = 'rgba(8,15,25,.7)';
+    overlay.style.border = '1px solid rgba(255,255,255,.12)';
+    overlay.style.borderRadius = '12px';
+    overlay.style.boxShadow = '0 14px 32px rgba(0,0,0,.35)';
+    overlay.style.color = '#e4ecff';
+    overlay.style.fontSize = '13px';
+    overlay.style.lineHeight = '1.6';
+    overlay.style.pointerEvents = 'none';
+    overlay.style.display = 'none';
+
+    const title = document.createElement('div');
+    title.textContent = 'İstatistikler';
+    title.style.fontWeight = '600';
+    title.style.letterSpacing = '0.08em';
+    title.style.marginBottom = '8px';
+
+    const container = document.createElement('div');
+    container.style.display = 'grid';
+    container.style.gap = '4px';
+
+    const makeRow = (label) => {
+      const row = document.createElement('div');
+      row.style.display = 'flex';
+      row.style.justifyContent = 'space-between';
+      const name = document.createElement('span');
+      name.textContent = label;
+      name.style.opacity = '0.75';
+      const value = document.createElement('span');
+      value.style.fontWeight = '600';
+      row.appendChild(name);
+      row.appendChild(value);
+      container.appendChild(row);
+      return value;
+    };
+
+    const lines = {
+      health: makeRow('Sağlık'),
+      armor: makeRow('Zırh'),
+      damage: makeRow('Silah Gücü'),
+      ammo: makeRow('Mühimmat'),
+      credits: makeRow('Kredi'),
+      kills: makeRow('Öldürme'),
+      round: makeRow('Round'),
+    };
+
+    overlay.appendChild(title);
+    overlay.appendChild(container);
+    ui.hud.appendChild(overlay);
+    statsOverlayState.overlay = overlay;
+    statsOverlayState.lines = lines;
+    return overlay;
+  }
+
+  function toggleStatsOverlay(force){
+    const overlay = ensureStatsOverlay();
+    if(!overlay) return;
+    const next = typeof force === 'boolean' ? force : !playerState.statsOpen;
+    playerState.statsOpen = next;
+    overlay.style.display = next ? 'block' : 'none';
+    if(next){
+      updateStatsOverlay(true);
+    }
+  }
+
+  function updateStatsOverlay(force = false){
+    const overlay = ensureStatsOverlay();
+    if(!overlay) return;
+    const lines = statsOverlayState.lines;
+    if(!lines) return;
+    if(!playerState.statsOpen && !force) return;
+    const maxHealth = Math.round(player.maxHealth || playerState.baseMaxHealth || 0);
+    const currentHealth = Math.round(player.health || 0);
+    lines.health.textContent = `${currentHealth}/${maxHealth}`;
+    const armorCurrent = Math.max(0, playerState.armorCharges || 0);
+    const armorMax = Math.max(armorCurrent, playerState.maxArmorCharges || 0);
+    lines.armor.textContent = armorMax > 0 ? `${armorCurrent}/${armorMax}` : '0';
+    const dmgMult = playerState.damageMultiplier || 1;
+    lines.damage.textContent = `x${dmgMult.toFixed(2)} (Lv ${playerState.weaponLevel || 0})`;
+    const ammo = Math.max(0, player.ammo || 0);
+    const clip = Math.max(1, player.maxAmmo || 0);
+    const reserve = Math.max(0, player.reserve || 0);
+    lines.ammo.textContent = `${ammo}/${clip} | ${reserve}`;
+    lines.credits.textContent = `₺${player.credits || 0}`;
+    lines.kills.textContent = `${playerState.killCount || 0}`;
+    const currentRound = Math.max(1, game.round || 1);
+    const upcoming = getMarketRound();
+    lines.round.textContent = `${currentRound} ➜ ${upcoming}`;
   }
 
   function updateCredits(){
@@ -4734,9 +5257,49 @@ export function applyPatch(ctx){
     paused: false,
   };
 
+  const fpsState = {
+    el: null,
+    accum: 0,
+    frames: 0,
+  };
+
+  function ensureFpsCounter(){
+    if(fpsState.el || !ui.hud) return fpsState.el;
+    const el = document.createElement('div');
+    el.id = 'fpsCounter';
+    el.style.position = 'absolute';
+    el.style.top = '24px';
+    el.style.right = '24px';
+    el.style.padding = '6px 10px';
+    el.style.background = 'rgba(0,0,0,.45)';
+    el.style.borderRadius = '10px';
+    el.style.color = '#e4ecff';
+    el.style.fontSize = '12px';
+    el.style.letterSpacing = '0.08em';
+    el.style.pointerEvents = 'none';
+    el.textContent = 'FPS: --';
+    ui.hud.appendChild(el);
+    fpsState.el = el;
+    return el;
+  }
+
+  function updateFpsCounter(delta){
+    const el = ensureFpsCounter();
+    if(!el) return;
+    fpsState.accum += delta;
+    fpsState.frames += 1;
+    if(fpsState.accum >= 0.25){
+      const fps = fpsState.frames / Math.max(fpsState.accum, 1e-6);
+      el.textContent = `FPS: ${Math.round(fps)}`;
+      fpsState.accum = 0;
+      fpsState.frames = 0;
+    }
+  }
+
   function fixedStepFrame(now){
     loopState.rafId = requestAnimationFrame(fixedStepFrame);
     const delta = Math.min(0.05, clock.getDelta());
+    updateFpsCounter(delta);
     if(loopState.paused){
       loopState.lastTime = now;
       loopState.accumulator = 0;
@@ -4776,6 +5339,7 @@ export function applyPatch(ctx){
     updateProjectiles(dt);
     updateTracers(dt);
     updateImpacts(dt);
+    updateStatsOverlay();
   }
 
   function renderScene(alpha){
@@ -4957,6 +5521,10 @@ export function applyPatch(ctx){
       if(playerState.storeOpen) closeStore();
       else openStore(false);
     }
+    if(e.code === 'KeyI' && !e.repeat){
+      e.preventDefault();
+      toggleStatsOverlay();
+    }
     if(e.code === 'Escape'){
       if(playerState.storeOpen){
         closeStore();
@@ -5006,18 +5574,21 @@ export function applyPatch(ctx){
   };
 
   function openStore(fromBuyPhase){
+    if(playerState.storeOpen) return;
     playerState.storeOpen = true;
     const shouldPause = !fromBuyPhase;
     playerState.storePausedLoop = shouldPause;
     if(shouldPause){
       pauseLoop();
     }
+    showMarketOverlay();
     if(originalOpenStore) originalOpenStore(fromBuyPhase);
   }
   function closeStore(){
     const wasPaused = playerState.storePausedLoop;
     playerState.storePausedLoop = false;
     playerState.storeOpen = false;
+    hideMarketOverlay();
     if(originalCloseStore) originalCloseStore();
     if(wasPaused && !playerState.manualPause){
       resumeLoop();
@@ -5150,9 +5721,35 @@ export function applyPatch(ctx){
       delete ui.pauseOverlay;
     }
 
+    hideMarketOverlay();
+    if(marketState.overlay){
+      marketState.overlay.remove();
+    }
+    marketState.overlay = null;
+    marketState.panel = null;
+    marketState.list = null;
+    marketState.meta = null;
+    marketState.message = null;
+    marketState.items = null;
+    marketState.visible = false;
+
+    if(statsOverlayState.overlay){
+      statsOverlayState.overlay.remove();
+    }
+    statsOverlayState.overlay = null;
+    statsOverlayState.lines = null;
+
+    if(fpsState.el){
+      fpsState.el.remove();
+    }
+    fpsState.el = null;
+    fpsState.accum = 0;
+    fpsState.frames = 0;
+
     playerState.manualPause = false;
     playerState.intermission = false;
     playerState.intermissionTimer = 0;
+    playerState.statsOpen = false;
 
     if(Array.isArray(PATCH_STATE.weaponParts)){
       for(const part of PATCH_STATE.weaponParts){
@@ -5206,9 +5803,7 @@ export function applyPatch(ctx){
   // ---------------------------------------------------------------------------
   // HELPERS
   // ---------------------------------------------------------------------------
-  function maybeDropLoot(position){
-    if(functions.maybeDropLoot) functions.maybeDropLoot(position);
-  }
+  function maybeDropLoot(position){ /* loot disabled */ }
 
   function updateAmmoDisplay(){
     if(functions.updateAmmoDisplay) functions.updateAmmoDisplay();
