@@ -3418,7 +3418,7 @@ export function applyPatch(ctx){
             brain.reactionTimer = Math.max(0, brain.reactionTimer - delta * (reactionPull + 6));
             enemy.fireCooldown = Math.min(enemy.fireCooldown, brain.reactionTimer + closeShotWindow);
             const cooldownPull = THREE.MathUtils.lerp(1.4, 2.1, profile.aggression) + (reactionBias > 0 ? reactionBias * 3.2 : 0);
-            enemy.fireCooldown = Math.max(0.01, enemy.fireCooldown - delta * cooldownPull);
+            enemy.fireCooldown = Math.max(0, enemy.fireCooldown - delta * cooldownPull);
           }
           if((!hasLine && !(brain.alertUntil && brain.alertUntil > now)) || suppressed){
             brain.state = 'flank';
