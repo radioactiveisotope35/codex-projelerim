@@ -259,6 +259,12 @@ export function applyPatch(ctx){
       gunshotAlertRadius: 36,
       gunshotMaxBoost: 0.8,
       spawnOppositeRadius: 7,
+      magazineSize: [18, 30],
+      reloadTime: [1.55, 2.3],
+      tacticalReloadTime: [1.0, 1.45],
+      tacticalReloadThreshold: [0.32, 0.52],
+      reloadVariance: [0.08, 0.22],
+      suppressedReloadPenalty: 0.35,
     },
     PERF: {
       fixedStep: 1 / 60,
@@ -432,6 +438,11 @@ export function applyPatch(ctx){
     burst: [4, 6],
     burstCadence: [0.048, 0.1],
     restCadence: [0.18, 0.26],
+    magazine: 24,
+    reloadTime: 1.9,
+    tacticalReload: 0.4,
+    tacticalReloadTime: 1.3,
+    reloadVariance: 0.14,
     scale: { x: 1.04, y: 1.06, z: 1.02 },
     paletteIndex: 0,
     aimJitter: THREE.MathUtils.lerp(CONFIG.AI.aimJitter[1], CONFIG.AI.aimJitter[0], 0.64),
@@ -452,6 +463,11 @@ export function applyPatch(ctx){
       restCadence: [0.2, 0.28],
       preferredRange: [12, 22],
       damageScale: [0.95, 1.2],
+      magazine: [20, 26],
+      reload: [1.55, 2.1],
+      tactical: [0.34, 0.48],
+      tacticalTime: [1.05, 1.35],
+      reloadVariance: [0.1, 0.18],
       lead: [0.7, 1.05],
       suppression: [0.9, 1.2],
       scale: {
@@ -472,6 +488,11 @@ export function applyPatch(ctx){
       restCadence: [0.18, 0.26],
       preferredRange: [8, 18],
       damageScale: [1, 1.28],
+      magazine: [22, 28],
+      reload: [1.45, 1.95],
+      tactical: [0.36, 0.5],
+      tacticalTime: [0.95, 1.25],
+      reloadVariance: [0.08, 0.16],
       lead: [0.78, 1.18],
       suppression: [0.95, 1.25],
       scale: {
@@ -492,6 +513,11 @@ export function applyPatch(ctx){
       restCadence: [0.24, 0.34],
       preferredRange: [16, 28],
       damageScale: [1.05, 1.32],
+      magazine: [24, 32],
+      reload: [1.8, 2.4],
+      tactical: [0.32, 0.46],
+      tacticalTime: [1.15, 1.5],
+      reloadVariance: [0.12, 0.22],
       lead: [0.8, 1.24],
       suppression: [1.05, 1.32],
       scale: {
@@ -512,6 +538,11 @@ export function applyPatch(ctx){
       restCadence: [0.16, 0.25],
       preferredRange: [6, 16],
       damageScale: [0.9, 1.1],
+      magazine: [16, 22],
+      reload: [1.3, 1.9],
+      tactical: [0.38, 0.54],
+      tacticalTime: [0.9, 1.2],
+      reloadVariance: [0.08, 0.18],
       lead: [0.68, 1],
       suppression: [0.85, 1.05],
       scale: {
@@ -532,6 +563,11 @@ export function applyPatch(ctx){
       restCadence: [0.2, 0.3],
       preferredRange: [18, 32],
       damageScale: [1.1, 1.4],
+      magazine: [22, 30],
+      reload: [1.6, 2.2],
+      tactical: [0.3, 0.46],
+      tacticalTime: [1.05, 1.38],
+      reloadVariance: [0.1, 0.22],
       lead: [0.85, 1.3],
       suppression: [1, 1.35],
       scale: {
@@ -632,6 +668,27 @@ export function applyPatch(ctx){
     const aimJitter = THREE.MathUtils.lerp(CONFIG.AI.aimJitter[1], CONFIG.AI.aimJitter[0], accuracy);
     const leadTime = CONFIG.AI.leadFactor * THREE.MathUtils.lerp(archetype.lead[0], archetype.lead[1], accuracy) * (ROUND_DIRECTIVES.velocityScale || 1);
     const suppressionResist = THREE.MathUtils.lerp(archetype.suppression[0], archetype.suppression[1], resilience);
+    const magazineRange = archetype.magazine || CONFIG.AI.magazineSize;
+    const reloadRange = archetype.reload || CONFIG.AI.reloadTime;
+    const tacticalRange = archetype.tactical || CONFIG.AI.tacticalReloadThreshold;
+    const tacticalTimeRange = archetype.tacticalTime || CONFIG.AI.tacticalReloadTime;
+    const varianceRange = archetype.reloadVariance || CONFIG.AI.reloadVariance;
+    const magazine = Math.max(
+      12,
+      Math.round(
+        lerpRange(
+          magazineRange,
+          THREE.MathUtils.clamp(resilience * 0.5 + aggression * 0.3 + accuracy * 0.2, 0, 1)
+        )
+      )
+    );
+    const reloadTime = Math.max(0.7, lerpRange(reloadRange, THREE.MathUtils.clamp(1 - aggression * 0.35, 0, 1)));
+    const tacticalThreshold = THREE.MathUtils.clamp(lerpRange(tacticalRange, accuracy), 0.2, 0.6);
+    const tacticalReloadTime = Math.max(
+      0.55,
+      lerpRange(tacticalTimeRange, THREE.MathUtils.clamp(1 - resilience * 0.25, 0, 1))
+    );
+    const reloadVariance = THREE.MathUtils.clamp(lerpRange(varianceRange, 1 - accuracy), 0.05, 0.3);
     const damageScaleBias = 1 + (ROUND_DIRECTIVES.damageBias || 0);
     return {
       archetype: archetype.id,
@@ -651,6 +708,11 @@ export function applyPatch(ctx){
       aimJitter,
       leadTime,
       suppressionResist,
+      magazine,
+      reloadTime,
+      tacticalReload: tacticalThreshold,
+      tacticalReloadTime,
+      reloadVariance,
     };
   }
 
@@ -740,6 +802,42 @@ export function applyPatch(ctx){
     });
   }
 
+  function createSentinelVisorTexture(palette){
+    const key = `visor:${palette.accent.toString(16)}:${palette.emissive.toString(16)}`;
+    return ensureSentinelTexture(key, () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 128;
+      canvas.height = 64;
+      const ctx2d = canvas.getContext('2d');
+      if(ctx2d){
+        const accent = new THREE.Color(palette.accent);
+        const glow = new THREE.Color(palette.emissive);
+        const grad = ctx2d.createLinearGradient(0, 0, canvas.width, 0);
+        grad.addColorStop(0, `#${glow.clone().lerp(accent, 0.25).getHexString()}`);
+        grad.addColorStop(0.4, `#${accent.getHexString()}`);
+        grad.addColorStop(1, `#${glow.clone().multiplyScalar(0.6).getHexString()}`);
+        ctx2d.fillStyle = grad;
+        ctx2d.fillRect(0, 0, canvas.width, canvas.height);
+        ctx2d.globalAlpha = 0.35;
+        ctx2d.fillStyle = '#ffffff';
+        ctx2d.fillRect(0, 0, canvas.width, 6);
+        ctx2d.globalAlpha = 0.25;
+        ctx2d.fillRect(0, canvas.height - 6, canvas.width, 6);
+        ctx2d.globalAlpha = 0.45;
+        ctx2d.fillStyle = '#000000';
+        ctx2d.fillRect(0, canvas.height * 0.35, canvas.width, 4);
+        ctx2d.globalAlpha = 1;
+      }
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.wrapS = THREE.ClampToEdgeWrapping;
+      texture.wrapT = THREE.ClampToEdgeWrapping;
+      texture.anisotropy = Math.max(texture.anisotropy || 1, 2);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.needsUpdate = true;
+      return texture;
+    });
+  }
+
   function applyEnemyVisualProfile(enemy){
     if(!enemy?.mesh || !enemy.profile) return;
     const palette = getEnemyPalette(enemy.profile.paletteIndex);
@@ -789,9 +887,20 @@ export function applyPatch(ctx){
 
     const visorMaterial = enemy.visorMaterial || materials.visor || enemy.mesh?.userData?.visorMaterial;
     if(visorMaterial){
+      const visorTexture = createSentinelVisorTexture(palette);
+      if(visorMaterial.map !== visorTexture){
+        visorMaterial.map = visorTexture;
+        visorMaterial.needsUpdate = true;
+      }
       visorMaterial.color?.setHex(palette.accent);
       visorMaterial.emissive?.setHex(palette.accent);
       visorMaterial.emissiveIntensity = THREE.MathUtils.clamp(0.75 + enemy.profile.accuracy * 0.4, 0.75, 1.3);
+      if(typeof visorMaterial.metalness === 'number'){
+        visorMaterial.metalness = THREE.MathUtils.clamp(0.35 + enemy.profile.accuracy * 0.3, 0.3, 0.8);
+      }
+      if(typeof visorMaterial.roughness === 'number'){
+        visorMaterial.roughness = THREE.MathUtils.clamp(0.18 + enemy.profile.aggression * 0.18, 0.18, 0.46);
+      }
       visorMaterial.needsUpdate = true;
       enemy.visorMaterial = visorMaterial;
     }
@@ -2845,6 +2954,118 @@ export function applyPatch(ctx){
     return distance;
   }
 
+  function computeAnchorCandidate(enemy, playerPos, statics, preferredSide){
+    const mesh = enemy?.mesh;
+    if(!mesh){
+      return tempVecH.copy(playerPos).setY(desiredEnemyCenterY(enemy));
+    }
+    tempVecD.copy(mesh.position).sub(playerPos).setY(0);
+    let distance = tempVecD.length();
+    if(distance < 1e-3){
+      tempVecD.set(0, 0, 1);
+      distance = 1;
+    } else {
+      tempVecD.multiplyScalar(1 / distance);
+    }
+    const preferredRange = THREE.MathUtils.clamp(enemy?.preferredRange || CONFIG.STIM.focusRadius || 10, 6, 32);
+    const anchorRange = THREE.MathUtils.lerp(preferredRange * 0.85, preferredRange * 1.15, Math.random());
+    tempVecE.copy(playerPos).addScaledVector(tempVecD, anchorRange);
+    tempVecF.set(-tempVecD.z, 0, tempVecD.x);
+    if(tempVecF.lengthSq() > 1e-6){
+      const side = preferredSide || 1;
+      const lateral = THREE.MathUtils.lerp(1.1, 3.2, enemy?.profile?.aggression || 0.5);
+      tempVecF.normalize().multiplyScalar(lateral * side);
+      tempVecE.add(tempVecF);
+    }
+    const zone = enemy?.spawnZone || null;
+    const resolvedHeight = resolveSpawnHeight(tempVecE, zone, statics);
+    tempVecE.y = Number.isFinite(resolvedHeight) ? resolvedHeight + ENEMY_HALF_HEIGHT : desiredEnemyCenterY(enemy);
+    if(zone){
+      tempVecG.copy(tempVecE).sub(zone.center).setY(0);
+      const radius = Math.max(1, zone.radius || 0) - ENEMY_RADIUS * 0.5;
+      const dist = tempVecG.length();
+      if(dist > radius){
+        tempVecG.normalize().multiplyScalar(Math.max(0, radius));
+        tempVecE.x = zone.center.x + tempVecG.x;
+        tempVecE.z = zone.center.z + tempVecG.z;
+      }
+    }
+    if(capsuleOverlapsStatics(tempVecE, ENEMY_RADIUS, ENEMY_HEIGHT, statics)){
+      tempVecE.sub(tempVecF.multiplyScalar(0.7));
+      if(capsuleOverlapsStatics(tempVecE, ENEMY_RADIUS, ENEMY_HEIGHT, statics)){
+        tempVecE.copy(mesh.position);
+      }
+    }
+    return tempVecE;
+  }
+
+  function ensureAttackAnchor(enemy, playerPos, hasLine, now, statics){
+    const brain = enemy?.brain;
+    if(!brain || !enemy?.mesh){
+      return enemy?.mesh?.position || playerPos;
+    }
+    if(!brain.anchorTarget){
+      brain.anchorTarget = new THREE.Vector3();
+    }
+    const anchorRadius = brain.anchorRadius || (brain.anchorRadius = THREE.MathUtils.lerp(0.9, 1.5, enemy.profile?.accuracy || 0.5));
+    const needsRefresh =
+      !brain.anchorValid ||
+      !Number.isFinite(brain.anchorTarget.x) ||
+      brain.anchorUntil <= now ||
+      brain.anchorTarget.distanceToSquared(enemy.mesh.position) > Math.pow(Math.max(anchorRadius * 6, 6), 2) ||
+      (!hasLine && now - (brain.lastSeenAt || 0) > 420);
+    if(needsRefresh){
+      const side = brain.anchorSide || (Math.random() < 0.5 ? -1 : 1);
+      const candidate = computeAnchorCandidate(enemy, playerPos, statics, side);
+      brain.anchorTarget.copy(candidate);
+      brain.anchorValid = true;
+      brain.anchorUntil = now + THREE.MathUtils.randFloat(900, 1650);
+      brain.anchorSide = side;
+      brain.microStrafeCooldown = now + THREE.MathUtils.randFloat(480, 880);
+    }
+    return brain.anchorTarget;
+  }
+
+  function scheduleEnemyReload(enemy, now, options = {}){
+    if(!enemy || enemy.isReloading) return false;
+    const profile = enemy.profile || DEFAULT_ENEMY_PROFILE;
+    const base = options.tactical
+      ? enemy.tacticalReloadDuration || profile.tacticalReloadTime || Math.max(0.6, profile.reloadTime * 0.72)
+      : enemy.reloadDuration || profile.reloadTime || 1.9;
+    const variance = enemy.reloadVariance ?? profile.reloadVariance ?? 0.14;
+    const multiplier = THREE.MathUtils.lerp(1 - variance, 1 + variance, Math.random());
+    const reloadTime = Math.max(0.55, base * multiplier);
+    enemy.isReloading = true;
+    enemy.reloadTimer = reloadTime;
+    enemy.fireCooldown = Math.max(enemy.fireCooldown, reloadTime);
+    enemy.burstShotsLeft = 0;
+    enemy.lastReloadAt = now;
+    const brain = enemy.brain;
+    if(brain){
+      brain.reactionTimer = Math.max(brain.reactionTimer, Math.min(brain.reactionDelay, reloadTime * 0.5));
+      brain.anchorUntil = Math.max(brain.anchorUntil, now + reloadTime * 650);
+      brain.microStrafeUntil = Math.min(brain.microStrafeUntil || now, now + 120);
+    }
+    return reloadTime;
+  }
+
+  function completeEnemyReload(enemy, restCadence, brain, now){
+    if(!enemy) return;
+    enemy.isReloading = false;
+    enemy.reloadTimer = 0;
+    enemy.ammo = enemy.magazineSize;
+    enemy.burstShotsLeft = 0;
+    const restDelay = Array.isArray(restCadence) && restCadence.length >= 2
+      ? THREE.MathUtils.randFloat(restCadence[0], restCadence[1])
+      : 0.18;
+    enemy.fireCooldown = Math.max(enemy.fireCooldown, restDelay * 0.65);
+    enemy.lastReloadAt = now;
+    if(brain){
+      brain.reactionTimer = Math.max(brain.reactionTimer, Math.min(brain.reactionDelay, restDelay * 0.5));
+      brain.anchorUntil = Math.max(brain.anchorUntil, now + 380);
+    }
+  }
+
   function pickCoverPoint(origin, toPlayerDir){
     if(!Array.isArray(coverPoints) || !coverPoints.length) return null;
     let best = null;
@@ -2986,6 +3207,24 @@ export function applyPatch(ctx){
       ? Math.max(0.05, profile.restCadence[0])
       : 0.18;
     const initialCooldown = Math.max(0.05, Math.min(initialFireDelay, restFloor * 0.75));
+    const magazineSize = Math.max(8, Math.round(profile.magazine || DEFAULT_ENEMY_PROFILE.magazine || 24));
+    const reloadDuration = Math.max(0.6, profile.reloadTime || DEFAULT_ENEMY_PROFILE.reloadTime || 1.9);
+    const tacticalReloadDuration = Math.max(0.55, profile.tacticalReloadTime || reloadDuration * 0.72);
+    const tacticalThreshold = Math.max(
+      1,
+      Math.round(
+        magazineSize * THREE.MathUtils.clamp(
+          profile.tacticalReload ?? DEFAULT_ENEMY_PROFILE.tacticalReload ?? 0.4,
+          0.2,
+          0.75
+        )
+      )
+    );
+    const reloadVariance = THREE.MathUtils.clamp(
+      profile.reloadVariance ?? DEFAULT_ENEMY_PROFILE.reloadVariance ?? 0.14,
+      0.05,
+      0.35
+    );
 
     const rigBuild = buildEnemyRig(profile);
     const enemyMesh = rigBuild?.group;
@@ -3019,6 +3258,15 @@ export function applyPatch(ctx){
       },
       preferredRange: profile.preferredRange,
       damageScalar: profile.damageScale,
+      magazineSize,
+      ammo: magazineSize,
+      reloadDuration,
+      tacticalReloadDuration,
+      tacticalReloadThreshold: tacticalThreshold,
+      reloadVariance,
+      reloadTimer: 0,
+      isReloading: false,
+      lastReloadAt: -Infinity,
     };
     enemy.spawnZone = chosenZone || null;
     enemy.primaryMaterial = rigBuild.materials?.primary || getEnemyPrimaryMaterial(enemy);
@@ -3097,6 +3345,13 @@ export function applyPatch(ctx){
       repositionUntil: 0,
       strafeDir: Math.random() < 0.5 ? -1 : 1,
       strafeUntil: 0,
+      anchorTarget: new THREE.Vector3(),
+      anchorValid: false,
+      anchorUntil: 0,
+      anchorRadius: THREE.MathUtils.lerp(0.9, 1.5, profile.accuracy),
+      anchorSide: Math.random() < 0.5 ? -1 : 1,
+      microStrafeUntil: 0,
+      microStrafeCooldown: 0,
       wanderTarget: new THREE.Vector3(),
       nextWanderAt: 0,
       coverTarget: new THREE.Vector3(),
@@ -3288,6 +3543,24 @@ export function applyPatch(ctx){
       const reactionPull = THREE.MathUtils.lerp(3.2, 6.2, profile.aggression * 0.6 + profile.accuracy * 0.4 + Math.max(0, reactionBias));
       const reacquireWindow = Math.max(0.02, brain.reactionDelay * 0.35);
       const memoryHold = awarenessMemoryMs * THREE.MathUtils.lerp(0.55, 0.9, detectionSkill);
+      if(enemy.isReloading){
+        enemy.reloadTimer = Math.max(0, (enemy.reloadTimer || 0) - delta);
+        enemy.fireCooldown = Math.max(enemy.fireCooldown, enemy.reloadTimer);
+        if(enemy.reloadTimer <= 0){
+          completeEnemyReload(enemy, restCadence, brain, now);
+        }
+      } else if((enemy.ammo ?? enemy.magazineSize) <= 0){
+        scheduleEnemyReload(enemy, now, { tactical: false });
+      } else {
+        const threshold = enemy.tacticalReloadThreshold || Math.max(1, Math.round((enemy.magazineSize || 12) * 0.35));
+        const lowAmmo = enemy.ammo <= threshold;
+        const sinceLastShot = now - (enemy.lastFireAt || 0);
+        const sinceReload = now - (enemy.lastReloadAt || -Infinity);
+        const tacticalWindow = sinceLastShot > 220 && sinceReload > 600;
+        if(lowAmmo && tacticalWindow && (!hasLine || suppressed)){
+          scheduleEnemyReload(enemy, now, { tactical: true });
+        }
+      }
       if(hasLine){
         if(now - brain.lastSeenAt > 140){
           enemy.fireCooldown = Math.min(enemy.fireCooldown, reacquireWindow);
@@ -3388,29 +3661,48 @@ export function applyPatch(ctx){
         }
         case 'attack': {
           mesh.lookAt(playerPos.x, mesh.position.y, playerPos.z);
-          if(now > brain.strafeUntil){
-            brain.strafeDir = Math.random() < 0.5 ? -1 : 1;
-            const strafeWindow = THREE.MathUtils.randFloat(520, 1400) * THREE.MathUtils.lerp(0.9, 1.25, strafeAggression);
-            brain.strafeUntil = now + strafeWindow;
-          }
           brain.hasCoverTarget = false;
-          tempVecF.set(0, 0, 0);
-          if(!hasLine && toPlayerDir.lengthSq() > 1e-6){
-            tempVecF.addScaledVector(toPlayerDir, enemy.chaseSpeed * THREE.MathUtils.lerp(0.7, 1.05, profile.aggression));
+          const anchorTarget = ensureAttackAnchor(enemy, playerPos, hasLine, now, statics);
+          const anchorRadius = brain.anchorRadius || (brain.anchorRadius = THREE.MathUtils.lerp(0.9, 1.6, profile.accuracy));
+          tempVecF.subVectors(anchorTarget, mesh.position).setY(0);
+          const anchorDistance = tempVecF.length();
+          if(anchorDistance > anchorRadius){
+            tempVecF.normalize().multiplyScalar(enemy.chaseSpeed * THREE.MathUtils.lerp(0.62, 1.05, profile.aggression));
+          } else {
+            tempVecF.set(0, 0, 0);
           }
           const rangeBuffer = THREE.MathUtils.lerp(0.3, 0.12, profile.accuracy);
           if(distance > engageRange * (1 + rangeBuffer)){
-            tempVecF.addScaledVector(toPlayerDir, enemy.chaseSpeed * THREE.MathUtils.lerp(0.65, 1.05, profile.aggression));
-          } else if(distance < engageRange * Math.max(0.35, 1 - rangeBuffer * 1.4)){
-            tempVecF.addScaledVector(toPlayerDir, -enemy.chaseSpeed * THREE.MathUtils.lerp(0.32, 0.68, retreatAggression));
+            tempVecF.addScaledVector(toPlayerDir, enemy.chaseSpeed * THREE.MathUtils.lerp(0.62, 1.05, profile.aggression));
+          } else if(distance < engageRange * Math.max(0.38, 1 - rangeBuffer * 1.4)){
+            tempVecF.addScaledVector(toPlayerDir, -enemy.chaseSpeed * THREE.MathUtils.lerp(0.28, 0.62, retreatAggression));
+          }
+          if(!hasLine && toPlayerDir.lengthSq() > 1e-6){
+            tempVecF.addScaledVector(toPlayerDir, enemy.chaseSpeed * THREE.MathUtils.lerp(0.52, 0.9, profile.aggression));
           }
           if(toPlayerDir.lengthSq() > 1e-6){
             tempVecC.set(toPlayerDir.z, 0, -toPlayerDir.x);
             if(tempVecC.lengthSq() > 1e-6){
               tempVecC.normalize();
-              const strafeSpeed = enemy.chaseSpeed * THREE.MathUtils.lerp(0.42, 0.88, strafeAggression);
-              tempVecF.addScaledVector(tempVecC, strafeSpeed * brain.strafeDir);
+              if(hasLine && now > brain.microStrafeCooldown){
+                brain.anchorSide = brain.anchorSide || (Math.random() < 0.5 ? -1 : 1);
+                brain.anchorSide = -brain.anchorSide;
+                brain.microStrafeCooldown = now + THREE.MathUtils.randFloat(640, 1100);
+                brain.microStrafeUntil = now + THREE.MathUtils.randFloat(260, 520);
+              }
+              if(hasLine && now < brain.microStrafeUntil){
+                const strafeSpeed = enemy.chaseSpeed * THREE.MathUtils.lerp(0.22, 0.54, strafeAggression);
+                tempVecF.addScaledVector(tempVecC, strafeSpeed * brain.anchorSide);
+              }
             }
+          }
+          if(enemy.isReloading){
+            const reloadRetreat = enemy.chaseSpeed * THREE.MathUtils.lerp(
+              0.2,
+              0.48,
+              THREE.MathUtils.clamp(retreatAggression + (CONFIG.AI.suppressedReloadPenalty || 0.35), 0, 1.2)
+            );
+            tempVecF.addScaledVector(toPlayerDir, -reloadRetreat);
           }
           applyEnemyVelocity(enemy, tempVecF, delta, statics);
           if(hasLine){
@@ -3427,6 +3719,9 @@ export function applyPatch(ctx){
             brain.repositionUntil = now + CONFIG.STIM.suppressionRelocate * 1000 * suppressionResist;
             brain.hasCoverTarget = false;
             enemy.burstShotsLeft = 0;
+            break;
+          }
+          if(enemy.isReloading){
             break;
           }
           if(enemy.fireCooldown <= 0){
@@ -3603,6 +3898,10 @@ export function applyPatch(ctx){
         suppressed: context.suppressed,
       },
     });
+    if(typeof enemy.ammo === 'number'){
+      enemy.ammo = Math.max(0, enemy.ammo - 1);
+    }
+    enemy.lastFireAt = performance.now();
 
     releaseVec3(tracerEnd);
     releaseVec3(playerVel);
