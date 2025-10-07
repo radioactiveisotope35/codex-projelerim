@@ -173,6 +173,8 @@ export function applyPatch(ctx){
       falloffStart: 25,
       falloffEnd: 70,
       falloffMin: 0.6,
+      magazineSize: 30,
+      reloadTime: 1.6,
       penetrationThickness: 0.8,
       penetrationDamageScale: 0.55,
       ricochetAngle: THREE.MathUtils.degToRad(20),
@@ -254,6 +256,9 @@ export function applyPatch(ctx){
       alertDistance: 11,
       baseDamage: 16,
       damagePerRound: 1.2,
+      gunshotAlertRadius: 36,
+      gunshotMaxBoost: 0.8,
+      spawnOppositeRadius: 7,
     },
     PERF: {
       fixedStep: 1 / 60,
@@ -315,6 +320,7 @@ export function applyPatch(ctx){
     muzzleAnchor: null,
     enemySpawnZones: null,
     playerSpawn: null,
+    enemyOppositePoint: null,
     enemyGeometry: null,
     spawnFailureStreak: 0,
     lastSpawnFailureAt: 0,
@@ -1378,12 +1384,60 @@ export function applyPatch(ctx){
     return zone;
   }
 
+  function computeOppositeSpawnPoint(){
+    const playerSpawn = PATCH_STATE.playerSpawn;
+    if(!playerSpawn) return null;
+    const bounds = ensureSpawnBounds();
+    const center = tempVecH;
+    if(bounds && !bounds.isEmpty()){
+      bounds.getCenter(center);
+    } else {
+      center.set(0, playerSpawn.y, 0);
+    }
+    const opposite = new THREE.Vector3(
+      center.x * 2 - playerSpawn.x,
+      playerSpawn.y,
+      center.z * 2 - playerSpawn.z
+    );
+    if(bounds && !bounds.isEmpty()){
+      opposite.x = THREE.MathUtils.clamp(opposite.x, bounds.min.x, bounds.max.x);
+      opposite.z = THREE.MathUtils.clamp(opposite.z, bounds.min.z, bounds.max.z);
+      opposite.y = THREE.MathUtils.clamp(opposite.y, bounds.min.y, bounds.max.y);
+    }
+    return opposite;
+  }
+
+  function enforceOppositeSpawnAlignment(){
+    const playerSpawn = PATCH_STATE.playerSpawn;
+    if(!playerSpawn) return;
+    const opposite = computeOppositeSpawnPoint();
+    if(!opposite) return;
+    const zones = PATCH_STATE.enemySpawnZones || [];
+    const baseRadius = CONFIG.AI.spawnOppositeRadius || 6;
+    let sourceRadius = baseRadius;
+    for(let i = 0; i < zones.length; i++){
+      const radius = zones[i]?.radius;
+      if(Number.isFinite(radius) && radius > sourceRadius){
+        sourceRadius = radius;
+      }
+    }
+    const zone = {
+      center: opposite.clone(),
+      radius: Math.max(baseRadius, sourceRadius),
+      height: opposite.y,
+    };
+    const clamped = clampZoneToSpawnBounds(zone) || zone;
+    PATCH_STATE.enemyOppositePoint = clamped.center.clone();
+    PATCH_STATE.enemySpawnZones = [clamped];
+  }
+
   ensureWeaponModel();
   ensureMuzzleAnchor();
 
   PATCH_STATE.playerSpawn = (PATCH_STATE.playerSpawn || new THREE.Vector3()).copy(controls.getObject().position);
   refreshWorldBounds();
   PATCH_STATE.enemySpawnZones = buildEnemySpawnZones();
+  enforceOppositeSpawnAlignment();
 
   const fallbackCanvas = globalNS.fallbackCanvas || (() => {
     const canvas = document.createElement('canvas');
@@ -1913,7 +1967,18 @@ export function applyPatch(ctx){
   function gatherEnemyMeshes(){
     enemyMeshScratch.length = 0;
     for(let i=0;i<enemies.length;i++){
-      if(enemies[i].mesh) enemyMeshScratch.push(enemies[i].mesh);
+      const enemy = enemies[i];
+      const root = enemy?.mesh;
+      if(!root) continue;
+      root.traverse?.((obj) => {
+        if(!obj || !obj.isMesh) return;
+        enemyMeshScratch.push(obj);
+        if(!obj.userData) obj.userData = {};
+        if(!obj.userData.enemy) obj.userData.enemy = enemy;
+      });
+      if(root.isMesh && !enemyMeshScratch.includes(root)){
+        enemyMeshScratch.push(root);
+      }
     }
     return enemyMeshScratch;
   }
@@ -2301,8 +2366,51 @@ export function applyPatch(ctx){
   // ---------------------------------------------------------------------------
   // WEAPONS
   // ---------------------------------------------------------------------------
+  function getReloadDuration(){
+    const base = player.reloadTime || player.reloadDuration || CONFIG.WEAPONS.reloadTime || 1.6;
+    const reloadMod = player.mods?.reload ? 0.85 : 1;
+    return Math.max(0.25, base * reloadMod);
+  }
+
+  function canBeginReload(){
+    if(!player || player.alive === false) return false;
+    if(playerState.storeOpen) return false;
+    if(player.isReloading) return false;
+    const clipSize = Number.isFinite(player.maxAmmo) ? player.maxAmmo : CONFIG.WEAPONS.magazineSize;
+    if((player.ammo ?? 0) >= clipSize) return false;
+    if((player.reserve ?? 0) <= 0) return false;
+    return true;
+  }
+
+  function beginReload(reason = 'manual'){
+    if(!canBeginReload()) return false;
+    const duration = getReloadDuration();
+    player.isReloading = true;
+    player.reloadTimer = duration;
+    player.reloadReason = reason;
+    if(typeof player.onReloadStart === 'function'){
+      try{ player.onReloadStart(duration, reason); }catch(err){ console.warn('[patch-001] player.onReloadStart failed', err); }
+    }
+    if(typeof functions.onReloadStart === 'function'){
+      try{ functions.onReloadStart(duration, reason); }catch(err){ console.warn('[patch-001] functions.onReloadStart failed', err); }
+    }
+    return true;
+  }
+
+  function autoReloadIfEmpty(reason = 'empty-mag'){
+    if((player.ammo ?? 0) > 0) return false;
+    return beginReload(reason);
+  }
+
   function attemptFire(now){
-    if(!player.alive || player.isReloading || player.ammo <= 0 || playerState.storeOpen) return false;
+    if(!player.alive || playerState.storeOpen) return false;
+    if(player.isReloading){
+      return false;
+    }
+    if(player.ammo <= 0){
+      autoReloadIfEmpty('empty-trigger');
+      return false;
+    }
     if(playerState.semiAuto && !playerState.semiAutoReady) return false;
     if(now < fireState.nextFireTime) return false;
 
@@ -2316,6 +2424,7 @@ export function applyPatch(ctx){
     if(playerState.semiAuto){
       playerState.semiAutoReady = false;
     }
+    autoReloadIfEmpty('empty-mag');
     return true;
   }
 
@@ -2363,12 +2472,13 @@ export function applyPatch(ctx){
 
     if(functions.crosshairBloom) functions.crosshairBloom();
 
-    player.ammo -= 1;
+    player.ammo = Math.max(0, (player.ammo || 0) - 1);
     updateAmmoDisplay();
 
     weaponState.spreadCurrent = Math.min(stanceMax, weaponState.spreadCurrent + (ads ? 0.08 : 0.18) * (playerState.semiAuto ? CONFIG.WEAPONS.semiAutoSpreadFactor : 1));
 
     if(functions.noteGunshotNoise) functions.noteGunshotNoise();
+    broadcastGunshot(muzzlePos, 1);
 
     releaseVec3(muzzlePos);
     releaseVec3(tracerEnd);
@@ -2411,6 +2521,7 @@ export function applyPatch(ctx){
         }, 120);
       }
     }
+    broadcastGunshot(point, 0.85);
     return true;
   }
 
@@ -2478,7 +2589,7 @@ export function applyPatch(ctx){
           if(distance <= maxDistance){
             endPoint.copy(hit.point);
             if(enemyMeshes.includes(hit.object)){
-              const enemy = enemies.find(en => en.mesh === hit.object);
+              const enemy = hit.object?.userData?.enemy || enemies.find(en => en.mesh === hit.object);
               if(enemy){
                 const localY = hit.point.y - enemy.mesh.position.y;
                 let dmg = computeBaseDamage(localY) * CONFIG.WEAPONS.ricochetDamageScale;
@@ -2508,7 +2619,7 @@ export function applyPatch(ctx){
         const nh = nextHits[0];
         endPoint.copy(nh.point);
         if(enemyMeshes.includes(nh.object)){
-          const enemy = enemies.find(en => en.mesh === nh.object);
+          const enemy = nh.object?.userData?.enemy || enemies.find(en => en.mesh === nh.object);
           if(enemy){
             const localY = nh.point.y - enemy.mesh.position.y;
             let dmg = computeBaseDamage(localY) * CONFIG.WEAPONS.penetrationDamageScale;
@@ -2525,6 +2636,38 @@ export function applyPatch(ctx){
     } else {
       spawnImpact(first.point, normal);
       if(first.face){ releaseVec3(normal); }
+    }
+  }
+
+  function broadcastGunshot(source, severity = 1){
+    if(!source) return;
+    const now = performance.now();
+    const baseRadius = CONFIG.AI.gunshotAlertRadius || 36;
+    const maxRadius = baseRadius * THREE.MathUtils.lerp(1.1, 1.6, THREE.MathUtils.clamp(severity, 0, 2));
+    for(let i = 0; i < enemies.length; i++){
+      const enemy = enemies[i];
+      const mesh = enemy?.mesh;
+      if(!mesh) continue;
+      const distance = mesh.position.distanceTo(source);
+      if(!Number.isFinite(distance) || distance > maxRadius) continue;
+      const brain = enemy.brain || (enemy.brain = createEnemyBrain(enemy.spawnZone, enemy.profile || DEFAULT_ENEMY_PROFILE));
+      const proximity = THREE.MathUtils.clamp(1 - distance / maxRadius, 0, 1);
+      const boost = THREE.MathUtils.lerp(0.28, CONFIG.AI.gunshotMaxBoost ?? 0.8, proximity) * severity;
+      brain.awareness = Math.min(1, Math.max(brain.awareness, boost));
+      brain.alertUntil = Math.max(brain.alertUntil || 0, now + 500 + proximity * 900);
+      brain.lastKnownPlayerPos.copy(source);
+      brain.lastKnownPlayerPos.y = desiredEnemyCenterY(enemy);
+      brain.searchUntil = Math.max(brain.searchUntil || 0, now + 750 + proximity * 650);
+      brain.hasCoverTarget = false;
+      const reactionClamp = Math.max(0.02, brain.reactionDelay * THREE.MathUtils.lerp(0.35, 0.6, proximity));
+      brain.reactionTimer = Math.min(brain.reactionTimer, reactionClamp);
+      const cooldownClamp = Math.max(0.01, (CONFIG.AI.reengageDelay || 0.18) * THREE.MathUtils.lerp(0.45, 0.8, proximity));
+      enemy.fireCooldown = Math.min(enemy.fireCooldown ?? cooldownClamp, cooldownClamp);
+      enemy.burstShotsLeft = Math.max(enemy.burstShotsLeft || 0, 1);
+      if(brain.state === 'patrol'){
+        brain.state = 'flank';
+        brain.repositionUntil = Math.max(brain.repositionUntil || 0, now + 400 + proximity * 700);
+      }
     }
   }
 
@@ -3252,11 +3395,14 @@ export function applyPatch(ctx){
           }
           brain.hasCoverTarget = false;
           tempVecF.set(0, 0, 0);
+          if(!hasLine && toPlayerDir.lengthSq() > 1e-6){
+            tempVecF.addScaledVector(toPlayerDir, enemy.chaseSpeed * THREE.MathUtils.lerp(0.7, 1.05, profile.aggression));
+          }
           const rangeBuffer = THREE.MathUtils.lerp(0.3, 0.12, profile.accuracy);
           if(distance > engageRange * (1 + rangeBuffer)){
             tempVecF.addScaledVector(toPlayerDir, enemy.chaseSpeed * THREE.MathUtils.lerp(0.65, 1.05, profile.aggression));
-          } else if(distance < engageRange * Math.max(0.45, 1 - rangeBuffer * 1.2)){
-            tempVecF.addScaledVector(toPlayerDir, -enemy.chaseSpeed * THREE.MathUtils.lerp(0.45, 0.82, retreatAggression));
+          } else if(distance < engageRange * Math.max(0.35, 1 - rangeBuffer * 1.4)){
+            tempVecF.addScaledVector(toPlayerDir, -enemy.chaseSpeed * THREE.MathUtils.lerp(0.32, 0.68, retreatAggression));
           }
           if(toPlayerDir.lengthSq() > 1e-6){
             tempVecC.set(toPlayerDir.z, 0, -toPlayerDir.x);
@@ -3315,13 +3461,17 @@ export function applyPatch(ctx){
         }
         default: {
           if(!brain.hasCoverTarget){
-            const cover = pickCoverPoint(mesh.position, toPlayerDir.lengthSq() > 1e-6 ? toPlayerDir : tempVecC.set(0, 0, 1));
-            if(cover){
-              brain.coverTarget.copy(cover);
-            } else if((brain.searchUntil || 0) > now){
-              brain.coverTarget.copy(brain.investigationTarget);
-            } else {
+            if(alertActive && !hasLine && brain.lastKnownPlayerPos){
               brain.coverTarget.copy(brain.lastKnownPlayerPos);
+            } else {
+              const cover = pickCoverPoint(mesh.position, toPlayerDir.lengthSq() > 1e-6 ? toPlayerDir : tempVecC.set(0, 0, 1));
+              if(cover){
+                brain.coverTarget.copy(cover);
+              } else if((brain.searchUntil || 0) > now){
+                brain.coverTarget.copy(brain.investigationTarget);
+              } else {
+                brain.coverTarget.copy(brain.lastKnownPlayerPos);
+              }
             }
             brain.coverTarget.y = desiredEnemyCenterY(enemy);
             brain.hasCoverTarget = true;
@@ -4449,6 +4599,7 @@ export function applyPatch(ctx){
   functions.updatePlayer = patchedUpdatePlayer;
   functions.hitscanShoot = patchedHitscanShoot;
   functions.enemyHitscanShoot = patchedEnemyHitscanShoot;
+  functions.reloadWeapon = beginReload;
   functions.spawnEnemy = patchedSpawnEnemy;
   functions.updateEnemies = patchedUpdateEnemies;
   functions.moveTowards = moveTowards;
