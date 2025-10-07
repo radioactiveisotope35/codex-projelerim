@@ -2690,7 +2690,10 @@ export function applyPatch(ctx){
     const enemyHealth = baseHealth * healthScalar;
     const chaseMultiplier = THREE.MathUtils.lerp(0.85, 1.25, profile.aggression);
     const patrolMultiplier = THREE.MathUtils.lerp(0.72, 1.08, profile.resilience * 0.5 + profile.accuracy * 0.3);
-    const initialCooldown = Math.max(initialFireDelay, profile.restCadence[0] * 0.85);
+    const restFloor = Array.isArray(profile.restCadence) && profile.restCadence.length
+      ? Math.max(0.05, profile.restCadence[0])
+      : 0.18;
+    const initialCooldown = Math.max(0.05, Math.min(initialFireDelay, restFloor * 0.75));
 
     const rigBuild = buildEnemyRig(profile);
     const enemyMesh = rigBuild?.group;
@@ -3027,6 +3030,19 @@ export function applyPatch(ctx){
         brain.investigationTarget.copy(playerPos);
       }
 
+      if(hasLine){
+        if(brain.state !== 'attack'){
+          brain.state = 'attack';
+          brain.hasCoverTarget = false;
+        }
+        const immediateWindow = Math.max(0.02, Math.min(engageClamp, brain.reactionDelay * 0.6));
+        enemy.fireCooldown = Math.min(enemy.fireCooldown, immediateWindow);
+        brain.reactionTimer = Math.min(brain.reactionTimer, immediateWindow);
+      } else if(alertActive && brain.state === 'patrol'){
+        brain.state = 'flank';
+        brain.repositionUntil = Math.max(brain.repositionUntil, now + 600);
+      }
+
       switch(brain.state){
         case 'patrol': {
           const zone = enemy.spawnZone;
@@ -3206,11 +3222,23 @@ export function applyPatch(ctx){
   function patchedEnemyHitscanShoot(enemy, delta = 0, context = {}){
     const muzzle = borrowVec3().copy(enemy.mesh.position);
     const forward = borrowVec3();
-    enemy.mesh.getWorldDirection(forward);
+    if(context.toPlayerDir && context.toPlayerDir.lengthSq() > 1e-6){
+      forward.copy(context.toPlayerDir).setY(0);
+    } else if(typeof enemy.mesh.getWorldDirection === 'function'){
+      enemy.mesh.getWorldDirection(forward);
+    } else {
+      forward.set(0, 0, -1);
+    }
     if(forward.lengthSq() < 1e-6){
       forward.set(0, 0, -1);
     }
     forward.normalize();
+    forward.y = 0;
+    if(forward.lengthSq() < 1e-6){
+      forward.set(0, 0, -1);
+    } else {
+      forward.normalize();
+    }
     const right = borrowVec3().set(forward.z, 0, -forward.x);
     if(right.lengthSq() > 1e-6){
       right.normalize();
