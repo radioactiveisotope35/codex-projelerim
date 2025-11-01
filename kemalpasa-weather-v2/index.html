@@ -3,62 +3,121 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kemalpaşa Hava — Ensemble + Radar</title>
+  <title>Kemalpaşa Birleşik Hava ve Radar</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous">
 </head>
 <body>
-  <header>
-    <h1>Kemalpaşa, İzmir — Üyeliksiz Ensemble + Radar</h1>
-    <p class="meta">Open‑Meteo (ECMWF, ICON, GFS) + MET Norway. Radar: RainViewer. Veriler tarayıcıda birleştirilir.</p>
+  <header class="topbar">
+    <div class="brand" tabindex="0">
+      <h1>Kemalpaşa Birleşik Radar</h1>
+      <p>Open-Meteo (ECMWF, ICON, GFS) + MET Norway · Radar: RainViewer</p>
+    </div>
+    <div class="topbar-status" aria-live="polite">
+      <div id="providerBadges" class="badge-list" aria-label="Veri sağlayıcı durumu"></div>
+      <div id="notifyArea" class="notify" role="status" aria-live="assertive"></div>
+    </div>
   </header>
 
-  <section class="controls">
-    <label>Enlem <input id="lat" type="number" step="0.0001" value="38.426"></label>
-    <label>Boylam <input id="lon" type="number" step="0.0001" value="27.417"></label>
-    <button id="reload">Yenile</button>
-    <span id="status"></span>
-  </section>
+  <main>
+    <section class="controls" aria-label="Konum ayarları">
+      <label for="latInput">Enlem
+        <input id="latInput" name="lat" type="number" step="0.0001" autocomplete="off" aria-describedby="coordHint">
+      </label>
+      <label for="lonInput">Boylam
+        <input id="lonInput" name="lon" type="number" step="0.0001" autocomplete="off" aria-describedby="coordHint">
+      </label>
+      <button id="recalcBtn" class="ghost is-hidden" aria-label="Yeni koordinasyon ile tahmini yeniden hesapla">Yeniden Hesapla</button>
+      <span id="coordHint" class="hint">Haritaya tıklayarak koordinat seçebilirsiniz.</span>
+    </section>
 
-  <section id="summary" class="cards"></section>
+    <section class="summary" aria-live="polite">
+      <div class="summary-card" id="summaryCard">
+        <div>
+          <strong>Konum:</strong> <span id="summaryCoords">—</span>
+        </div>
+        <div>
+          <strong>Güven:</strong>
+          <span id="confidenceBadge" class="confidence-badge" data-tooltip="" aria-describedby="confidenceDetail">—</span>
+          <span id="confidenceDetail" class="sr-only">Model yayılımları hakkında bilgi balonu.</span>
+        </div>
+        <div>
+          <strong>Son Güncelleme:</strong> <span id="summaryUpdated">—</span>
+        </div>
+      </div>
+    </section>
 
-  <section class="grid">
-    <div class="box">
-      <h2>Radar</h2>
-      <div id="map"></div>
-    </div>
-    <div class="box">
-      <h2>Önümüzdeki 24 Saat (Saatlik)</h2>
-      <div id="hourly"></div>
-    </div>
-  </section>
+    <section class="grid">
+      <article class="panel" aria-label="Radar ve kontroller">
+        <header class="panel-head">
+          <h2>Radar</h2>
+          <div class="radar-meta" id="radarFrameLabel">Çerçeve 0 / 10</div>
+        </header>
+        <div id="map" tabindex="0" aria-label="Yağış radar haritası"></div>
+        <div class="radar-controls" role="group" aria-label="Radar zaman çizelgesi">
+          <button id="radarBack" type="button" aria-label="Önceki radar karesi">‹</button>
+          <button id="radarPlay" type="button" aria-label="Oynat">▶</button>
+          <button id="radarForward" type="button" aria-label="Sonraki radar karesi">›</button>
+          <label for="radarSpeed">Hız
+            <select id="radarSpeed" aria-label="Radar oynatma hızı">
+              <option value="0.5">0,5×</option>
+              <option value="1" selected>1×</option>
+              <option value="2">2×</option>
+            </select>
+          </label>
+          <label for="radarOpacity">Opaklık
+            <input id="radarOpacity" type="range" min="30" max="100" value="70" step="5" aria-valuemin="30" aria-valuemax="100" aria-valuenow="70">
+          </label>
+        </div>
+      </article>
 
-  <section class="grid">
-    <div class="box">
-      <h2>Sıcaklık (24s)</h2>
-      <canvas id="tempChart" height="160"></canvas>
-    </div>
-    <div class="box">
-      <h2>Yağış (24s)</h2>
-      <canvas id="precChart" height="160"></canvas>
-    </div>
-    <div class="box">
-      <h2>Rüzgar (24s)</h2>
-      <canvas id="windChart" height="160"></canvas>
-    </div>
-  </section>
+      <article class="panel" aria-label="Saatlik özet tablosu">
+        <header class="panel-head">
+          <h2>Önümüzdeki 24 Saat</h2>
+        </header>
+        <div class="table-wrapper">
+          <table id="hourlyTable" class="hourly" aria-describedby="confidenceDetail">
+            <thead>
+              <tr>
+                <th scope="col">Saat</th>
+                <th scope="col">Sıcaklık (°C)</th>
+                <th scope="col">Yağış (mm)</th>
+                <th scope="col">Rüzgar (km/sa)</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </article>
+    </section>
 
-  <section>
-    <h2>7 Günlük Özet</h2>
-    <div id="daily" class="cards"></div>
-  </section>
+    <section class="chart-grid" aria-label="Grafikler">
+      <article class="panel">
+        <header class="panel-head"><h2>Sıcaklık (24 Saat)</h2></header>
+        <canvas id="tempChart" height="160" aria-label="Sıcaklık grafiği"></canvas>
+      </article>
+      <article class="panel">
+        <header class="panel-head"><h2>Yağış (24 Saat)</h2></header>
+        <canvas id="precChart" height="160" aria-label="Yağış grafiği"></canvas>
+      </article>
+      <article class="panel">
+        <header class="panel-head"><h2>Rüzgar (24 Saat)</h2></header>
+        <canvas id="windChart" height="160" aria-label="Rüzgar grafiği"></canvas>
+      </article>
+    </section>
+
+    <section class="daily" aria-label="7 günlük özet">
+      <h2>7 Günlük Özet</h2>
+      <div id="dailyCards" class="cards"></div>
+    </section>
+  </main>
 
   <footer>
-    <small>MET Norway bazı durumlarda özel User‑Agent ister; tarayıcı erişimi keserse uygulama sadece Open‑Meteo ile çalışmaya devam eder.</small>
+    <small>MET Norway erişimi reddederse uygulama yalnızca Open-Meteo verileri ile çalışmayı sürdürür. Tüm metinler Türkçedir; servisler üyelik gerektirmez.</small>
   </footer>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-  <script src="app.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" integrity="sha384-9TfUjiKu0kSXGw4V/mQJu1WDVYj1WFJsbgx5caX5/C/PObbIVdQydb9h9NP7VDaR" crossorigin="anonymous"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>
