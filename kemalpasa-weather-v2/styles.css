@@ -1,0 +1,28 @@
+*{box-sizing:border-box;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+body{margin:0;background:#0b0d10;color:#e6e6e6}
+header{padding:18px 16px;background:#11151a;border-bottom:1px solid #1f2329}
+h1{margin:0 0 6px 0;font-size:20px}
+.meta{opacity:.7;margin:0}
+section{padding:16px}
+.controls{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.controls label{background:#141920;padding:8px;border-radius:8px}
+.controls input{width:110px;background:transparent;border:0;color:#e6e6e6;outline:none}
+.controls button{padding:8px 12px;border:0;border-radius:8px;background:#2a6ae0;color:#fff;cursor:pointer}
+#status{margin-left:6px;opacity:.8}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+.card{background:#131821;border:1px solid #202634;border-radius:10px;padding:12px}
+.card.wide{grid-column:1/-1}
+.day{opacity:.8;margin-bottom:6px}
+.big{font-size:18px;margin:6px 0 8px 0}
+.conf{padding:2px 6px;border-radius:999px;font-size:12px;margin-left:6px;border:1px solid}
+.conf.yüksek{color:#37d39b;border-color:#37d39b}
+.conf.orta{color:#f0c74b;border-color:#f0c74b}
+.conf.düşük{color:#ff6b6b;border-color:#ff6b6b}
+table.hourly{width:100%;border-collapse:collapse}
+table.hourly th, table.hourly td{padding:8px;border-bottom:1px solid #222832;text-align:left}
+table.hourly tr:hover{background:#10151c}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:1000px){.grid{grid-template-columns:1fr}}
+.box{background:#0f141c;border:1px solid #202634;border-radius:10px;padding:12px}
+#map{height:320px;border-radius:8px;overflow:hidden}
+footer{padding:16px;opacity:.7}
