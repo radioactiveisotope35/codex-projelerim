@@ -1,43 +1,97 @@
-/**
- * map.js
- * Responsible for loading map JSON files and preparing build spots and paths.
- * How to extend: add new map modifiers or dynamic events in the loader.
- */
+import { pointInRect } from './utils.js';
 
-import { loadPathSamples } from './pathfinding.js';
-
-export class GameMap {
-  constructor(data) {
-    this.name = data.name;
-    this.tileSize = data.tileSize;
-    this.width = data.width;
-    this.height = data.height;
-    this.paths = data.paths.map((path, index) => loadPathSamples(path, data.tileSize, index));
-    this.buildable = data.buildable.map(([x, y]) => ({ x, y }));
-    this.startCoins = data.startCoins;
-    this.startLives = data.startLives;
-    this.waveset = data.waveset;
+export async function loadMap(name = 'meadow') {
+  const url = `./maps/${name}.json`;
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) {
+    throw new Error(`Failed to load map data from ${url} (${res.status})`);
   }
-
-  findClosestExit(pos) {
-    let best = null;
-    let bestDist = Infinity;
-    for (const path of this.paths) {
-      const last = path.samples[path.samples.length - 1];
-      const dx = last.x - pos.x;
-      const dy = last.y - pos.y;
-      const dist = dx * dx + dy * dy;
-      if (dist < bestDist) {
-        bestDist = dist;
-        best = last;
-      }
-    }
-    return best;
-  }
+  return res.json();
 }
 
-export async function loadMap(name) {
-  const response = await fetch(`./maps/${name}.json`);
-  const data = await response.json();
-  return new GameMap(data);
+export function pathToWorld(points, tileSize) {
+  return points.map(([tx, ty]) => ({
+    x: (tx + 0.5) * tileSize,
+    y: (ty + 0.5) * tileSize,
+  }));
+}
+
+function buildLane(path, tileSize) {
+  const points = pathToWorld(path, tileSize);
+  const segments = [];
+  let total = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    const from = points[i];
+    const to = points[i + 1];
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const len = Math.hypot(dx, dy) || 0.0001;
+    segments.push({
+      from,
+      to,
+      len,
+      dx: dx / len,
+      dy: dy / len,
+      start: total,
+    });
+    total += len;
+  }
+  const lane = {
+    points,
+    segments,
+    length: total,
+  };
+  return lane;
+}
+
+export function bakeLanes(map) {
+  const tileSize = map.tileSize;
+  const lanes = (map.paths || []).map((path, idx) => {
+    const lane = buildLane(path, tileSize);
+    lane.index = idx;
+    return lane;
+  });
+  return {
+    tileSize,
+    width: map.width * tileSize,
+    height: map.height * tileSize,
+    lanes,
+  };
+}
+
+export function buildPads(map) {
+  const tileSize = map.tileSize;
+  const size = tileSize * 0.75;
+  const offset = (tileSize - size) / 2;
+  return (map.buildable || []).map(([tx, ty]) => {
+    const pad = {
+      x: tx * tileSize + offset,
+      y: ty * tileSize + offset,
+      w: size,
+      h: size,
+      tx,
+      ty,
+      centerX: tx * tileSize + tileSize / 2,
+      centerY: ty * tileSize + tileSize / 2,
+      occupied: false,
+      hover: false,
+    };
+    return pad;
+  });
+}
+
+export function startStateFromMap(map) {
+  return {
+    coins: map.startCoins ?? 0,
+    lives: map.startLives ?? 20,
+  };
+}
+
+export function padAt(pads, x, y) {
+  for (const pad of pads) {
+    if (!pad.occupied && pointInRect(x, y, pad)) {
+      return pad;
+    }
+  }
+  return null;
 }
