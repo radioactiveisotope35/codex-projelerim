@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>KingShot TD</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <meta name="theme-color" content="#7DBF85" />
+  <style>
+    :root {
+      --bg-green: #7DBF85;
+      --bg-green-dark: #6FAE76;
+      --path-sand: #E9D8B4;
+      --wood: #8C5A3C;
+      --wood-dark: #6B442B;
+      --ui-gold: #FFC83D;
+      --panel-bg: rgba(22, 33, 24, 0.82);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: var(--bg-green);
+      color: #fff;
+      font-family: 'Segoe UI', Tahoma, sans-serif;
+      overscroll-behavior: none;
+      touch-action: none;
+    }
+    body.pwa-installable::after {
+      content: "Add KingShot TD to your home screen for the best experience";
+      position: fixed;
+      bottom: 1.5rem;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--panel-bg);
+      padding: 0.75rem 1.5rem;
+      border-radius: 1.5rem;
+      border: 1px solid rgba(255,255,255,0.2);
+      font-size: 0.9rem;
+      pointer-events: none;
+      animation: nudge 2.8s ease-in-out infinite;
+    }
+    @keyframes nudge {
+      0%, 100% { transform: translate(-50%, 0); opacity: 0; }
+      20%, 70% { transform: translate(-50%, -8px); opacity: 1; }
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: linear-gradient(180deg, #87ce9b 0%, #5f8f64 100%);
+    }
+    #ui-layer {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: env(safe-area-inset-top, 0.5rem) 0.5rem env(safe-area-inset-bottom, 0.5rem);
+      z-index: 10;
+    }
+    .hud-top {
+      pointer-events: auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--panel-bg);
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 1rem;
+      padding: 0.5rem 0.8rem;
+      gap: 0.6rem;
+    }
+    .hud-top span {
+      display: inline-flex;
+      align-items: center;
+      font-weight: 600;
+      font-size: 0.85rem;
+      gap: 0.35rem;
+      white-space: nowrap;
+    }
+    .hud-top button,
+    .hud-bottom button,
+    .panel button,
+    .panel select {
+      pointer-events: auto;
+      background: var(--wood);
+      border: none;
+      color: #fff;
+      padding: 0.4rem 0.7rem;
+      border-radius: 0.8rem;
+      font-weight: 600;
+      font-size: 0.85rem;
+      box-shadow: inset 0 2px 0 rgba(255,255,255,0.1);
+    }
+    .hud-top button:active,
+    .hud-bottom button:active,
+    .panel button:active {
+      transform: translateY(1px);
+    }
+    .hud-bottom {
+      pointer-events: auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+      gap: 0.5rem;
+      background: var(--panel-bg);
+      padding: 0.6rem;
+      border-radius: 1rem;
+      border: 1px solid rgba(255,255,255,0.2);
+      backdrop-filter: blur(6px);
+    }
+    .tower-card {
+      background: rgba(140,90,60,0.6);
+      border-radius: 0.9rem;
+      padding: 0.5rem;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.3rem;
+      transition: transform 0.15s ease;
+      position: relative;
+    }
+    .tower-card.disabled {
+      opacity: 0.5;
+    }
+    .tower-card:hover {
+      transform: translateY(-3px);
+    }
+    .tower-card .price {
+      font-size: 0.8rem;
+      color: var(--ui-gold);
+      font-weight: 600;
+    }
+    .panel {
+      pointer-events: auto;
+      align-self: flex-end;
+      max-width: 280px;
+      background: var(--panel-bg);
+      border-radius: 1rem;
+      border: 1px solid rgba(255,255,255,0.18);
+      padding: 0.7rem;
+      margin-left: auto;
+      display: none;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+    .panel.active {
+      display: flex;
+    }
+    .toast-layer {
+      position: fixed;
+      bottom: calc(env(safe-area-inset-bottom, 0.5rem) + 6rem);
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      pointer-events: none;
+      z-index: 11;
+    }
+    .toast {
+      background: rgba(0,0,0,0.75);
+      color: #fff;
+      padding: 0.5rem 0.9rem;
+      border-radius: 0.9rem;
+      font-size: 0.8rem;
+      animation: toast-pop 2.6s ease-in-out forwards;
+    }
+    @keyframes toast-pop {
+      0% { opacity: 0; transform: translateY(20px); }
+      10%, 70% { opacity: 1; transform: translateY(0); }
+      100% { opacity: 0; transform: translateY(-15px); }
+    }
+    #joystick {
+      position: fixed;
+      bottom: calc(env(safe-area-inset-bottom, 0.5rem) + 1rem);
+      left: 1rem;
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.1);
+      border: 2px solid rgba(255,255,255,0.3);
+      pointer-events: none;
+      display: none;
+      z-index: 9;
+    }
+    #joystick::after {
+      content: "";
+      position: absolute;
+      width: 48px;
+      height: 48px;
+      background: rgba(255,255,255,0.4);
+      border-radius: 50%;
+      top: 50%;
+      left: 50%;
+      transform: translate(calc(-50% + var(--inner-x, 0px)), calc(-50% + var(--inner-y, 0px)));
+      transition: transform 0.05s linear;
+    }
+    .rotate-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 1.2rem;
+      padding: 2rem;
+      text-align: center;
+      z-index: 20;
+    }
+    @media (orientation: landscape) and (max-height: 700px) {
+      .rotate-overlay { display: flex; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="ui-layer">
+    <div class="hud-top" id="hud-top">
+      <span id="hud-coins">💰 0</span>
+      <span id="hud-lives">❤️ 0</span>
+      <span id="hud-wave">Wave 0/0</span>
+      <div style="display:flex; gap:0.4rem;">
+        <button id="btn-send">Send</button>
+        <button id="btn-speed">x1</button>
+        <button id="btn-pause">⏸</button>
+      </div>
+    </div>
+    <div class="hud-bottom" id="shop"></div>
+    <div class="panel" id="tower-panel"></div>
+  </div>
+  <div class="toast-layer" id="toasts"></div>
+  <div id="joystick"></div>
+  <div class="rotate-overlay">Please rotate your device to portrait to continue playing KingShot TD.</div>
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
