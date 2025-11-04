@@ -1,5 +1,5 @@
-export function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
+export function clamp(v, min, max) {
+  return Math.min(max, Math.max(min, v));
 }
 
 export function lerp(a, b, t) {
@@ -7,40 +7,38 @@ export function lerp(a, b, t) {
 }
 
 export function dist(ax, ay, bx, by) {
-  return Math.hypot(bx - ax, by - ay);
+  const dx = ax - bx;
+  const dy = ay - by;
+  return Math.hypot(dx, dy);
 }
 
 export function dist2(ax, ay, bx, by) {
-  const dx = bx - ax;
-  const dy = by - ay;
+  const dx = ax - bx;
+  const dy = ay - by;
   return dx * dx + dy * dy;
 }
 
 export function nowSeconds() {
-  return performance.now() / 1000;
+  return performance.now() * 0.001;
 }
 
 export function seededRng(seed) {
   let s = seed >>> 0;
   return {
     next() {
-      s = (s * 1664525 + 1013904223) >>> 0;
-      return s / 0x100000000;
-    }
+      s = (s + 0x6d2b79f5) | 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    },
   };
 }
 
-export function pointToPolylineDistance(px, py, polyline) {
-  if (!polyline || polyline.length === 0) {
-    return Infinity;
-  }
-  if (polyline.length === 1) {
-    return dist(px, py, polyline[0].x, polyline[0].y);
-  }
+export function pointToPolylineDistance(px, py, poly) {
   let best = Infinity;
-  for (let i = 0; i < polyline.length - 1; i++) {
-    const a = polyline[i];
-    const b = polyline[i + 1];
+  for (let i = 0; i < poly.length - 1; i++) {
+    const a = poly[i];
+    const b = poly[i + 1];
     const dx = b.x - a.x;
     const dy = b.y - a.y;
     const len2 = dx * dx + dy * dy;
@@ -49,128 +47,80 @@ export function pointToPolylineDistance(px, py, polyline) {
       t = ((px - a.x) * dx + (py - a.y) * dy) / len2;
       t = clamp(t, 0, 1);
     }
-    const sx = a.x + dx * t;
-    const sy = a.y + dy * t;
-    const d = dist(px, py, sx, sy);
-    if (d < best) best = d;
+    const ex = lerp(a.x, b.x, t);
+    const ey = lerp(a.y, b.y, t);
+    const d2 = dist2(px, py, ex, ey);
+    if (d2 < best) best = d2;
   }
-  return best;
+  return Math.sqrt(best);
 }
 
-function ensureSegments(lane, points) {
-  let segments = lane.segments;
-  if (segments) return segments;
-  segments = [];
-  let total = 0;
-  for (let i = 0; i < points.length - 1; i++) {
-    const a = points[i];
-    const b = points[i + 1];
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const len = Math.hypot(dx, dy);
-    segments.push({
-      ax: a.x,
-      ay: a.y,
-      bx: b.x,
-      by: b.y,
-      dx: len > 0 ? dx / len : 0,
-      dy: len > 0 ? dy / len : 0,
-      length: len,
-      start: total
-    });
-    total += len;
-  }
-  lane.segments = segments;
-  lane.length = lane.length ?? total;
-  return segments;
-}
-
-export function projectAlongPolyline(lane, distance) {
-  const source = lane && lane.points ? lane : { points: lane };
-  const points = source.points || [];
-  if (points.length === 0) {
-    return { x: 0, y: 0, done: true, segmentIndex: 0 };
-  }
-  if (points.length === 1) {
-    return { x: points[0].x, y: points[0].y, done: distance >= 0, segmentIndex: 0 };
-  }
-  const segments = ensureSegments(source, points);
-  const total = source.length ?? segments.reduce((acc, seg) => acc + seg.length, 0);
-
-  if (distance <= 0) {
-    const seg = segments[0];
-    if (!seg || seg.length === 0) {
-      return { x: points[0].x, y: points[0].y, done: false, segmentIndex: 0 };
+export function projectAlongPolyline(poly, tPixels) {
+  let remaining = tPixels;
+  for (let i = 0; i < poly.length - 1; i++) {
+    const a = poly[i];
+    const b = poly[i + 1];
+    const segLen = dist(a.x, a.y, b.x, b.y);
+    if (remaining <= segLen) {
+      const ratio = segLen > 0 ? remaining / segLen : 0;
+      return { x: lerp(a.x, b.x, ratio), y: lerp(a.y, b.y, ratio), done: false };
     }
-    const ratio = distance / seg.length;
-    return {
-      x: seg.ax + (seg.bx - seg.ax) * ratio,
-      y: seg.ay + (seg.by - seg.ay) * ratio,
-      done: false,
-      segmentIndex: 0
-    };
+    remaining -= segLen;
+  }
+  const last = poly[poly.length - 1];
+  return { x: last.x, y: last.y, done: true };
+}
+
+export function extendPolylineBy(poly, headOut, tailOut) {
+  if (poly.length < 2) return poly.slice();
+  const first = poly[0];
+  const second = poly[1];
+  const last = poly[poly.length - 1];
+  const prev = poly[poly.length - 2];
+
+  const fx = first.x - second.x;
+  const fy = first.y - second.y;
+  const fl = Math.hypot(fx, fy) || 1;
+  const lx = last.x - prev.x;
+  const ly = last.y - prev.y;
+  const ll = Math.hypot(lx, ly) || 1;
+
+  const head = { x: first.x + (fx / fl) * headOut, y: first.y + (fy / fl) * headOut };
+  const tail = { x: last.x + (lx / ll) * tailOut, y: last.y + (ly / ll) * tailOut };
+
+  return [head, ...poly, tail];
+}
+
+export function on(target, event, fn, opts) {
+  target.addEventListener(event, fn, opts);
+}
+
+export function off(target, event, fn, opts) {
+  target.removeEventListener(event, fn, opts);
+}
+
+export class SpawnQueue {
+  constructor() {
+    this.list = [];
   }
 
-  let remaining = distance;
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    if (remaining <= seg.length) {
-      const ratio = seg.length > 0 ? remaining / seg.length : 0;
-      return {
-        x: seg.ax + (seg.bx - seg.ax) * ratio,
-        y: seg.ay + (seg.by - seg.ay) * ratio,
-        done: false,
-        segmentIndex: i
-      };
+  add(entry) {
+    let i = 0;
+    while (i < this.list.length && this.list[i].at <= entry.at) i++;
+    this.list.splice(i, 0, entry);
+  }
+
+  flush(now, cb) {
+    while (this.list.length && this.list[0].at <= now) {
+      cb(this.list.shift());
     }
-    remaining -= seg.length;
   }
 
-  const last = points[points.length - 1];
-  return { x: last.x, y: last.y, done: true, segmentIndex: segments.length - 1 };
-}
-
-export function extendPolylineBy(points, headOut, tailOut) {
-  if (!points || points.length < 2) {
-    return points ? points.map(p => ({ x: p.x, y: p.y })) : [];
+  isEmpty() {
+    return this.list.length === 0;
   }
-  const original = points.map(p => ({ x: p.x, y: p.y }));
-  const first = original[0];
-  const second = original[1];
-  const dx0 = second.x - first.x;
-  const dy0 = second.y - first.y;
-  const len0 = Math.hypot(dx0, dy0);
-  if (len0 === 0) {
-    return original.slice();
+
+  clear() {
+    this.list.length = 0;
   }
-  const head = {
-    x: first.x - (dx0 / len0) * headOut,
-    y: first.y - (dy0 / len0) * headOut
-  };
-  const last = original[original.length - 1];
-  const prev = original[original.length - 2];
-  const dxn = last.x - prev.x;
-  const dyn = last.y - prev.y;
-  const lenn = Math.hypot(dxn, dyn);
-  if (lenn === 0) {
-    return [head, ...original];
-  }
-  const tail = {
-    x: last.x + (dxn / lenn) * tailOut,
-    y: last.y + (dyn / lenn) * tailOut
-  };
-  return [head, ...original, tail];
-}
-
-export function circleCircleOverlap(ax, ay, ar, bx, by, br) {
-  const r = ar + br;
-  return dist2(ax, ay, bx, by) <= r * r;
-}
-
-export function on(element, event, handler, options) {
-  element.addEventListener(event, handler, options);
-}
-
-export function off(element, event, handler, options) {
-  element.removeEventListener(event, handler, options);
 }

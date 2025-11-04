@@ -1,76 +1,35 @@
-/**
- * economy.js
- * Tracks player resources (coins, lives) and handles payouts and penalties.
- * How to extend: add additional currencies or mission modifiers here.
- */
+import { BALANCE } from './balance.js';
 
-import { BAL } from './balance.js';
+const DIFF_PARAM = new URLSearchParams(globalThis.location?.search || '');
+const DIFF_NAME = ['normal', 'hard', 'impop'].includes(DIFF_PARAM.get('diff'))
+  ? DIFF_PARAM.get('diff')
+  : 'normal';
 
-export class Economy {
-  constructor(upgrades) {
-    this.coins = 0;
-    this.lives = 0;
-    this.wave = 0;
-    this.totalWaves = 0;
-    this.upgrades = upgrades;
-    this.listeners = new Set();
-  }
+export function getDifficulty() {
+  return BALANCE.economy.difficulty[DIFF_NAME] || BALANCE.economy.difficulty.normal;
+}
 
-  setup(startCoins, startLives, totalWaves) {
-    const bonusCoins = startCoins * this.upgrades.getCoinBonus();
-    this.coins = Math.floor(startCoins + bonusCoins);
-    this.lives = startLives + this.upgrades.getLifeBonus();
-    this.totalWaves = totalWaves;
-    this.wave = 0;
-    this.notify();
-  }
+export function priceOf(type) {
+  return BALANCE.towers[type]?.price ?? Infinity;
+}
 
-  onChange(cb) {
-    this.listeners.add(cb);
-  }
+export function upgradePrice(type, path, tier) {
+  const costs = BALANCE.upgrades.costs[type];
+  if (!costs) return Infinity;
+  const arr = costs[path];
+  if (!arr) return Infinity;
+  return arr[tier - 1] ?? Infinity;
+}
 
-  notify() {
-    for (const cb of this.listeners) cb(this);
-  }
+export function popReward(enemyType, diff) {
+  const base = BALANCE.enemies[enemyType]?.reward ?? 0;
+  return Math.floor((base + BALANCE.economy.cashPerPopBase) * (diff?.cashMul ?? 1));
+}
 
-  canAfford(cost) {
-    return this.coins >= cost;
-  }
+export function roundBonus(wave, diff) {
+  return Math.floor(BALANCE.economy.roundBonus(wave) * (diff?.roundBonusMul ?? 1));
+}
 
-  spend(cost) {
-    this.coins -= cost;
-    this.notify();
-  }
-
-  earn(amount) {
-    const bonus = amount * this.upgrades.getCoinBonus();
-    this.coins += Math.floor(amount + bonus);
-    this.notify();
-  }
-
-  loseLife(amount = 1) {
-    this.lives -= amount;
-    this.notify();
-    return this.lives <= 0;
-  }
-
-  sellTower(tower) {
-    const base = BAL.econ.sellRefund + this.upgrades.getSellBonus();
-    const value = tower.baseStats.cost;
-    const refund = Math.floor(value * base);
-    this.coins += refund;
-    this.notify();
-    return refund;
-  }
-
-  beginWave() {
-    this.wave += 1;
-    this.notify();
-  }
-
-  earlySendBonus(base) {
-    const bonus = Math.floor(base * BAL.econ.earlySendBonus);
-    this.coins += bonus;
-    this.notify();
-  }
+export function sellRefund(totalSpent) {
+  return Math.floor(totalSpent * BALANCE.economy.sellRefund);
 }

@@ -1,162 +1,335 @@
-import { clamp } from './utils.js';
+import { BALANCE } from './balance.js';
+import { dist2, projectAlongPolyline } from './utils.js';
+import { popReward, sellRefund } from './economy.js';
+import { isActive } from './abilities.js';
 
-export const CONFIG = {
-  towerBaseRadius: 18,
-  pathClearFactor: 0.45,
-  slowDuration: 1.5,
-  minDamage: 1,
-  bulletLifetime: 4
-};
+let ENEMY_ID = 1;
+let BULLET_ID = 1;
+let TOWER_ID = 1;
 
-export const ENEMIES = {
-  Grunt: { baseHp: 40, speed: 52, armor: 0.1, reward: 8 },
-  Runner: { baseHp: 24, speed: 78, armor: 0.05, reward: 7 },
-  Tank: { baseHp: 160, speed: 32, armor: 0.4, reward: 18 },
-  Shielded: { baseHp: 110, speed: 38, armor: 0.55, reward: 16 },
-  Specter: { baseHp: 90, speed: 65, armor: 0.2, reward: 20 }
-};
+const TARGET_PRIORITIES = ['first', 'last', 'strong', 'close'];
 
-export const TOWERS = {
-  Archer: {
-    price: 45,
-    range: 160,
-    fireRate: 1.8,
-    damage: 16,
-    splashRadius: 0,
-    slowPct: 0,
-    damageType: 'physical',
-    bulletSpeed: 360
-  },
-  Cannon: {
-    price: 70,
-    range: 150,
-    fireRate: 0.9,
-    damage: 46,
-    splashRadius: 70,
-    slowPct: 0,
-    damageType: 'physical',
-    bulletSpeed: 280
-  },
-  Mage: {
-    price: 80,
-    range: 175,
-    fireRate: 1.1,
-    damage: 34,
-    splashRadius: 0,
-    slowPct: 0,
-    damageType: 'magic',
-    bulletSpeed: 340
-  },
-  Frost: {
-    price: 60,
-    range: 150,
-    fireRate: 1.2,
-    damage: 12,
-    splashRadius: 0,
-    slowPct: 0.4,
-    damageType: 'magic',
-    bulletSpeed: 300
-  }
-};
+export const ENEMY_DEFS = BALANCE.enemies;
+export const TOWER_DEFS = BALANCE.towers;
 
-let nextEnemyId = 1;
-let nextTowerId = 1;
-let nextBulletId = 1;
-
-export function createEnemy(type, laneIndex, lane, hpMul = 1, distanceOffset = 0) {
-  const def = ENEMIES[type] || ENEMIES.Grunt;
-  const hp = def.baseHp * hpMul;
-  const firstPoint = lane?.points?.[0] || { x: 0, y: 0 };
-  return {
-    id: nextEnemyId++,
+export function createEnemy(type, laneIndex, startPoint, opts = {}) {
+  const base = ENEMY_DEFS[type];
+  if (!base) throw new Error(`Unknown enemy ${type}`);
+  const enemy = {
+    id: ENEMY_ID++,
     type,
     lane: laneIndex,
-    hp,
-    maxHp: hp,
-    reward: def.reward || 1,
-    baseSpeed: def.speed || 40,
-    armor: clamp(def.armor ?? 0, 0, 0.95),
+    t: opts.startOffset ?? 0,
+    x: startPoint.x,
+    y: startPoint.y,
+    baseSpeed: base.speed,
+    speed: base.speed,
+    armor: base.armor,
+    hp: base.hp,
+    maxHp: base.hp,
+    reward: base.reward,
     alive: true,
-    escaped: false,
-    dead: false,
-    distance: distanceOffset,
+    traits: {},
     slowUntil: 0,
     slowMul: 1,
-    pathLength: lane?.length ?? 0,
-    x: firstPoint.x,
-    y: firstPoint.y
+    freezeUntil: 0,
+    lastHitAt: 0,
+    regrowDelay: 0,
+    regrowRate: 0,
   };
+
+  const traits = opts.traits || [];
+  const hpMul = (opts.hpMul ?? 1) * (opts.wave ? BALANCE.waves.hpMul(opts.wave) : 1) * (opts.diff?.hpMul ?? 1);
+  enemy.hp = enemy.maxHp = base.hp * hpMul;
+  if (traits.includes('fortified')) {
+    enemy.traits.fortified = true;
+    enemy.maxHp *= BALANCE.enemies.traits.fortified.hpMul;
+    enemy.hp = enemy.maxHp;
+    enemy.armor += BALANCE.enemies.traits.fortified.armorBonus;
+  }
+  if (traits.includes('lead')) {
+    enemy.traits.lead = true;
+  }
+  if (traits.includes('camo')) {
+    enemy.traits.camo = true;
+  }
+  if (traits.includes('regrow')) {
+    enemy.traits.regrow = true;
+    enemy.regrowDelay = BALANCE.enemies.traits.regrow.delay;
+    enemy.regrowRate = BALANCE.enemies.traits.regrow.rate;
+  }
+
+  enemy.hp = enemy.maxHp;
+  return enemy;
 }
 
 export function createTower(type, x, y) {
-  const def = TOWERS[type];
-  if (!def) {
-    throw new Error(`Unknown tower type: ${type}`);
-  }
-  return {
-    id: nextTowerId++,
+  const base = TOWER_DEFS[type];
+  if (!base) throw new Error(`Unknown tower ${type}`);
+  const tower = {
+    id: TOWER_ID++,
     type,
     x,
     y,
-    range: def.range,
+    baseRadius: BALANCE.global.baseRadius,
+    range: base.range,
+    fireRate: base.fireRate,
+    damage: base.damage,
+    damageType: base.damageType,
+    bulletSpeed: base.bulletSpeed,
+    pierce: base.pierce,
+    splashRadius: base.splashRadius,
+    slowPct: base.slowPct,
+    slowDuration: 1.5,
+    camoDetection: base.camoDetection,
+    shatterLead: false,
     cooldown: 0,
+    priority: 'first',
     selected: false,
-    def
+    tiers: { A: 0, B: 0 },
+    totalSpent: base.price,
+    sellValue: sellRefund(base.price),
+    stats: { damage: 0, shots: 0 },
   };
-}
-
-export function createBullet(tower, targetId) {
-  return {
-    id: nextBulletId++,
-    type: tower.type,
-    x: tower.x,
-    y: tower.y,
-    targetId,
-    speed: tower.def.bulletSpeed,
-    damage: tower.def.damage,
-    damageType: tower.def.damageType,
-    splashRadius: tower.def.splashRadius,
-    slowPct: tower.def.slowPct,
-    life: 0
-  };
-}
-
-export function applyDamage(enemy, damage, damageType) {
-  if (!enemy.alive) {
-    return { killed: false, dealt: 0 };
+  if (type === 'Hero') {
+    tower.hero = true;
+    tower.heroLevel = 1;
+    tower.heroXP = 0;
+    tower.heroNextXP = BALANCE.hero.levelXp(1);
   }
-  let actual = damage;
-  if (damageType === 'physical') {
-    actual *= 1 - clamp(enemy.armor, 0, 0.95);
-  }
-  actual = Math.max(CONFIG.minDamage, actual);
-  enemy.hp = Math.max(0, enemy.hp - actual);
-  if (enemy.hp === 0) {
-    enemy.alive = false;
-    enemy.dead = true;
-    return { killed: true, dealt: actual };
-  }
-  return { killed: false, dealt: actual };
+  return tower;
 }
 
-export function applySlow(enemy, slowPct, now) {
-  if (!enemy.alive || slowPct <= 0) return;
-  const mul = 1 - clamp(slowPct, 0, 0.95);
-  enemy.slowMul = Math.min(enemy.slowMul, mul);
-  enemy.slowUntil = Math.max(enemy.slowUntil, now + CONFIG.slowDuration);
-}
-
-export function resetEnemySlow(enemy, now) {
-  if (enemy.slowMul < 1 && enemy.slowUntil <= now) {
+function enemyEffectiveSpeed(enemy, now) {
+  let speed = enemy.baseSpeed;
+  if (now < enemy.freezeUntil) return 0;
+  if (enemy.slowUntil < now) {
     enemy.slowMul = 1;
   }
+  speed *= enemy.slowMul;
+  return speed;
 }
 
-export function resetIds() {
-  nextEnemyId = 1;
-  nextTowerId = 1;
-  nextBulletId = 1;
+function towerCanSee(enemy, tower, state) {
+  if (!enemy.traits?.camo) return true;
+  if (tower.camoDetection) return true;
+  if (tower.type === 'Mage' && isActive('arcaneSurge', state)) return true;
+  if (tower.hero && tower.heroLevel >= 15) return true;
+  return false;
 }
 
-export const BASE_RADIUS = CONFIG.towerBaseRadius;
-export const PATH_CLEAR_FACTOR = CONFIG.pathClearFactor;
+function prioritizeTarget(tower, enemies) {
+  let best = null;
+  for (const enemy of enemies) {
+    if (!enemy.alive) continue;
+    const d2 = dist2(tower.x, tower.y, enemy.x, enemy.y);
+    if (d2 > tower.range * tower.range) continue;
+    if (!towerCanSee(enemy, tower, tower._state)) continue;
+    if (best === null) {
+      best = { enemy, d2 };
+      continue;
+    }
+    switch (tower.priority) {
+      case 'first':
+        if (enemy.t > best.enemy.t) best = { enemy, d2 };
+        break;
+      case 'last':
+        if (enemy.t < best.enemy.t) best = { enemy, d2 };
+        break;
+      case 'strong':
+        if (enemy.hp > best.enemy.hp) best = { enemy, d2 };
+        break;
+      case 'close':
+        if (d2 < best.d2) best = { enemy, d2 };
+        break;
+      default:
+        if (enemy.t > best.enemy.t) best = { enemy, d2 };
+    }
+  }
+  return best?.enemy || null;
+}
+
+function buildBullet(tower, enemy, lane, now) {
+  const lead = BALANCE.global.bulletLead;
+  const future = projectAlongPolyline(lane, enemy.t + enemy.baseSpeed * lead);
+  const dx = future.x - tower.x;
+  const dy = future.y - tower.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const bullet = {
+    id: BULLET_ID++,
+    x: tower.x,
+    y: tower.y,
+    vx: (dx / len) * tower.bulletSpeed,
+    vy: (dy / len) * tower.bulletSpeed,
+    damage: tower.damage,
+    damageType: tower.damageType,
+    pierce: tower.pierce,
+    splashRadius: tower.splashRadius,
+    slowPct: tower.slowPct,
+    slowDuration: tower.slowDuration,
+    shatterLead: tower.shatterLead || false,
+    ttl: 4,
+    from: tower,
+  };
+  if (tower.type === 'Mage' && isActive('arcaneSurge', tower._state)) {
+    bullet.damage *= 2;
+    bullet.shatterLead = true;
+  }
+  const hero = tower._state.heroTower;
+  const aura = tower._state.heroAura;
+  if (hero && aura && tower.id !== hero.id) {
+    const ddx = tower.x - hero.x;
+    const ddy = tower.y - hero.y;
+    if (ddx * ddx + ddy * ddy <= aura.range * aura.range) {
+      bullet.damage *= aura.dmgMul;
+    }
+  }
+  return bullet;
+}
+
+export function updateTowers(state, dt, now) {
+  const lanes = state.lanes;
+  for (const tower of state.towers) {
+    tower._state = state;
+    tower.cooldown = Math.max(0, tower.cooldown - dt);
+    if (tower.cooldown > 0) continue;
+    const lane = lanes[0];
+    const target = prioritizeTarget(tower, state.enemies);
+    if (!target) continue;
+    const lanePath = lanes[target.lane] || lane;
+    const bullet = buildBullet(tower, target, lanePath, now);
+    tower.cooldown += tower.fireRate;
+    tower.stats.shots++;
+    state.bullets.push(bullet);
+  }
+}
+
+function canDamage(enemy, damageType, shatterLead) {
+  if (!enemy.traits?.lead) return true;
+  if (damageType === 'physical' && !shatterLead) return false;
+  return true;
+}
+
+export function applyDamage(enemy, rawDamage, damageType, { now, slowPct, slowDuration, shatterLead }) {
+  if (!enemy.alive) return 0;
+  if (!canDamage(enemy, damageType, shatterLead)) return 0;
+  let dmg = rawDamage;
+  if (damageType === 'physical') {
+    dmg *= 1 - enemy.armor;
+  }
+  dmg = Math.max(1, dmg);
+  enemy.hp -= dmg;
+  enemy.lastHitAt = now;
+  if (slowPct && slowPct > 0) {
+    const mult = 1 - slowPct;
+    enemy.slowMul = Math.min(enemy.slowMul, mult);
+    enemy.slowUntil = Math.max(enemy.slowUntil, now + (slowDuration || 1.5));
+  }
+  if (enemy.hp <= 0) {
+    enemy.alive = false;
+  }
+  return dmg;
+}
+
+export function updateBullets(state, dt, now, diff) {
+  for (let i = state.bullets.length - 1; i >= 0; i--) {
+    const bullet = state.bullets[i];
+    bullet.x += bullet.vx * dt;
+    bullet.y += bullet.vy * dt;
+    bullet.ttl -= dt;
+    if (bullet.ttl <= 0) {
+      state.bullets.splice(i, 1);
+      continue;
+    }
+    let pierceLeft = bullet.pierce;
+    const splash = bullet.splashRadius;
+    let hit = false;
+    for (const enemy of state.enemies) {
+      if (!enemy.alive) continue;
+      const d2 = dist2(bullet.x, bullet.y, enemy.x, enemy.y);
+      if (d2 > 144) continue;
+      const dealt = applyDamage(enemy, bullet.damage, bullet.damageType, {
+        now,
+        slowPct: bullet.slowPct,
+        slowDuration: bullet.slowDuration,
+        shatterLead: bullet.shatterLead,
+      });
+      if (dealt > 0) {
+        pierceLeft -= 1;
+        bullet.from.stats.damage += dealt;
+        state.stats.damage = (state.stats.damage || 0) + dealt;
+        if (enemy.hp <= 0) {
+          const reward = popReward(enemy.type, diff);
+          state.coins += reward;
+          state.stats.pops += 1;
+          enemy.alive = false;
+          if (state.onEnemyKilled) state.onEnemyKilled(enemy, reward);
+        }
+        if (splash > 0) {
+          const radius2 = splash * splash;
+          for (const other of state.enemies) {
+            if (!other.alive || other === enemy) continue;
+            const ds = dist2(enemy.x, enemy.y, other.x, other.y);
+            if (ds <= radius2) {
+              const dealtSplash = applyDamage(other, bullet.damage * 0.7, bullet.damageType, {
+                now,
+                slowPct: bullet.slowPct * 0.5,
+                slowDuration: bullet.slowDuration,
+                shatterLead: bullet.shatterLead,
+              });
+              if (dealtSplash > 0) {
+                bullet.from.stats.damage += dealtSplash;
+                state.stats.damage = (state.stats.damage || 0) + dealtSplash;
+                if (other.hp <= 0) {
+                  const reward = popReward(other.type, diff);
+                  state.coins += reward;
+                  state.stats.pops += 1;
+                  other.alive = false;
+                  if (state.onEnemyKilled) state.onEnemyKilled(other, reward);
+                }
+              }
+            }
+          }
+        }
+        hit = true;
+      }
+      if (pierceLeft <= 0) break;
+    }
+    if (hit || pierceLeft <= 0) {
+      state.bullets.splice(i, 1);
+    }
+  }
+}
+
+export function advanceEnemies(state, dt, now, diff) {
+  for (let i = state.enemies.length - 1; i >= 0; i--) {
+    const enemy = state.enemies[i];
+    if (!enemy.alive) {
+      state.enemies.splice(i, 1);
+      continue;
+    }
+    const lane = state.lanes[enemy.lane] || state.lanes[0];
+    const speed = enemyEffectiveSpeed(enemy, now);
+    enemy.t += speed * dt;
+    const pos = projectAlongPolyline(lane, enemy.t);
+    enemy.x = pos.x;
+    enemy.y = pos.y;
+    if (enemy.traits?.regrow && enemy.hp < enemy.maxHp) {
+      if (now - enemy.lastHitAt > enemy.regrowDelay) {
+        enemy.hp = Math.min(enemy.maxHp, enemy.hp + enemy.maxHp * enemy.regrowRate * dt);
+      }
+    }
+    if (pos.done) {
+      state.lives -= 1;
+      enemy.alive = false;
+      state.enemies.splice(i, 1);
+      if (state.onEnemyEscaped) state.onEnemyEscaped(enemy);
+    }
+  }
+}
+
+export function cyclePriority(tower) {
+  const idx = TARGET_PRIORITIES.indexOf(tower.priority);
+  tower.priority = TARGET_PRIORITIES[(idx + 1) % TARGET_PRIORITIES.length];
+  return tower.priority;
+}

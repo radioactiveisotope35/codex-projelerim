@@ -1,189 +1,180 @@
-import { CONFIG } from './entities.js';
-
 const COLORS = {
   groundTop: '#7DBF85',
-  groundBottom: '#4F8C59',
-  pathFill: '#E9D8B4',
-  pathStroke: '#C6B18D',
-  towerBase: '#8C5A3C',
-  towerAccent: '#FFC83D',
-  enemies: {
-    Grunt: '#5A4E7A',
-    Runner: '#1D8E79',
-    Tank: '#6B442B',
-    Shielded: '#3E4C7C',
-    Specter: '#884BA5'
+  groundBottom: '#4E8C58',
+  path: '#E9D8B4',
+  pathStroke: '#C9B695',
+  towerBase: '#6B442B',
+  towerFill: {
+    Archer: '#3B6FB6',
+    Cannon: '#B6733B',
+    Mage: '#8E4FBF',
+    Frost: '#58C7D8',
+    Hero: '#E0C13B',
   },
-  bullets: '#F2F5FF'
+  enemy: {
+    Grunt: '#6A3D2C',
+    Runner: '#1E8E54',
+    Shielded: '#555A6D',
+    Tank: '#3B3C47',
+    Specter: '#8A8ABF',
+  },
 };
 
-export function drawGround(ctx, width, height) {
-  const grad = ctx.createLinearGradient(0, 0, 0, height);
+const HUD = {
+  coins: document.getElementById('hud-coins'),
+  lives: document.getElementById('hud-lives'),
+  wave: document.getElementById('hud-wave'),
+};
+
+function circle(ctx, x, y, r) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+}
+
+export function drawGround(ctx, w, h) {
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
   grad.addColorStop(0, COLORS.groundTop);
   grad.addColorStop(1, COLORS.groundBottom);
   ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, width, height);
+  ctx.fillRect(0, 0, w, h);
 }
 
 export function drawPath(ctx, lanes, tileSize, worldW, worldH) {
-  if (!lanes || lanes.length === 0) return;
-  const pathWidth = tileSize * 0.55;
+  if (!lanes || !lanes.length) return;
   ctx.save();
   ctx.beginPath();
   ctx.rect(0, 0, worldW, worldH);
   ctx.clip();
-
-  ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
-  ctx.lineWidth = pathWidth;
-  ctx.strokeStyle = COLORS.pathFill;
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = 0.55 * tileSize;
+  ctx.strokeStyle = COLORS.path;
+  ctx.shadowColor = 'rgba(0,0,0,0.15)';
+  ctx.shadowBlur = 12;
   for (const lane of lanes) {
-    const pts = lane.points;
-    if (!pts || pts.length < 2) continue;
     ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) {
-      ctx.lineTo(pts[i].x, pts[i].y);
-    }
+    ctx.moveTo(lane[0].x, lane[0].y);
+    for (let i = 1; i < lane.length; i++) ctx.lineTo(lane[i].x, lane[i].y);
     ctx.stroke();
   }
-
-  ctx.lineWidth = Math.max(2, pathWidth * 0.18);
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = Math.max(6, 0.55 * tileSize - 6);
   ctx.strokeStyle = COLORS.pathStroke;
   for (const lane of lanes) {
-    const pts = lane.points;
-    if (!pts || pts.length < 2) continue;
     ctx.beginPath();
-    ctx.moveTo(pts[0].x, pts[0].y);
-    for (let i = 1; i < pts.length; i++) {
-      ctx.lineTo(pts[i].x, pts[i].y);
-    }
+    ctx.moveTo(lane[0].x, lane[0].y);
+    for (let i = 1; i < lane.length; i++) ctx.lineTo(lane[i].x, lane[i].y);
     ctx.stroke();
   }
-
-  ctx.restore();
-}
-
-function drawTowerBody(ctx, tower) {
-  const baseRadius = CONFIG.towerBaseRadius;
-  ctx.save();
-  ctx.translate(tower.x, tower.y);
-  ctx.fillStyle = COLORS.towerBase;
-  ctx.strokeStyle = '#3d2617';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(0, 0, baseRadius, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.stroke();
-
-  ctx.fillStyle = COLORS.towerAccent;
-  ctx.beginPath();
-  ctx.arc(0, -baseRadius * 0.35, baseRadius * 0.45, 0, Math.PI * 2);
-  ctx.fill();
   ctx.restore();
 }
 
 export function drawTowers(ctx, towers) {
   for (const tower of towers) {
+    const baseR = tower.baseRadius ?? 18;
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    circle(ctx, tower.x + 4, tower.y + 6, baseR * 0.6);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.fillStyle = COLORS.towerBase;
+    circle(ctx, tower.x, tower.y, baseR);
+    ctx.fill();
+    ctx.fillStyle = COLORS.towerFill[tower.type] || '#ffffff';
+    circle(ctx, tower.x, tower.y - baseR * 0.2, baseR * 0.7);
+    ctx.fill();
+
     if (tower.selected) {
       ctx.save();
-      ctx.globalAlpha = 0.18;
-      ctx.fillStyle = '#2f9e44';
-      ctx.beginPath();
-      ctx.arc(tower.x, tower.y, tower.range, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([10, 8]);
+      circle(ctx, tower.x, tower.y, tower.range);
+      ctx.stroke();
       ctx.restore();
     }
-    drawTowerBody(ctx, tower);
+  }
+}
+
+function drawEnemyTraits(ctx, enemy, bodyRadius) {
+  if (enemy.traits?.camo) {
     ctx.save();
-    ctx.translate(tower.x, tower.y - CONFIG.towerBaseRadius * 0.2);
-    ctx.fillStyle = '#fff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.font = '600 16px sans-serif';
-    ctx.fillText(tower.type.charAt(0), 0, 0);
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.setLineDash([6, 4]);
+    ctx.lineWidth = 2;
+    circle(ctx, enemy.x, enemy.y, bodyRadius + 4);
+    ctx.stroke();
+    ctx.restore();
+  }
+  if (enemy.traits?.fortified) {
+    ctx.save();
+    ctx.strokeStyle = '#FFD34A';
+    ctx.lineWidth = 3;
+    circle(ctx, enemy.x, enemy.y, bodyRadius + 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+  if (enemy.traits?.lead) {
+    ctx.save();
+    ctx.strokeStyle = '#2E2E2E';
+    ctx.lineWidth = 4;
+    circle(ctx, enemy.x, enemy.y, bodyRadius + 1);
+    ctx.stroke();
     ctx.restore();
   }
 }
 
 export function drawEnemies(ctx, enemies, worldW, worldH) {
-  const margin = 32;
   for (const enemy of enemies) {
-    if (!enemy.alive) continue;
-    if (
-      enemy.x < -margin ||
-      enemy.y < -margin ||
-      enemy.x > worldW + margin ||
-      enemy.y > worldH + margin
-    ) {
+    if (enemy.x < -32 || enemy.y < -32 || enemy.x > worldW + 32 || enemy.y > worldH + 32) {
       continue;
     }
-    const color = COLORS.enemies[enemy.type] || '#444';
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(enemy.x, enemy.y, 14, 0, Math.PI * 2);
+    const bodyRadius = 14;
+    ctx.fillStyle = COLORS.enemy[enemy.type] || '#b33';
+    circle(ctx, enemy.x, enemy.y, bodyRadius);
     ctx.fill();
-
-    const hpRatio = enemy.maxHp > 0 ? enemy.hp / enemy.maxHp : 0;
-    const barWidth = 28;
-    const barHeight = 4;
-    ctx.fillStyle = '#1f1f1f';
-    ctx.fillRect(enemy.x - barWidth / 2, enemy.y - 22, barWidth, barHeight);
-    ctx.fillStyle = '#7ae582';
-    ctx.fillRect(enemy.x - barWidth / 2, enemy.y - 22, barWidth * hpRatio, barHeight);
+    drawEnemyTraits(ctx, enemy, bodyRadius);
+    const hpPct = Math.max(0, enemy.hp) / enemy.maxHp;
+    ctx.fillStyle = '#222';
+    ctx.fillRect(enemy.x - 16, enemy.y - bodyRadius - 10, 32, 4);
+    ctx.fillStyle = hpPct > 0.5 ? '#4CAF50' : hpPct > 0.25 ? '#FFC107' : '#E53935';
+    ctx.fillRect(enemy.x - 16, enemy.y - bodyRadius - 10, 32 * hpPct, 4);
   }
 }
 
 export function drawBullets(ctx, bullets) {
-  ctx.fillStyle = COLORS.bullets;
-  for (const bullet of bullets) {
-    ctx.beginPath();
-    ctx.arc(bullet.x, bullet.y, 5, 0, Math.PI * 2);
+  ctx.fillStyle = '#FFF3';
+  for (const b of bullets) {
+    circle(ctx, b.x, b.y, 4);
     ctx.fill();
   }
 }
 
 export function drawPlacementGhost(ctx, ghost) {
-  if (!ghost || !ghost.type) return;
+  if (!ghost?.type) return;
+  const color = ghost.valid ? 'rgba(120,255,140,0.6)' : 'rgba(255,120,120,0.6)';
+  const stroke = ghost.valid ? 'rgba(120,255,140,0.8)' : 'rgba(255,120,120,0.8)';
   ctx.save();
-  ctx.globalAlpha = 0.35;
-  ctx.fillStyle = ghost.valid ? '#2f9e44' : '#c92a2a';
-  ctx.beginPath();
-  ctx.arc(ghost.x, ghost.y, CONFIG.towerBaseRadius, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  circle(ctx, ghost.x, ghost.y, ghost.baseRadius);
   ctx.fill();
-  ctx.restore();
-
-  ctx.save();
-  ctx.strokeStyle = ghost.valid ? '#2f9e44' : '#c92a2a';
-  ctx.setLineDash([10, 6]);
+  ctx.strokeStyle = stroke;
+  ctx.setLineDash([8, 6]);
   ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(ghost.x, ghost.y, ghost.range || 10, 0, Math.PI * 2);
+  circle(ctx, ghost.x, ghost.y, ghost.range);
   ctx.stroke();
   ctx.restore();
 }
 
 export function render(state, ctx) {
-  const { view } = state;
-  const width = ctx.canvas.width / (view.dpr || 1);
-  const height = ctx.canvas.height / (view.dpr || 1);
-
-  ctx.save();
-  ctx.setTransform(view.dpr || 1, 0, 0, view.dpr || 1, 0, 0);
-  drawGround(ctx, width, height);
-
-  ctx.save();
-  ctx.translate(view.offsetX, view.offsetY);
-  ctx.scale(view.scale, view.scale);
-
+  drawGround(ctx, state.worldW, state.worldH);
   drawPath(ctx, state.lanes, state.tileSize, state.worldW, state.worldH);
   drawTowers(ctx, state.towers);
   drawEnemies(ctx, state.enemies, state.worldW, state.worldH);
   drawBullets(ctx, state.bullets);
-  if (state.placing && state.ghost.type) {
-    drawPlacementGhost(ctx, state.ghost);
-  }
-
-  ctx.restore();
-  ctx.restore();
+  drawPlacementGhost(ctx, state.ghost);
+  if (HUD.coins) HUD.coins.textContent = state.coins.toString();
+  if (HUD.lives) HUD.lives.textContent = Math.max(0, state.lives).toString();
+  if (HUD.wave) HUD.wave.textContent = `Wave ${state.waveIndex}`;
 }

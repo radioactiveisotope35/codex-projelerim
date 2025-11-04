@@ -1,724 +1,639 @@
-import {
-  clamp,
-  dist2,
-  nowSeconds,
-  pointToPolylineDistance,
-  circleCircleOverlap,
-  projectAlongPolyline,
-  on
-} from './utils.js';
+import { BALANCE } from './balance.js';
 import { loadMap, bakeLanes, startStateFromMap } from './map.js';
 import { render } from './renderer.js';
 import {
-  CONFIG,
-  TOWERS,
   createTower,
   createEnemy,
-  createBullet,
+  advanceEnemies,
+  updateTowers,
+  updateBullets,
+  cyclePriority,
   applyDamage,
-  applySlow,
-  resetEnemySlow,
-  BASE_RADIUS,
-  PATH_CLEAR_FACTOR,
-  resetIds
 } from './entities.js';
+import { priceOf, getDifficulty, roundBonus, popReward } from './economy.js';
 import { wavesByName } from './waves.js';
+import * as upgrades from './upgrades.js';
+import * as abilities from './abilities.js';
+import {
+  nowSeconds,
+  pointToPolylineDistance,
+  dist2,
+  SpawnQueue,
+  clamp,
+} from './utils.js';
+
+const params = new URLSearchParams(globalThis.location?.search || '');
+const mapName = params.get('map') || 'meadow';
+const sandbox = params.get('sandbox') === '1';
+const diff = getDifficulty();
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-if (canvas) {
-  canvas.style.touchAction = 'none';
-}
-
-const hudCoins = document.getElementById('hud-coins');
-const hudLives = document.getElementById('hud-lives');
-const hudWave = document.getElementById('hud-wave');
 const btnSend = document.getElementById('btn-send');
 const btnSpeed = document.getElementById('btn-speed');
 const btnPause = document.getElementById('btn-pause');
 const shopEl = document.getElementById('shop');
-const towerPanel = document.getElementById('tower-panel');
-const toastsEl = document.getElementById('toasts');
+const panelEl = document.getElementById('tower-panel');
+const toastEl = document.getElementById('toasts');
 
-const state = {
-  ready: false,
-  map: null,
-  lanes: [],
-  tileSize: 64,
-  worldW: 0,
-  worldH: 0,
-  coins: 0,
-  lives: 0,
-  waveIndex: 0,
-  maxWave: 0,
-  speed: 1,
-  paused: false,
-  gameOver: false,
-  victoryShown: false,
-  selectedTowerType: 'Archer',
-  selectedTowerId: null,
-  placing: false,
-  ghost: { x: 0, y: 0, type: null, valid: false, range: 0, reason: '' },
-  towers: [],
-  enemies: [],
-  bullets: [],
-  spawnQueue: [],
-  spawning: false,
-  WAVES: {},
-  pointer: { x: 0, y: 0 },
-  view: { width: 0, height: 0, dpr: window.devicePixelRatio || 1, scale: 1, offsetX: 0, offsetY: 0 },
-  offscreen: true
-};
+let debugOverlay = null;
 
-const shopCards = new Map();
-const TOWER_ORDER = ['Archer', 'Cannon', 'Mage', 'Frost'];
+function makeDebugOverlay() {
+  const div = document.createElement('div');
+  div.style.position = 'absolute';
+  div.style.top = '12px';
+  div.style.right = '12px';
+  div.style.maxWidth = '320px';
+  div.style.background = 'rgba(0,0,0,0.6)';
+  div.style.color = '#fff';
+  div.style.padding = '8px 12px';
+  div.style.fontSize = '12px';
+  div.style.lineHeight = '1.4';
+  div.style.pointerEvents = 'none';
+  document.body.appendChild(div);
+  return div;
+}
 
-function showToast(message, duration = 2200) {
-  if (!toastsEl) return;
-  const toast = document.createElement('div');
-  toast.textContent = message;
-  toast.style.padding = '8px 12px';
-  toast.style.marginTop = '6px';
-  toast.style.background = 'rgba(0,0,0,0.75)';
-  toast.style.color = '#fff';
-  toast.style.borderRadius = '6px';
-  toast.style.fontSize = '14px';
-  toast.style.opacity = '0';
-  toast.style.transition = 'opacity 0.25s ease';
-  toastsEl.appendChild(toast);
-  requestAnimationFrame(() => {
-    toast.style.opacity = '1';
-  });
+function toast(message, duration = 2000) {
+  if (!toastEl) return;
+  const entry = document.createElement('div');
+  entry.textContent = message;
+  entry.style.padding = '6px 10px';
+  entry.style.marginTop = '6px';
+  entry.style.background = 'rgba(0,0,0,0.65)';
+  entry.style.color = '#fff';
+  entry.style.borderRadius = '6px';
+  toastEl.appendChild(entry);
   setTimeout(() => {
-    toast.style.opacity = '0';
-    setTimeout(() => toast.remove(), 250);
+    entry.remove();
   }, duration);
 }
 
-function setupShop() {
-  if (!shopEl) return;
-  shopEl.innerHTML = '';
-  shopCards.clear();
-  for (const type of TOWER_ORDER) {
-    const def = TOWERS[type];
-    const card = document.createElement('button');
-    card.type = 'button';
-    card.dataset.type = type;
-    card.style.display = 'inline-flex';
-    card.style.flexDirection = 'column';
-    card.style.alignItems = 'center';
-    card.style.justifyContent = 'center';
-    card.style.padding = '8px 10px';
-    card.style.margin = '4px';
-    card.style.borderRadius = '8px';
-    card.style.border = '2px solid rgba(0,0,0,0.2)';
-    card.style.background = 'rgba(255,255,255,0.12)';
-    card.style.color = '#fff';
-    card.style.fontSize = '14px';
-    card.style.cursor = 'pointer';
-    card.innerHTML = `<strong>${type}</strong><small>${def.price}c</small>`;
-    card.addEventListener('click', () => {
-      state.selectedTowerType = type;
-      if (state.coins < def.price) {
-        showToast('Not enough coins for placement.');
-      }
-      enterPlacement(type);
-    });
-    shopEl.appendChild(card);
-    shopCards.set(type, card);
-  }
-  updateShopUI();
-}
-
-function updateShopUI() {
-  for (const [type, card] of shopCards.entries()) {
-    const def = TOWERS[type];
-    const affordable = state.coins >= def.price;
-    const selected = (state.placing && state.ghost.type === type) || (!state.placing && state.selectedTowerType === type);
-    card.style.opacity = affordable ? '1' : '0.55';
-    card.style.borderColor = selected ? '#FFC83D' : 'rgba(0,0,0,0.25)';
-    card.style.boxShadow = selected ? '0 0 8px rgba(255,200,61,0.35)' : 'none';
-  }
-}
-
-function updateTowerPanel() {
-  if (!towerPanel) return;
-  const tower = state.towers.find(t => t.id === state.selectedTowerId);
-  if (!tower) {
-    towerPanel.innerHTML = '<p style="margin:8px 0;color:#ddd;">Select a tower to inspect.</p>';
-    return;
-  }
-  const def = tower.def;
-  const slowLine = def.slowPct > 0 ? `<p>Slow: ${(def.slowPct * 100).toFixed(0)}%</p>` : '';
-  towerPanel.innerHTML = `
-    <h3 style="margin:0;color:#FFC83D;">${tower.type}</h3>
-    <p>Range: ${def.range.toFixed(0)}</p>
-    <p>Damage: ${def.damage.toFixed(0)} (${def.damageType})</p>
-    <p>Rate: ${def.fireRate.toFixed(2)}/s</p>
-    ${slowLine}
-  `;
-}
-
-function resizeCanvas() {
+function resizeCanvas(state) {
   if (!canvas) return;
-  const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
-  canvas.width = rect.width * dpr;
-  canvas.height = rect.height * dpr;
-  state.view.width = rect.width;
-  state.view.height = rect.height;
-  state.view.dpr = dpr;
-  if (state.worldW > 0 && state.worldH > 0) {
-    const scale = Math.min(rect.width / state.worldW, rect.height / state.worldH);
-    state.view.scale = scale;
-    state.view.offsetX = (rect.width - state.worldW * scale) * 0.5;
-    state.view.offsetY = (rect.height - state.worldH * scale) * 0.5;
-  } else {
-    state.view.scale = 1;
-    state.view.offsetX = 0;
-    state.view.offsetY = 0;
+  const rect = canvas.getBoundingClientRect();
+  const width = rect.width * dpr;
+  const height = rect.height * dpr;
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  if (state && state.worldW && state.worldH) {
+    state.viewScale = Math.min(width / state.worldW, height / state.worldH);
+    const scaledW = state.worldW * state.viewScale;
+    const scaledH = state.worldH * state.viewScale;
+    const extraX = Math.max(0, width - scaledW) / state.viewScale;
+    const extraY = Math.max(0, height - scaledH) / state.viewScale;
+    state.viewOffsetX = extraX * 0.5;
+    state.viewOffsetY = extraY * 0.5;
   }
 }
 
-function clientToWorld(evt) {
-  if (!canvas || !state.ready) return null;
+function clientToWorld(state, event) {
   const rect = canvas.getBoundingClientRect();
-  const x = evt.clientX - rect.left;
-  const y = evt.clientY - rect.top;
-  if (state.view.scale === 0) return null;
-  const worldX = (x - state.view.offsetX) / state.view.scale;
-  const worldY = (y - state.view.offsetY) / state.view.scale;
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  const deviceX = (event.clientX - rect.left) * scaleX;
+  const deviceY = (event.clientY - rect.top) * scaleY;
+  const scale = state.viewScale || 1;
+  const offsetX = state.viewOffsetX || 0;
+  const offsetY = state.viewOffsetY || 0;
   return {
-    x: clamp(worldX, 0, state.worldW),
-    y: clamp(worldY, 0, state.worldH)
+    x: deviceX / scale - offsetX,
+    y: deviceY / scale - offsetY,
   };
 }
 
-function validatePlacement(x, y, type) {
-  if (!type) return { ok: false, reason: 'type' };
-  const def = TOWERS[type];
-  if (!def) return { ok: false, reason: 'type' };
-  if (x < BASE_RADIUS || y < BASE_RADIUS || x > state.worldW - BASE_RADIUS || y > state.worldH - BASE_RADIUS) {
-    return { ok: false, reason: 'bounds' };
+function updateShop(state) {
+  if (!shopEl) return;
+  for (const card of shopEl.querySelectorAll('[data-type]')) {
+    const type = card.dataset.type;
+    const price = priceOf(type);
+    const disabled = (!sandbox && state.coins < price) || (type === 'Hero' && state.heroPlaced);
+    card.classList.toggle('disabled', disabled);
+    const priceEl = card.querySelector('.price');
+    if (priceEl) priceEl.textContent = `$${price}`;
   }
-  const requiredClear = PATH_CLEAR_FACTOR * state.tileSize;
+}
+
+function updateSpeedButton(state) {
+  if (!btnSpeed) return;
+  btnSpeed.textContent = `Speed x${state.speed.toFixed(1)}`;
+}
+
+function updatePauseButton(state) {
+  if (!btnPause) return;
+  btnPause.textContent = state.paused ? 'Resume' : 'Pause';
+}
+
+function updateSendButton(state) {
+  if (!btnSend) return;
+  btnSend.disabled = state.waveActive;
+}
+
+function refreshDebug(state) {
+  if (!state.debugVisible) {
+    if (debugOverlay) debugOverlay.style.display = 'none';
+    return;
+  }
+  if (!debugOverlay) debugOverlay = makeDebugOverlay();
+  debugOverlay.style.display = 'block';
+  const lines = [];
+  lines.push(`Wave: ${state.waveIndex}`);
+  lines.push(`Coins: ${state.coins} | Lives: ${state.lives}`);
+  lines.push(`Pops: ${state.stats.pops} | Damage: ${Math.round(state.stats.damage)}`);
+  lines.push(`Cash Spent: ${state.stats.cashSpent} | Earned: ${state.stats.cashEarned}`);
+  lines.push('--- Towers ---');
+  for (const tower of state.towers) {
+    const dps = tower.stats.damage / Math.max(1, state.gameTime);
+    const dpb = tower.stats.damage / Math.max(1, tower.totalSpent);
+    lines.push(
+      `${tower.type}#${tower.id} dmg=${Math.round(tower.stats.damage)} dps=${dps.toFixed(1)} dpb=${dpb.toFixed(2)} prio=${tower.priority}`
+    );
+  }
+  debugOverlay.textContent = lines.join('\n');
+}
+
+function buildShop(state) {
+  if (!shopEl) return;
+  shopEl.innerHTML = '';
+  for (const type of Object.keys(BALANCE.towers)) {
+    const card = document.createElement('button');
+    card.className = 'tower-card';
+    card.dataset.type = type;
+    card.innerHTML = `<strong>${type}</strong><span class="price"></span>`;
+    card.addEventListener('click', () => {
+      state.selectedTowerType = type;
+      state.placing = true;
+      state.ghost.type = type;
+      state.ghost.range = BALANCE.towers[type].range;
+      state.ghost.baseRadius = BALANCE.global.baseRadius;
+      state.ghost.valid = false;
+    });
+    shopEl.appendChild(card);
+  }
+}
+
+function selectTower(state, tower) {
+  for (const t of state.towers) t.selected = false;
+  state.selectedTower = tower;
+  if (tower) tower.selected = true;
+  updatePanel(state);
+}
+
+function validatePlacement(state, x, y, type) {
+  const radius = BALANCE.global.baseRadius;
+  if (!type) return { ok: false, reason: 'No tower selected' };
+  if (x < radius || y < radius || x > state.worldW - radius || y > state.worldH - radius) {
+    return { ok: false, reason: 'Bounds' };
+  }
+  const pathClear = state.tileSize * BALANCE.global.pathClearFactor;
   for (const lane of state.lanes) {
-    const distToPath = pointToPolylineDistance(x, y, lane.points);
-    if (distToPath < requiredClear) {
-      return { ok: false, reason: 'near path' };
+    if (pointToPolylineDistance(x, y, lane) < pathClear) {
+      return { ok: false, reason: 'Path too close' };
     }
   }
   for (const tower of state.towers) {
-    if (circleCircleOverlap(x, y, BASE_RADIUS, tower.x, tower.y, BASE_RADIUS)) {
-      return { ok: false, reason: 'overlap' };
+    if (dist2(x, y, tower.x, tower.y) < (radius * 2) ** 2) {
+      return { ok: false, reason: 'Overlap' };
     }
   }
-  if (state.coins < def.price) {
-    return { ok: false, reason: 'cost' };
+  const price = priceOf(type);
+  if (!sandbox && state.coins < price) {
+    return { ok: false, reason: 'Coins' };
+  }
+  if (type === 'Hero' && state.heroPlaced) {
+    return { ok: false, reason: 'Hero already placed' };
   }
   return { ok: true };
 }
 
-function updateGhostFromPointer() {
-  if (!state.placing || !state.ghost.type) return;
-  const grid = Math.max(8, state.tileSize / 4);
-  const snappedX = Math.round(state.pointer.x / grid) * grid;
-  const snappedY = Math.round(state.pointer.y / grid) * grid;
-  const x = clamp(snappedX, BASE_RADIUS, state.worldW - BASE_RADIUS);
-  const y = clamp(snappedY, BASE_RADIUS, state.worldH - BASE_RADIUS);
-  state.ghost.x = x;
-  state.ghost.y = y;
-  state.ghost.range = TOWERS[state.ghost.type].range;
-  const validation = validatePlacement(x, y, state.ghost.type);
-  state.ghost.valid = validation.ok;
-  state.ghost.reason = validation.reason || '';
-}
-
-function refreshGhostValidity() {
-  if (!state.placing || !state.ghost.type) return;
-  updateGhostFromPointer();
-}
-
-function enterPlacement(type) {
-  state.selectedTowerType = type;
-  if (!state.ready) {
-    updateShopUI();
-    return;
-  }
-  state.placing = true;
-  state.ghost.type = type;
-  if (!state.pointer.x && !state.pointer.y) {
-    state.pointer.x = state.worldW * 0.5;
-    state.pointer.y = state.worldH * 0.5;
-  }
-  updateGhostFromPointer();
-  clearTowerSelection();
-  updateShopUI();
-}
-
-function cancelPlacement() {
-  if (!state.placing) return;
-  state.placing = false;
-  state.ghost.type = null;
-  state.ghost.valid = false;
-  state.ghost.reason = '';
-  updateShopUI();
-}
-
-function clearTowerSelection() {
-  state.selectedTowerId = null;
-  for (const tower of state.towers) {
-    tower.selected = false;
-  }
-  updateTowerPanel();
-}
-
-function selectTower(tower) {
-  if (!tower) {
-    clearTowerSelection();
-    return;
-  }
-  state.selectedTowerId = tower.id;
-  for (const t of state.towers) {
-    t.selected = t.id === tower.id;
-  }
-  state.selectedTowerType = tower.type;
-  updateTowerPanel();
-  updateShopUI();
-}
-
-function selectTowerNear(x, y) {
-  let best = null;
-  let bestDist = Infinity;
-  const pickRadius = BASE_RADIUS * 1.4;
-  const pickRadius2 = pickRadius * pickRadius;
-  for (const tower of state.towers) {
-    const d2 = dist2(x, y, tower.x, tower.y);
-    if (d2 <= pickRadius2 && d2 < bestDist) {
-      bestDist = d2;
-      best = tower;
-    }
-  }
-  selectTower(best || null);
-}
-
-function placeTowerAt(x, y, type) {
-  const validation = validatePlacement(x, y, type);
-  if (!validation.ok) {
-    return { ok: false, reason: validation.reason };
+function placeTower(state, x, y, type) {
+  const valid = validatePlacement(state, x, y, type);
+  if (!valid.ok) {
+    toast(valid.reason);
+    return false;
   }
   const tower = createTower(type, x, y);
   state.towers.push(tower);
-  state.coins -= TOWERS[type].price;
-  selectTower(tower);
-  updateShopUI();
-  updateHUD();
-  return { ok: true };
-}
-
-function showPlacementFailure(reason) {
-  const messages = {
-    bounds: 'Stay within the meadow.',
-    'near path': 'Too close to the path.',
-    overlap: 'Too close to another tower.',
-    cost: 'Not enough coins.'
-  };
-  showToast(messages[reason] || 'Cannot place there.');
-}
-
-function canStartNextWave() {
-  if (!state.ready || state.gameOver || state.victoryShown) return false;
-  if (!state.WAVES) return false;
-  if (state.waveIndex >= state.maxWave) return false;
-  if (state.spawnQueue.length > 0 || state.spawning) return false;
-  if (state.enemies.some(e => e.alive)) return false;
+  if (!sandbox) {
+    state.coins -= priceOf(type);
+    state.stats.cashSpent += priceOf(type);
+  }
+  if (tower.hero) {
+    state.heroPlaced = true;
+    state.heroTower = tower;
+  }
+  selectTower(state, tower);
+  updateShop(state);
+  updatePanel(state);
   return true;
 }
 
-function updateButtons() {
-  if (btnSpeed) {
-    btnSpeed.textContent = `Speed x${state.speed.toFixed(0)}`;
-  }
-  if (btnPause) {
-    btnPause.textContent = state.paused ? 'Resume' : 'Pause';
-    btnPause.disabled = state.gameOver || state.victoryShown;
-  }
-  if (btnSend) {
-    if (state.waveIndex >= state.maxWave) {
-      btnSend.textContent = state.victoryShown ? 'Victory Achieved' : 'All Waves Sent';
-      btnSend.disabled = true;
-    } else {
-      btnSend.textContent = `Send Wave ${state.waveIndex + 1}`;
-      btnSend.disabled = !canStartNextWave();
-    }
-    if (!state.ready) btnSend.disabled = true;
-  }
-}
-
-function updateHUD() {
-  if (hudCoins) hudCoins.textContent = state.coins.toString();
-  if (hudLives) hudLives.textContent = state.lives.toString();
-  if (hudWave) {
-    if (state.maxWave > 0) {
-      const shownWave = Math.min(state.waveIndex, state.maxWave);
-      hudWave.textContent = `Wave ${shownWave}/${state.maxWave}`;
-    } else {
-      hudWave.textContent = 'Wave 0/0';
-    }
-  }
-  updateButtons();
-}
-
-function startWave(number) {
-  if (!state.WAVES) return;
-  if (number > state.maxWave) {
-    showToast('All waves completed.');
+function updatePanel(state) {
+  if (!panelEl) return;
+  const tower = state.selectedTower;
+  if (!tower) {
+    panelEl.innerHTML = '<p>Select a tower for details.</p>';
     return;
   }
-  const def = state.WAVES[number];
-  if (!def || def.length === 0) {
-    showToast('Wave has no enemies defined.');
-    return;
-  }
-  state.waveIndex = number;
-  state.spawnQueue.length = 0;
-  const now = nowSeconds();
-  let cursor = now + 0.6;
-  for (const segment of def) {
-    const count = Math.max(1, Math.floor(segment.count || 1));
-    const gap = Math.max(0.1, segment.gap || 0.6);
-    const lane = segment.lane ?? 0;
-    const hpMul = segment.hpMul ?? 1;
-    for (let i = 0; i < count; i++) {
-      state.spawnQueue.push({
-        at: cursor,
-        type: segment.type,
-        lane,
-        hpMul
-      });
-      cursor += gap;
+  const tiers = `A${tower.tiers.A} / B${tower.tiers.B}`;
+  const lines = [
+    `<h3>${tower.type} <small>Tier ${tiers}</small></h3>`,
+    `<p>Range: ${Math.round(tower.range)} | Damage: ${Math.round(tower.damage)} | Fire rate: ${(tower.fireRate).toFixed(2)}s</p>`,
+    `<p>Priority: <button data-action="priority">${tower.priority}</button></p>`,
+    `<p>Sell refund: $${tower.sellValue}</p>`,
+  ];
+  lines.push('<div class="upgrades"><strong>Upgrades</strong><div class="paths"></div></div>');
+  lines.push('<div class="abilities"><strong>Abilities</strong><div class="ability-buttons"></div></div>');
+  lines.push('<p><button data-action="sell">Sell</button></p>');
+  panelEl.innerHTML = lines.join('');
+  const pathContainer = panelEl.querySelector('.paths');
+  for (const path of ['A', 'B']) {
+    const tier = tower.tiers[path] + 1;
+    const btn = document.createElement('button');
+    btn.dataset.action = 'upgrade';
+    btn.dataset.path = path;
+    const info = upgrades.getUpgradeInfo(tower.type, path, tier);
+    if (!info) {
+      btn.disabled = true;
+      btn.textContent = `${path}-Path maxed`;
+    } else {
+      btn.textContent = `${path}${tier}: $${info.price}`;
+      const can = upgrades.canApplyUpgrade(state, tower, path);
+      btn.disabled = !can.ok;
+      if (!can.ok) btn.title = can.reason || '';
     }
+    pathContainer.appendChild(btn);
   }
-  state.spawnQueue.sort((a, b) => a.at - b.at);
-  state.spawning = state.spawnQueue.length > 0;
-  updateButtons();
-}
-
-function flushSpawns(now) {
-  while (state.spawnQueue.length > 0 && state.spawnQueue[0].at <= now) {
-    const spawn = state.spawnQueue.shift();
-    const laneIndex = state.lanes.length > 0 ? clamp(Math.floor(spawn.lane || 0), 0, state.lanes.length - 1) : 0;
-    const lane = state.lanes[laneIndex];
-    if (!lane) continue;
-    const offset = state.offscreen ? -Math.random() * 12 : 0;
-    const enemy = createEnemy(spawn.type, laneIndex, lane, spawn.hpMul, offset);
-    state.enemies.push(enemy);
-  }
-  if (state.spawnQueue.length === 0) {
-    state.spawning = false;
-  }
-}
-
-function updateEnemies(dt, now) {
-  for (const enemy of state.enemies) {
-    if (!enemy.alive) continue;
-    const lane = state.lanes[enemy.lane];
-    if (!lane || lane.points.length < 2) {
-      enemy.alive = false;
-      enemy.escaped = true;
-      continue;
+  const abilityWrap = panelEl.querySelector('.ability-buttons');
+  for (const ability of abilities.list()) {
+    if (!abilities.isUnlocked(ability.id, state)) continue;
+    const status = abilities.uiStatus(ability.id, state);
+    const btn = document.createElement('button');
+    btn.dataset.action = 'ability';
+    btn.dataset.ability = ability.id;
+    btn.textContent = `${ability.name} [${ability.hotkey}]`;
+    btn.disabled = !abilities.canUse(ability.id, state);
+    if (status.cooldown > 0) {
+      btn.textContent += ` (${status.cooldown.toFixed(1)}s)`;
     }
-    resetEnemySlow(enemy, now);
-    const speed = enemy.baseSpeed * enemy.slowMul;
-    enemy.distance += speed * dt;
-    const pos = projectAlongPolyline(lane, enemy.distance);
-    enemy.x = pos.x;
-    enemy.y = pos.y;
-    const total = lane.length ?? enemy.pathLength;
-    if (pos.done || enemy.distance >= total + 1) {
-      enemy.alive = false;
-      enemy.escaped = true;
-    }
+    abilityWrap.appendChild(btn);
   }
 }
 
-function cleanupEnemies() {
-  for (let i = state.enemies.length - 1; i >= 0; i--) {
-    const enemy = state.enemies[i];
-    if (enemy.alive) continue;
-    if (enemy.escaped && !enemy.lifeDeducted) {
-      state.lives = Math.max(0, state.lives - 1);
-      enemy.lifeDeducted = true;
-      if (state.lives === 0 && !state.gameOver) {
-        state.gameOver = true;
-        state.paused = true;
-        showToast('Game Over');
+function applyHeroBonus(state, hero, level) {
+  const bonus = BALANCE.hero.levelBonuses[level];
+  if (!bonus) return;
+  if (bonus.range) hero.range += bonus.range;
+  if (bonus.damage) hero.damage += bonus.damage;
+  if (bonus.fireRateMul) hero.fireRate *= bonus.fireRateMul;
+  if (bonus.camoDetection) hero.camoDetection = true;
+  if (bonus.aura) {
+    state.heroAura = { range: hero.range + bonus.aura.range, dmgMul: bonus.aura.dmgMul };
+  }
+  if (bonus.ability) abilities.register(state, bonus.ability);
+  toast(`Hero reached level ${level}!`);
+}
+
+function grantHeroXP(state, amount) {
+  const hero = state.heroTower;
+  if (!hero) return;
+  hero.heroXP += amount;
+  const maxLevel = BALANCE.hero.maxLevel;
+  while (hero.heroLevel < maxLevel && hero.heroXP >= hero.heroNextXP) {
+    hero.heroXP -= hero.heroNextXP;
+    hero.heroLevel += 1;
+    hero.heroNextXP = BALANCE.hero.levelXp(hero.heroLevel);
+    applyHeroBonus(state, hero, hero.heroLevel);
+    updatePanel(state);
+  }
+}
+
+function setupPanelInteractions(state) {
+  if (!panelEl) return;
+  panelEl.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    if (action === 'sell' && state.selectedTower) {
+      const tower = state.selectedTower;
+      const index = state.towers.indexOf(tower);
+      if (index >= 0) {
+        state.towers.splice(index, 1);
+        state.coins += tower.sellValue;
+        state.stats.cashEarned += tower.sellValue;
+        if (tower.hero) {
+          state.heroPlaced = false;
+          state.heroTower = null;
+          state.heroAura = null;
+        }
+        selectTower(state, null);
+        updateShop(state);
+        toast('Tower sold');
       }
-    }
-    state.enemies.splice(i, 1);
-  }
-}
-
-function findEnemyById(id) {
-  for (const enemy of state.enemies) {
-    if (enemy.id === id && enemy.alive) return enemy;
-  }
-  return null;
-}
-
-function applyBulletImpact(bullet, target, now) {
-  const victims = [];
-  if (bullet.splashRadius > 0) {
-    const radius2 = bullet.splashRadius * bullet.splashRadius;
-    for (const enemy of state.enemies) {
-      if (!enemy.alive) continue;
-      const d2 = dist2(bullet.x, bullet.y, enemy.x, enemy.y);
-      if (d2 <= radius2) {
-        victims.push(enemy);
-      }
-    }
-  } else if (target) {
-    victims.push(target);
-  }
-  let coinsEarned = 0;
-  for (const enemy of victims) {
-    const result = applyDamage(enemy, bullet.damage, bullet.damageType);
-    if (bullet.slowPct > 0) {
-      applySlow(enemy, bullet.slowPct, now);
-    }
-    if (result.killed && !enemy.escaped) {
-      coinsEarned += enemy.reward;
-    }
-  }
-  if (coinsEarned > 0) {
-    state.coins += coinsEarned;
-    updateShopUI();
-  }
-}
-
-function updateBullets(dt, now) {
-  for (let i = state.bullets.length - 1; i >= 0; i--) {
-    const bullet = state.bullets[i];
-    bullet.life += dt;
-    const target = findEnemyById(bullet.targetId);
-    if (!target) {
-      if (bullet.life > CONFIG.bulletLifetime) {
-        state.bullets.splice(i, 1);
-      }
-      continue;
-    }
-    const dx = target.x - bullet.x;
-    const dy = target.y - bullet.y;
-    const distance = Math.hypot(dx, dy);
-    const step = bullet.speed * dt;
-    if (distance <= step || distance === 0) {
-      bullet.x = target.x;
-      bullet.y = target.y;
-      applyBulletImpact(bullet, target, now);
-      state.bullets.splice(i, 1);
-      continue;
-    }
-    bullet.x += (dx / distance) * step;
-    bullet.y += (dy / distance) * step;
-    if (bullet.life > CONFIG.bulletLifetime) {
-      state.bullets.splice(i, 1);
-    }
-  }
-}
-
-function acquireTarget(tower) {
-  const range2 = tower.range * tower.range;
-  let best = null;
-  let bestProgress = -Infinity;
-  for (const enemy of state.enemies) {
-    if (!enemy.alive) continue;
-    const d2 = dist2(tower.x, tower.y, enemy.x, enemy.y);
-    if (d2 > range2) continue;
-    if (!best || enemy.distance > bestProgress) {
-      best = enemy;
-      bestProgress = enemy.distance;
-    }
-  }
-  return best;
-}
-
-function updateTowers(dt, now) {
-  for (const tower of state.towers) {
-    tower.cooldown = Math.max(0, tower.cooldown - dt);
-    if (tower.cooldown > 0) continue;
-    const target = acquireTarget(tower);
-    if (!target) continue;
-    const bullet = createBullet(tower, target.id);
-    state.bullets.push(bullet);
-    tower.cooldown = 1 / Math.max(0.01, tower.def.fireRate);
-  }
-}
-
-function handleVictoryCheck() {
-  if (!state.ready || state.victoryShown || state.gameOver) return;
-  if (state.waveIndex < state.maxWave) return;
-  if (state.spawnQueue.length > 0 || state.spawning) return;
-  if (state.enemies.some(e => e.alive)) return;
-  state.victoryShown = true;
-  state.paused = true;
-  showToast('Victory! All waves cleared.');
-  updateButtons();
-}
-
-function setupUI() {
-  if (btnSend) {
-    btnSend.addEventListener('click', () => {
-      if (canStartNextWave()) {
-        startWave(state.waveIndex + 1);
-      }
-    });
-  }
-  if (btnSpeed) {
-    btnSpeed.addEventListener('click', () => {
-      state.speed = state.speed === 1 ? 2 : 1;
-      updateButtons();
-    });
-  }
-  if (btnPause) {
-    btnPause.addEventListener('click', () => {
-      if (state.gameOver || state.victoryShown) return;
-      state.paused = !state.paused;
-      updateButtons();
-    });
-  }
-  if (canvas) {
-    on(canvas, 'pointermove', event => {
-      if (!state.ready) return;
-      const world = clientToWorld(event);
-      if (!world) return;
-      state.pointer.x = world.x;
-      state.pointer.y = world.y;
-      if (state.placing) {
-        updateGhostFromPointer();
-      }
-    });
-    on(canvas, 'pointerdown', event => {
-      if (!state.ready) return;
-      if (event.button === 2) {
-        if (state.placing) cancelPlacement();
-        event.preventDefault();
+    } else if (action === 'priority' && state.selectedTower) {
+      const newPrio = cyclePriority(state.selectedTower);
+      toast(`Priority: ${newPrio}`);
+      updatePanel(state);
+    } else if (action === 'upgrade' && state.selectedTower) {
+      const path = btn.dataset.path;
+      const check = upgrades.canApplyUpgrade(state, state.selectedTower, path);
+      if (!check.ok) {
+        toast(check.reason || 'Cannot upgrade');
         return;
       }
-      if (event.button !== 0) return;
-      const world = clientToWorld(event);
-      if (!world) return;
-      state.pointer.x = world.x;
-      state.pointer.y = world.y;
-      if (state.placing && state.ghost.type) {
-        updateGhostFromPointer();
-        if (state.ghost.valid) {
-          const result = placeTowerAt(state.ghost.x, state.ghost.y, state.ghost.type);
-          if (!result.ok) {
-            showPlacementFailure(result.reason);
-          }
-          if (!event.shiftKey) {
-            cancelPlacement();
-          } else {
-            refreshGhostValidity();
-          }
-        } else {
-          showPlacementFailure(state.ghost.reason);
-        }
-      } else {
-        selectTowerNear(world.x, world.y);
+      const price = check.info.price;
+      if (upgrades.applyUpgrade(state, state.selectedTower, path)) {
+        if (!sandbox) state.stats.cashSpent += price;
+        updateShop(state);
+        updatePanel(state);
       }
-    });
-    on(canvas, 'pointerleave', () => {
-      if (state.placing) {
-        state.ghost.valid = false;
-      }
-    });
-    on(canvas, 'contextmenu', event => {
-      event.preventDefault();
-    });
-  }
-  on(window, 'keydown', event => {
-    if (event.key === 'Escape') {
-      cancelPlacement();
+    } else if (action === 'ability') {
+      const abilityId = btn.dataset.ability;
+      if (state.triggerAbility) state.triggerAbility(abilityId);
+      updatePanel(state);
     }
-  });
-  on(window, 'resize', () => {
-    resizeCanvas();
-    refreshGhostValidity();
   });
 }
 
-let lastTick = nowSeconds();
+function attachHotkeys(state) {
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') {
+      state.placing = false;
+      state.ghost.type = null;
+    }
+    if (ev.key === 'F2') {
+      state.debugVisible = !state.debugVisible;
+    }
+    for (const ability of abilities.list()) {
+      if (ability.hotkey === ev.key) {
+        if (state.triggerAbility) state.triggerAbility(ability.id);
+        updatePanel(state);
+      }
+    }
+  });
+}
 
-function gameLoop() {
-  const now = nowSeconds();
-  let dt = now - lastTick;
-  lastTick = now;
-  if (!state.paused && state.ready && !state.gameOver) {
-    dt = Math.min(dt, 0.05) * state.speed;
-    flushSpawns(now);
-    updateEnemies(dt, now);
-    updateTowers(dt, now);
-    updateBullets(dt, now);
-    cleanupEnemies();
-    handleVictoryCheck();
+function setupPlacementEvents(state) {
+  if (!canvas) return;
+  canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
+  canvas.addEventListener('pointermove', (ev) => {
+    const pos = clientToWorld(state, ev);
+    const grid = state.tileSize / 4;
+    const snapX = Math.round(pos.x / grid) * grid;
+    const snapY = Math.round(pos.y / grid) * grid;
+    if (state.placing && state.ghost.type) {
+      const check = validatePlacement(state, snapX, snapY, state.ghost.type);
+      state.ghost.x = snapX;
+      state.ghost.y = snapY;
+      state.ghost.range = BALANCE.towers[state.ghost.type].range;
+      state.ghost.baseRadius = BALANCE.global.baseRadius;
+      state.ghost.valid = check.ok;
+    }
+  });
+  canvas.addEventListener('pointerdown', (ev) => {
+    const pos = clientToWorld(state, ev);
+    if (ev.button === 2) {
+      state.placing = false;
+      state.ghost.type = null;
+      return;
+    }
+    if (state.placing && state.ghost.type && state.ghost.valid) {
+      const placed = placeTower(state, state.ghost.x, state.ghost.y, state.ghost.type);
+      if (!ev.shiftKey || !placed) {
+        state.placing = false;
+        if (!placed) state.ghost.type = null;
+      }
+      updateShop(state);
+      return;
+    }
+    let best = null;
+    let bestDist = Infinity;
+    for (const tower of state.towers) {
+      const d2 = dist2(pos.x, pos.y, tower.x, tower.y);
+      if (d2 < (tower.baseRadius + 6) ** 2 && d2 < bestDist) {
+        best = tower;
+        bestDist = d2;
+      }
+    }
+    selectTower(state, best);
+  });
+}
+
+function startWave(state) {
+  const next = state.waveIndex + 1;
+  const groups = state.waves[next];
+  if (!groups) {
+    toast('No more waves!');
+    return;
   }
-  updateHUD();
-  render(state, ctx);
-  requestAnimationFrame(gameLoop);
+  state.waveIndex = next;
+  state.waveActive = true;
+  const startTime = state.gameTime + 0.5;
+  let at = startTime;
+  for (const group of groups) {
+    for (let i = 0; i < group.count; i++) {
+      state.spawnQueue.add({
+        at,
+        type: group.type,
+        lane: group.lane,
+        traits: group.traits || [],
+        hpMul: group.hpMul || 1,
+      });
+      at += group.gap;
+    }
+  }
+  updateSendButton(state);
+}
+
+function spawnEnemy(state, entry) {
+  const laneIndex = entry.lane % state.lanes.length;
+  const lane = state.lanes[laneIndex];
+  const start = lane[0];
+  const enemy = createEnemy(entry.type, laneIndex, start, {
+    traits: entry.traits,
+    hpMul: entry.hpMul,
+    wave: state.waveIndex,
+    diff,
+  });
+  enemy.t = -Math.random() * 14;
+  state.enemies.push(enemy);
+}
+
+function endWave(state) {
+  if (!state.waveActive) return;
+  state.waveActive = false;
+  if (!sandbox) {
+    const bonus = roundBonus(state.waveIndex, diff);
+    if (bonus > 0) {
+      state.coins += bonus;
+      state.stats.cashEarned += bonus;
+      toast(`Wave ${state.waveIndex} cleared! +$${bonus}`);
+    }
+  }
+  updateSendButton(state);
+  updateShop(state);
+}
+
+function setupControls(state) {
+  if (btnSend) btnSend.addEventListener('click', () => {
+    if (!state.waveActive) startWave(state);
+  });
+  if (btnSpeed) btnSpeed.addEventListener('click', () => {
+    state.speed = state.speed === 1 ? 2 : 1;
+    updateSpeedButton(state);
+  });
+  if (btnPause) btnPause.addEventListener('click', () => {
+    state.paused = !state.paused;
+    updatePauseButton(state);
+  });
 }
 
 async function bootstrap() {
-  resetIds();
-  setupShop();
-  setupUI();
-  resizeCanvas();
-  const params = new URLSearchParams(window.location.search);
-  const mapName = params.get('map') || 'meadow';
-  const offscreenParam = params.get('offscreen');
-  state.offscreen = offscreenParam == null ? true : offscreenParam !== '0';
-  let map;
+  const state = {
+    map: null,
+    lanes: [],
+    tileSize: 64,
+    worldW: 0,
+    worldH: 0,
+    coins: 0,
+    lives: 0,
+    waveIndex: 0,
+    speed: 1,
+    paused: false,
+    enemies: [],
+    bullets: [],
+    towers: [],
+    selectedTowerType: 'Archer',
+    selectedTower: null,
+    placing: false,
+    ghost: { x: 0, y: 0, type: null, range: 0, baseRadius: BALANCE.global.baseRadius, valid: false },
+    spawnQueue: new SpawnQueue(),
+    waveActive: false,
+    heroPlaced: false,
+    heroTower: null,
+    heroAura: null,
+    diff,
+    sandbox,
+    stats: { pops: 0, damage: 0, cashSpent: 0, cashEarned: 0 },
+    gameTime: 0,
+    debugVisible: sandbox,
+    viewScale: 1,
+    viewOffsetX: 0,
+    viewOffsetY: 0,
+  };
+
+  abilities.ensureState(state);
+
+  state.onEnemyKilled = (enemy, reward) => {
+    state.stats.cashEarned += reward;
+    const xpGain = BALANCE.hero.xpPerPop * Math.max(1, enemy.reward);
+    grantHeroXP(state, xpGain);
+    updateShop(state);
+  };
+
+  state.onEnemyEscaped = () => {
+    if (state.lives <= 0) {
+      toast('Game Over');
+      state.paused = true;
+      updatePauseButton(state);
+    }
+  };
+
   try {
-    map = await loadMap(mapName);
+    const map = await loadMap(mapName);
+    state.map = map;
+    const baked = bakeLanes(map, { offscreen: true });
+    state.lanes = baked.lanes;
+    state.tileSize = baked.tileSize;
+    state.worldW = baked.worldW;
+    state.worldH = baked.worldH;
+    const start = startStateFromMap(map);
+    state.coins = sandbox ? 9999 : start.coins;
+    state.lives = start.lives;
+    state.waves = wavesByName(map.waveset);
   } catch (err) {
     console.error(err);
-    showToast('Failed to load map data.');
+    toast('Failed to load map');
     return;
   }
-  const baked = bakeLanes(map, { offscreen: state.offscreen });
-  const start = startStateFromMap(map);
-  state.map = map;
-  state.lanes = baked.lanes;
-  state.tileSize = baked.tileSize;
-  state.worldW = baked.worldW;
-  state.worldH = baked.worldH;
-  state.coins = start.coins;
-  state.lives = start.lives;
-  state.waveIndex = 0;
-  state.spawnQueue.length = 0;
-  state.enemies.length = 0;
-  state.towers.length = 0;
-  state.bullets.length = 0;
-  state.gameOver = false;
-  state.victoryShown = false;
-  state.paused = false;
-  state.selectedTowerId = null;
-  state.selectedTowerType = 'Archer';
-  state.placing = false;
-  state.ghost = { x: 0, y: 0, type: null, valid: false, range: 0, reason: '' };
-  state.pointer = { x: baked.worldW * 0.5, y: baked.worldH * 0.5 };
-  state.WAVES = wavesByName(map.waveset);
-  state.maxWave = Object.keys(state.WAVES).reduce((max, key) => Math.max(max, Number(key) || 0), 0);
-  resizeCanvas();
-  updateShopUI();
-  updateTowerPanel();
-  updateHUD();
-  state.ready = true;
-  lastTick = nowSeconds();
-  requestAnimationFrame(gameLoop);
+
+  buildShop(state);
+  updateShop(state);
+  setupPanelInteractions(state);
+  setupPlacementEvents(state);
+  setupControls(state);
+  attachHotkeys(state);
+  updateSpeedButton(state);
+  updatePauseButton(state);
+  updateSendButton(state);
+  resizeCanvas(state);
+  window.addEventListener('resize', () => resizeCanvas(state));
+  updatePanel(state);
+
+  let lastTime = nowSeconds();
+
+  function abilityDamage(enemy, damage, type, options = {}) {
+    const dealt = applyDamage(enemy, damage, type, {
+      now: state.gameTime,
+      slowPct: options.slowPct,
+      slowDuration: options.slowDuration,
+      shatterLead: options.shatterLead,
+    });
+    if (dealt > 0) {
+      state.stats.damage += dealt;
+      if (!enemy.alive) {
+        const reward = popReward(enemy.type, diff);
+        state.coins += reward;
+        state.stats.pops += 1;
+        if (state.onEnemyKilled) state.onEnemyKilled(enemy, reward);
+      }
+    }
+  }
+
+  function triggerAbilityWithContext(id) {
+    const ok = abilities.activate(id, state, {
+      now: state.gameTime,
+      tower: state.selectedTower,
+      hero: state.heroTower,
+      applyDamage: (enemy, dmg, type, options = {}) => abilityDamage(enemy, dmg, type, options),
+    });
+    if (!ok) toast('Ability not ready');
+  }
+
+  state.triggerAbility = (id) => triggerAbilityWithContext(id);
+
+  const loop = () => {
+    const now = nowSeconds();
+    let frameDt = now - lastTime;
+    lastTime = now;
+    if (frameDt > 0.3) frameDt = 0.3;
+    const scaled = state.paused ? 0 : clamp(frameDt * state.speed, 0, BALANCE.global.dtCap);
+    if (!state.paused) {
+      state.gameTime += scaled;
+      state.spawnQueue.flush(state.gameTime, (entry) => spawnEnemy(state, entry));
+      advanceEnemies(state, scaled, state.gameTime, diff);
+      updateTowers(state, scaled, state.gameTime);
+      updateBullets(state, scaled, state.gameTime, diff);
+      abilities.update(scaled, state);
+      if (state.waveActive && state.spawnQueue.isEmpty() && state.enemies.length === 0) {
+        endWave(state);
+      }
+    }
+    const scale = state.viewScale || 1;
+    const offsetX = (state.viewOffsetX || 0) * scale;
+    const offsetY = (state.viewOffsetY || 0) * scale;
+    ctx.save();
+    ctx.setTransform(scale, 0, 0, scale, offsetX, offsetY);
+    render(state, ctx);
+    ctx.restore();
+    refreshDebug(state);
+    requestAnimationFrame(loop);
+  };
+
+  requestAnimationFrame(loop);
 }
 
-bootstrap().catch(err => {
-  console.error(err);
-  showToast('Unexpected error during startup.');
-});
+bootstrap();

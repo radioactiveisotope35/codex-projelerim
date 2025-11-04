@@ -1,117 +1,84 @@
-function createBuilder() {
+import { BALANCE } from './balance.js';
+import { clamp, seededRng } from './utils.js';
+
+function buildSet(seed) {
+  const rng = seededRng(seed);
   const waves = {};
-  let current = 1;
+  const maxWave = 25;
+  for (let wave = 1; wave <= maxWave; wave++) {
+    const budget = BALANCE.waves.pointsForWave(wave);
+    const traitsPool = BALANCE.waves.schedule(wave);
+    const groups = [];
+    let remaining = budget;
+    let attempts = 0;
+    const typePool = ['Grunt'];
+    if (wave >= 2) typePool.push('Runner');
+    if (wave >= 4) typePool.push('Shielded');
+    if (wave >= 6) typePool.push('Specter');
+    if (wave >= 9) typePool.push('Tank');
 
-  const api = {
-    spawn(type, count = 10, gap = 0.6, lane = 0, hpMul = 1) {
-      if (!waves[current]) waves[current] = [];
-      waves[current].push({ type, count, gap, lane, hpMul, boss: false });
-      return api;
-    },
-    boss(type = 'Boss', lane = 0, hpMul = 8) {
-      if (!waves[current]) waves[current] = [];
-      waves[current].push({ type, count: 1, gap: 1.2, lane, hpMul, boss: true });
-      return api;
+    while (remaining > 0 && groups.length < 4 && attempts < 32) {
+      attempts++;
+      const type = typePool[Math.floor(rng.next() * typePool.length)];
+      const baseCost = BALANCE.waves.enemyPointCost[type];
+      if (!baseCost) break;
+      const lane = groups.length % 2; // simple alternation; runtime will mod by actual lanes
+      const traitCount = traitsPool.length ? Math.min(2, Math.floor(rng.next() * (traitsPool.length + 1))) : 0;
+      const traitSet = [];
+      for (let t = 0; t < traitCount; t++) {
+        const trait = traitsPool[Math.floor(rng.next() * traitsPool.length)];
+        if (trait && !traitSet.includes(trait)) traitSet.push(trait);
+      }
+      const traitCost = traitSet.reduce((sum, tr) => sum + (BALANCE.waves.traitPointCost[tr] || 0), 0);
+      const costPer = baseCost + traitCost;
+      if (costPer <= 0 || costPer > remaining && groups.length > 0) {
+        if (attempts > 24) break;
+        continue;
+      }
+      const ratio = clamp(remaining / costPer, 1, 12);
+      const count = Math.max(1, Math.floor(ratio * (0.35 + rng.next() * 0.65)));
+      const spend = count * costPer;
+      if (spend > remaining && count > 1) {
+        continue;
+      }
+      remaining -= spend;
+      groups.push({
+        type,
+        count,
+        gap: 0.35 + rng.next() * 0.45,
+        lane,
+        hpMul: 1,
+        traits: traitSet,
+      });
+      if (remaining < Math.min(...Object.values(BALANCE.waves.enemyPointCost))) break;
     }
-  };
 
-  function w(n) {
-    current = n;
-    if (!waves[current]) waves[current] = [];
-    return api;
+    if (!groups.length) {
+      groups.push({ type: 'Grunt', count: 8 + Math.floor(wave * 0.6), gap: 0.5, lane: 0, hpMul: 1, traits: [] });
+    }
+
+    waves[wave] = groups;
   }
-
-  function build() {
-    return waves;
-  }
-
-  return { w, build };
+  return waves;
 }
 
-function makeSet(definition) {
-  const { w, build } = createBuilder();
-  definition(w);
-  return build();
+const CACHE = {};
+
+export function waveset_meadow() {
+  return CACHE.meadow || (CACHE.meadow = buildSet(1013));
 }
 
-export function waveset_meadow_20() {
-  return makeSet(w => {
-    w(1).spawn('Grunt', 12, 0.8, 0, 1);
-    w(2).spawn('Runner', 14, 0.6, 0, 1.1);
-    w(3).spawn('Grunt', 10, 0.5, 0, 1.3).spawn('Runner', 6, 0.6, 0, 1.3);
-    w(4).spawn('Shielded', 8, 0.7, 0, 1.4);
-    w(5).boss('Tank', 0, 6);
-    w(6).spawn('Runner', 18, 0.45, 0, 1.6);
-    w(7).spawn('Grunt', 14, 0.55, 0, 1.8).spawn('Shielded', 6, 0.8, 0, 1.8);
-    w(8).spawn('Specter', 10, 0.7, 0, 1.9);
-    w(9).spawn('Tank', 6, 0.9, 0, 2.2).spawn('Runner', 10, 0.55, 0, 2);
-    w(10).boss('Tank', 0, 9);
-    w(11).spawn('Grunt', 20, 0.5, 0, 2.4);
-    w(12).spawn('Shielded', 12, 0.6, 0, 2.6).spawn('Runner', 10, 0.5, 0, 2.5);
-    w(13).spawn('Specter', 14, 0.55, 0, 2.7);
-    w(14).spawn('Tank', 8, 0.8, 0, 3);
-    w(15).boss('Specter', 0, 10);
-    w(16).spawn('Runner', 22, 0.45, 0, 3.2);
-    w(17).spawn('Shielded', 16, 0.55, 0, 3.4);
-    w(18).spawn('Grunt', 24, 0.45, 0, 3.6).spawn('Specter', 10, 0.6, 0, 3.5);
-    w(19).spawn('Tank', 10, 0.8, 0, 3.8);
-    w(20).boss('Tank', 0, 12);
-  });
+export function waveset_canyon() {
+  return CACHE.canyon || (CACHE.canyon = buildSet(2099));
 }
 
-export function waveset_canyon_20() {
-  return makeSet(w => {
-    w(1).spawn('Grunt', 14, 0.8, 0, 1);
-    w(2).spawn('Runner', 12, 0.55, 1, 1.2);
-    w(3).spawn('Grunt', 12, 0.6, 0, 1.3).spawn('Runner', 8, 0.6, 1, 1.3);
-    w(4).spawn('Shielded', 10, 0.7, 0, 1.5);
-    w(5).boss('Tank', 0, 6.5);
-    w(6).spawn('Runner', 18, 0.45, 1, 1.7);
-    w(7).spawn('Grunt', 18, 0.5, 0, 1.9);
-    w(8).spawn('Specter', 12, 0.6, 1, 2.1);
-    w(9).spawn('Tank', 8, 0.85, 0, 2.3);
-    w(10).boss('Specter', 1, 9);
-    w(11).spawn('Shielded', 16, 0.55, 0, 2.5);
-    w(12).spawn('Runner', 20, 0.45, 1, 2.6);
-    w(13).spawn('Grunt', 22, 0.5, 0, 2.8);
-    w(14).spawn('Specter', 16, 0.5, 1, 3);
-    w(15).boss('Tank', 0, 11);
-    w(16).spawn('Runner', 24, 0.4, 1, 3.2);
-    w(17).spawn('Shielded', 18, 0.55, 0, 3.4);
-    w(18).spawn('Tank', 10, 0.75, 0, 3.6).spawn('Runner', 12, 0.5, 1, 3.6);
-    w(19).spawn('Specter', 18, 0.55, 1, 3.8);
-    w(20).boss('Specter', 1, 12);
-  });
-}
-
-export function waveset_crossroads_20() {
-  return makeSet(w => {
-    w(1).spawn('Grunt', 16, 0.75, 0, 1);
-    w(2).spawn('Runner', 16, 0.55, 1, 1.1);
-    w(3).spawn('Shielded', 10, 0.65, 0, 1.3);
-    w(4).spawn('Specter', 10, 0.65, 1, 1.4);
-    w(5).boss('Tank', 0, 6);
-    w(6).spawn('Runner', 22, 0.45, 0, 1.6).spawn('Runner', 10, 0.6, 1, 1.6);
-    w(7).spawn('Grunt', 20, 0.5, 0, 1.8).spawn('Shielded', 8, 0.6, 1, 1.8);
-    w(8).spawn('Specter', 14, 0.55, 1, 2);
-    w(9).spawn('Tank', 10, 0.8, 0, 2.2);
-    w(10).boss('Specter', 1, 9);
-    w(11).spawn('Runner', 26, 0.4, 0, 2.4).spawn('Runner', 10, 0.5, 1, 2.4);
-    w(12).spawn('Shielded', 18, 0.55, 0, 2.6);
-    w(13).spawn('Specter', 18, 0.5, 1, 2.8);
-    w(14).spawn('Tank', 12, 0.75, 0, 3);
-    w(15).boss('Tank', 0, 11);
-    w(16).spawn('Runner', 28, 0.4, 0, 3.2).spawn('Runner', 12, 0.55, 1, 3.2);
-    w(17).spawn('Shielded', 20, 0.5, 0, 3.4);
-    w(18).spawn('Specter', 20, 0.5, 1, 3.6);
-    w(19).spawn('Tank', 12, 0.7, 0, 3.8);
-    w(20).boss('Specter', 1, 12);
-  });
+export function waveset_crossroads() {
+  return CACHE.crossroads || (CACHE.crossroads = buildSet(3091));
 }
 
 export function wavesByName(name) {
-  const n = String(name || '').toLowerCase();
-  if (n.includes('canyon')) return waveset_canyon_20();
-  if (n.includes('cross')) return waveset_crossroads_20();
-  return waveset_meadow_20();
+  const key = (name || '').toLowerCase();
+  if (key.includes('canyon')) return waveset_canyon();
+  if (key.includes('cross')) return waveset_crossroads();
+  return waveset_meadow();
 }
