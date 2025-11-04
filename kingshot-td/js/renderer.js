@@ -1,3 +1,5 @@
+import { getViewport } from './utils.js';
+
 const COLORS = {
   groundTop: '#7DBF85',
   groundBottom: '#4E8C58',
@@ -168,13 +170,38 @@ export function drawPlacementGhost(ctx, ghost) {
 }
 
 export function render(state, ctx) {
+  const canvas = ctx.canvas;
+  const vp = getViewport();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // black bars
+  ctx.fillStyle = '#000';
+  if (vp.viewX > 0) {
+    ctx.fillRect(0, 0, vp.viewX, canvas.height);
+    ctx.fillRect(vp.viewX + vp.viewW, 0, canvas.width - (vp.viewX + vp.viewW), canvas.height);
+  }
+  if (vp.viewY > 0) {
+    ctx.fillRect(vp.viewX, 0, vp.viewW, vp.viewY);
+    ctx.fillRect(vp.viewX, vp.viewY + vp.viewH, vp.viewW, canvas.height - (vp.viewY + vp.viewH));
+  }
+
+  const sx = vp.viewW / state.worldW;
+  const sy = vp.viewH / state.worldH;
+  ctx.setTransform(sx, 0, 0, sy, vp.viewX, vp.viewY);
+
   drawGround(ctx, state.worldW, state.worldH);
   drawPath(ctx, state.lanes, state.tileSize, state.worldW, state.worldH);
   drawTowers(ctx, state.towers);
   drawEnemies(ctx, state.enemies, state.worldW, state.worldH);
   drawBullets(ctx, state.bullets);
-  drawPlacementGhost(ctx, state.ghost);
-  if (HUD.coins) HUD.coins.textContent = state.coins.toString();
-  if (HUD.lives) HUD.lives.textContent = Math.max(0, state.lives).toString();
+  if (state.placing && state.ghost?.type) {
+    drawPlacementGhost(ctx, state.ghost);
+  }
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  if (HUD.coins) HUD.coins.textContent = Math.floor(state.coins).toString();
+  if (HUD.lives) HUD.lives.textContent = Math.max(0, Math.floor(state.lives)).toString();
   if (HUD.wave) HUD.wave.textContent = `Wave ${state.waveIndex}`;
 }

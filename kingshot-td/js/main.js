@@ -20,11 +20,16 @@ import {
   dist2,
   SpawnQueue,
   clamp,
+  setupViewport,
+  getViewport,
+  clientToWorldFactory,
+  throttle,
 } from './utils.js';
 
 const params = new URLSearchParams(globalThis.location?.search || '');
 const mapName = params.get('map') || 'meadow';
 const sandbox = params.get('sandbox') === '1';
+const devParam = params.get('dev') === '1';
 const diff = getDifficulty();
 
 const canvas = document.getElementById('game');
@@ -37,6 +42,8 @@ const panelEl = document.getElementById('tower-panel');
 const toastEl = document.getElementById('toasts');
 
 let debugOverlay = null;
+let panelInfoEl = null;
+let devTools = null;
 
 function makeDebugOverlay() {
   const div = document.createElement('div');
@@ -64,45 +71,26 @@ function toast(message, duration = 2000) {
   entry.style.color = '#fff';
   entry.style.borderRadius = '6px';
   toastEl.appendChild(entry);
-  setTimeout(() => {
-    entry.remove();
-  }, duration);
+  setTimeout(() => entry.remove(), duration);
 }
 
-function resizeCanvas(state) {
+function refreshViewport(state) {
   if (!canvas) return;
-  const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.getBoundingClientRect();
-  const width = rect.width * dpr;
-  const height = rect.height * dpr;
-  if (canvas.width !== width || canvas.height !== height) {
-    canvas.width = width;
-    canvas.height = height;
-  }
-  if (state && state.worldW && state.worldH) {
-    state.viewScale = Math.min(width / state.worldW, height / state.worldH);
-    const scaledW = state.worldW * state.viewScale;
-    const scaledH = state.worldH * state.viewScale;
-    const extraX = Math.max(0, width - scaledW) / state.viewScale;
-    const extraY = Math.max(0, height - scaledH) / state.viewScale;
-    state.viewOffsetX = extraX * 0.5;
-    state.viewOffsetY = extraY * 0.5;
+  setupViewport(canvas);
+  if (state) {
+    const worldW = state.worldW || 1;
+    const worldH = state.worldH || 1;
+    state.clientToWorld = clientToWorldFactory(getViewport, worldW, worldH);
   }
 }
 
-function clientToWorld(state, event) {
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  const deviceX = (event.clientX - rect.left) * scaleX;
-  const deviceY = (event.clientY - rect.top) * scaleY;
-  const scale = state.viewScale || 1;
-  const offsetX = state.viewOffsetX || 0;
-  const offsetY = state.viewOffsetY || 0;
-  return {
-    x: deviceX / scale - offsetX,
-    y: deviceY / scale - offsetY,
-  };
+function setGameSpeed(state, value) {
+  const next = clamp(Math.round(value), 1, 10);
+  if (state.speed !== next) {
+    state.speed = next;
+  }
+  updateSpeedButton(state);
+  if (devTools) devTools.forceUpdate();
 }
 
 function updateShop(state) {
@@ -110,7 +98,7 @@ function updateShop(state) {
   for (const card of shopEl.querySelectorAll('[data-type]')) {
     const type = card.dataset.type;
     const price = priceOf(type);
-    const disabled = (!sandbox && state.coins < price) || (type === 'Hero' && state.heroPlaced);
+    const disabled = (!sandbox && !state.dev.freePlacement && state.coins < price) || (type === 'Hero' && state.heroPlaced);
     card.classList.toggle('disabled', disabled);
     const priceEl = card.querySelector('.price');
     if (priceEl) priceEl.textContent = `$${price}`;
@@ -119,7 +107,7 @@ function updateShop(state) {
 
 function updateSpeedButton(state) {
   if (!btnSpeed) return;
-  btnSpeed.textContent = `Speed x${state.speed.toFixed(1)}`;
+  btnSpeed.textContent = `Speed x${state.speed}`;
 }
 
 function updatePauseButton(state) {
@@ -182,60 +170,11 @@ function selectTower(state, tower) {
   updatePanel(state);
 }
 
-function validatePlacement(state, x, y, type) {
-  const radius = BALANCE.global.baseRadius;
-  if (!type) return { ok: false, reason: 'No tower selected' };
-  if (x < radius || y < radius || x > state.worldW - radius || y > state.worldH - radius) {
-    return { ok: false, reason: 'Bounds' };
-  }
-  const pathClear = state.tileSize * BALANCE.global.pathClearFactor;
-  for (const lane of state.lanes) {
-    if (pointToPolylineDistance(x, y, lane) < pathClear) {
-      return { ok: false, reason: 'Path too close' };
-    }
-  }
-  for (const tower of state.towers) {
-    if (dist2(x, y, tower.x, tower.y) < (radius * 2) ** 2) {
-      return { ok: false, reason: 'Overlap' };
-    }
-  }
-  const price = priceOf(type);
-  if (!sandbox && state.coins < price) {
-    return { ok: false, reason: 'Coins' };
-  }
-  if (type === 'Hero' && state.heroPlaced) {
-    return { ok: false, reason: 'Hero already placed' };
-  }
-  return { ok: true };
-}
-
-function placeTower(state, x, y, type) {
-  const valid = validatePlacement(state, x, y, type);
-  if (!valid.ok) {
-    toast(valid.reason);
-    return false;
-  }
-  const tower = createTower(type, x, y);
-  state.towers.push(tower);
-  if (!sandbox) {
-    state.coins -= priceOf(type);
-    state.stats.cashSpent += priceOf(type);
-  }
-  if (tower.hero) {
-    state.heroPlaced = true;
-    state.heroTower = tower;
-  }
-  selectTower(state, tower);
-  updateShop(state);
-  updatePanel(state);
-  return true;
-}
-
 function updatePanel(state) {
-  if (!panelEl) return;
+  if (!panelInfoEl) return;
   const tower = state.selectedTower;
   if (!tower) {
-    panelEl.innerHTML = '<p>Select a tower for details.</p>';
+    panelInfoEl.innerHTML = '<p>Select a tower for details.</p>';
     return;
   }
   const tiers = `A${tower.tiers.A} / B${tower.tiers.B}`;
@@ -244,12 +183,12 @@ function updatePanel(state) {
     `<p>Range: ${Math.round(tower.range)} | Damage: ${Math.round(tower.damage)} | Fire rate: ${(tower.fireRate).toFixed(2)}s</p>`,
     `<p>Priority: <button data-action="priority">${tower.priority}</button></p>`,
     `<p>Sell refund: $${tower.sellValue}</p>`,
+    '<div class="upgrades"><strong>Upgrades</strong><div class="paths"></div></div>',
+    '<div class="abilities"><strong>Abilities</strong><div class="ability-buttons"></div></div>',
+    '<p><button data-action="sell">Sell</button></p>',
   ];
-  lines.push('<div class="upgrades"><strong>Upgrades</strong><div class="paths"></div></div>');
-  lines.push('<div class="abilities"><strong>Abilities</strong><div class="ability-buttons"></div></div>');
-  lines.push('<p><button data-action="sell">Sell</button></p>');
-  panelEl.innerHTML = lines.join('');
-  const pathContainer = panelEl.querySelector('.paths');
+  panelInfoEl.innerHTML = lines.join('');
+  const pathContainer = panelInfoEl.querySelector('.paths');
   for (const path of ['A', 'B']) {
     const tier = tower.tiers[path] + 1;
     const btn = document.createElement('button');
@@ -261,13 +200,16 @@ function updatePanel(state) {
       btn.textContent = `${path}-Path maxed`;
     } else {
       btn.textContent = `${path}${tier}: $${info.price}`;
-      const can = upgrades.canApplyUpgrade(state, tower, path);
+      let can = upgrades.canApplyUpgrade(state, tower, path);
+      if (state.dev.unlockAll) {
+        can = { ok: true, info, tier };
+      }
       btn.disabled = !can.ok;
-      if (!can.ok) btn.title = can.reason || '';
+      if (!can.ok && can.reason) btn.title = can.reason;
     }
     pathContainer.appendChild(btn);
   }
-  const abilityWrap = panelEl.querySelector('.ability-buttons');
+  const abilityWrap = panelInfoEl.querySelector('.ability-buttons');
   for (const ability of abilities.list()) {
     if (!abilities.isUnlocked(ability.id, state)) continue;
     const status = abilities.uiStatus(ability.id, state);
@@ -331,6 +273,7 @@ function setupPanelInteractions(state) {
         }
         selectTower(state, null);
         updateShop(state);
+        if (devTools) devTools.forceUpdate();
         toast('Tower sold');
       }
     } else if (action === 'priority' && state.selectedTower) {
@@ -339,17 +282,39 @@ function setupPanelInteractions(state) {
       updatePanel(state);
     } else if (action === 'upgrade' && state.selectedTower) {
       const path = btn.dataset.path;
-      const check = upgrades.canApplyUpgrade(state, state.selectedTower, path);
-      if (!check.ok) {
-        toast(check.reason || 'Cannot upgrade');
+      const tier = state.selectedTower.tiers[path] + 1;
+      const info = upgrades.getUpgradeInfo(state.selectedTower.type, path, tier);
+      if (!info) {
+        toast('No upgrade available');
         return;
       }
-      const price = check.info.price;
-      if (upgrades.applyUpgrade(state, state.selectedTower, path)) {
-        if (!sandbox) state.stats.cashSpent += price;
-        updateShop(state);
-        updatePanel(state);
+      if (state.dev.unlockAll) {
+        const prevSandbox = state.sandbox;
+        const prevCoins = state.coins;
+        state.sandbox = true;
+        state.coins = Math.max(state.coins, info.price);
+        const ok = upgrades.applyUpgrade(state, state.selectedTower, path);
+        state.sandbox = prevSandbox;
+        state.coins = prevCoins;
+        if (ok) {
+          updatePanel(state);
+        } else {
+          toast('Upgrade failed');
+        }
+      } else {
+        const check = upgrades.canApplyUpgrade(state, state.selectedTower, path);
+        if (!check.ok) {
+          toast(check.reason || 'Cannot upgrade');
+          return;
+        }
+        const price = check.info.price;
+        if (upgrades.applyUpgrade(state, state.selectedTower, path)) {
+          if (!sandbox) state.stats.cashSpent += price;
+          updateShop(state);
+          updatePanel(state);
+        }
       }
+      if (devTools) devTools.forceUpdate();
     } else if (action === 'ability') {
       const abilityId = btn.dataset.ability;
       if (state.triggerAbility) state.triggerAbility(abilityId);
@@ -367,6 +332,21 @@ function attachHotkeys(state) {
     if (ev.key === 'F2') {
       state.debugVisible = !state.debugVisible;
     }
+    if (ev.key === 'F9') {
+      state.dev.panelOpen = !state.dev.panelOpen;
+      if (devTools) devTools.setOpen(state.dev.panelOpen);
+      ev.preventDefault();
+    }
+    if (ev.key === '[') {
+      setGameSpeed(state, state.speed - 1);
+    }
+    if (ev.key === ']') {
+      setGameSpeed(state, state.speed + 1);
+    }
+    if (/^[0-9]$/.test(ev.key)) {
+      const target = ev.key === '0' ? 10 : Number(ev.key);
+      setGameSpeed(state, target);
+    }
     for (const ability of abilities.list()) {
       if (ability.hotkey === ev.key) {
         if (state.triggerAbility) state.triggerAbility(ability.id);
@@ -380,7 +360,8 @@ function setupPlacementEvents(state) {
   if (!canvas) return;
   canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
   canvas.addEventListener('pointermove', (ev) => {
-    const pos = clientToWorld(state, ev);
+    if (!state.clientToWorld) return;
+    const pos = state.clientToWorld(ev.clientX, ev.clientY);
     const grid = state.tileSize / 4;
     const snapX = Math.round(pos.x / grid) * grid;
     const snapY = Math.round(pos.y / grid) * grid;
@@ -394,7 +375,8 @@ function setupPlacementEvents(state) {
     }
   });
   canvas.addEventListener('pointerdown', (ev) => {
-    const pos = clientToWorld(state, ev);
+    if (!state.clientToWorld) return;
+    const pos = state.clientToWorld(ev.clientX, ev.clientY);
     if (ev.button === 2) {
       state.placing = false;
       state.ghost.type = null;
@@ -407,6 +389,7 @@ function setupPlacementEvents(state) {
         if (!placed) state.ghost.type = null;
       }
       updateShop(state);
+      if (devTools) devTools.forceUpdate();
       return;
     }
     let best = null;
@@ -420,6 +403,232 @@ function setupPlacementEvents(state) {
     }
     selectTower(state, best);
   });
+}
+
+function validatePlacement(state, x, y, type) {
+  const radius = BALANCE.global.baseRadius;
+  if (!type) return { ok: false, reason: 'No tower selected' };
+  if (x < radius || y < radius || x > state.worldW - radius || y > state.worldH - radius) {
+    return { ok: false, reason: 'Bounds' };
+  }
+  const pathClear = state.tileSize * BALANCE.global.pathClearFactor;
+  for (const lane of state.lanes) {
+    if (pointToPolylineDistance(x, y, lane) < pathClear) {
+      return { ok: false, reason: 'Path too close' };
+    }
+  }
+  for (const tower of state.towers) {
+    if (dist2(x, y, tower.x, tower.y) < (radius * 2) ** 2) {
+      return { ok: false, reason: 'Overlap' };
+    }
+  }
+  if (type === 'Hero' && state.heroPlaced) {
+    return { ok: false, reason: 'Hero already placed' };
+  }
+  if (!state.dev.freePlacement && !sandbox) {
+    const price = priceOf(type);
+    if (state.coins < price) return { ok: false, reason: 'Coins' };
+  }
+  return { ok: true };
+}
+
+function placeTower(state, x, y, type) {
+  const valid = validatePlacement(state, x, y, type);
+  if (!valid.ok) {
+    toast(valid.reason);
+    return false;
+  }
+  const tower = createTower(type, x, y);
+  state.towers.push(tower);
+  if (!sandbox && !state.dev.freePlacement) {
+    const cost = priceOf(type);
+    state.coins -= cost;
+    state.stats.cashSpent += cost;
+  }
+  if (tower.hero) {
+    state.heroPlaced = true;
+    state.heroTower = tower;
+  }
+  selectTower(state, tower);
+  updateShop(state);
+  if (devTools) devTools.forceUpdate();
+  return true;
+}
+
+function buildDevPanel(state, setSpeed, spawnTests, skipWaveFn, clearEnemiesFn) {
+  if (!panelEl) return null;
+  const container = document.createElement('div');
+  container.id = 'dev-panel';
+  container.style.marginTop = '12px';
+  container.style.padding = '10px';
+  container.style.background = 'rgba(0,0,0,0.55)';
+  container.style.color = '#fff';
+  container.style.borderRadius = '8px';
+  container.style.fontSize = '12px';
+  container.style.display = 'none';
+  container.style.gap = '8px';
+
+  const title = document.createElement('div');
+  title.textContent = 'Dev Cheats (F9)';
+  title.style.fontWeight = '600';
+  title.style.marginBottom = '6px';
+  container.appendChild(title);
+
+  const coinsRow = document.createElement('div');
+  coinsRow.style.display = 'flex';
+  coinsRow.style.flexWrap = 'wrap';
+  coinsRow.style.gap = '6px';
+  coinsRow.style.alignItems = 'center';
+  const coinsLabel = document.createElement('span');
+  coinsRow.appendChild(coinsLabel);
+  const add500 = document.createElement('button');
+  add500.textContent = '+500';
+  add500.addEventListener('click', () => {
+    state.coins += 500;
+    updateShop(state);
+    sync();
+  });
+  coinsRow.appendChild(add500);
+  const add5000 = document.createElement('button');
+  add5000.textContent = '+5000';
+  add5000.addEventListener('click', () => {
+    state.coins += 5000;
+    updateShop(state);
+    sync();
+  });
+  coinsRow.appendChild(add5000);
+  const setInput = document.createElement('input');
+  setInput.type = 'number';
+  setInput.placeholder = 'Coins';
+  setInput.style.width = '72px';
+  const setBtn = document.createElement('button');
+  setBtn.textContent = 'Set';
+  setBtn.addEventListener('click', () => {
+    const value = parseInt(setInput.value, 10);
+    if (Number.isFinite(value) && value >= 0) {
+      state.coins = value;
+      updateShop(state);
+      sync();
+    }
+  });
+  coinsRow.appendChild(setInput);
+  coinsRow.appendChild(setBtn);
+  container.appendChild(coinsRow);
+
+  const speedRow = document.createElement('div');
+  speedRow.style.display = 'flex';
+  speedRow.style.alignItems = 'center';
+  speedRow.style.gap = '8px';
+  const speedLabel = document.createElement('span');
+  speedRow.appendChild(speedLabel);
+  const speedSlider = document.createElement('input');
+  speedSlider.type = 'range';
+  speedSlider.min = '1';
+  speedSlider.max = '10';
+  speedSlider.value = String(state.speed);
+  speedSlider.addEventListener('input', () => {
+    setSpeed(state, Number(speedSlider.value));
+    sync();
+  });
+  speedRow.appendChild(speedSlider);
+  container.appendChild(speedRow);
+
+  const roundRow = document.createElement('div');
+  roundRow.style.display = 'flex';
+  roundRow.style.flexWrap = 'wrap';
+  roundRow.style.gap = '6px';
+  const skipBtn = document.createElement('button');
+  skipBtn.textContent = 'Skip Wave';
+  skipBtn.addEventListener('click', () => {
+    skipWaveFn(state);
+    sync();
+  });
+  const clearBtn = document.createElement('button');
+  clearBtn.textContent = 'Clear Enemies';
+  clearBtn.addEventListener('click', () => {
+    clearEnemiesFn(state);
+    sync();
+  });
+  roundRow.appendChild(skipBtn);
+  roundRow.appendChild(clearBtn);
+  container.appendChild(roundRow);
+
+  const togglesRow = document.createElement('div');
+  togglesRow.style.display = 'flex';
+  togglesRow.style.flexWrap = 'wrap';
+  togglesRow.style.gap = '6px';
+  const unlockBtn = document.createElement('button');
+  const freeBtn = document.createElement('button');
+  const livesBtn = document.createElement('button');
+  unlockBtn.addEventListener('click', () => {
+    state.dev.unlockAll = !state.dev.unlockAll;
+    updatePanel(state);
+    sync();
+  });
+  freeBtn.addEventListener('click', () => {
+    state.dev.freePlacement = !state.dev.freePlacement;
+    updateShop(state);
+    sync();
+  });
+  livesBtn.addEventListener('click', () => {
+    state.dev.infiniteLives = !state.dev.infiniteLives;
+    sync();
+  });
+  togglesRow.appendChild(unlockBtn);
+  togglesRow.appendChild(freeBtn);
+  togglesRow.appendChild(livesBtn);
+  container.appendChild(togglesRow);
+
+  const spawnRow = document.createElement('div');
+  spawnRow.style.display = 'flex';
+  spawnRow.style.flexWrap = 'wrap';
+  spawnRow.style.gap = '6px';
+  const spawnButtons = [
+    ['Test Grunts', []],
+    ['Test Camo', ['camo']],
+    ['Test Lead', ['lead']],
+    ['Test Fortified', ['fortified']],
+  ];
+  for (const [label, traits] of spawnButtons) {
+    const btn = document.createElement('button');
+    btn.textContent = label;
+    btn.addEventListener('click', () => {
+      spawnTests(state, traits);
+    });
+    spawnRow.appendChild(btn);
+  }
+  container.appendChild(spawnRow);
+
+  function updateToggle(button, text, active) {
+    button.textContent = `${text}: ${active ? 'ON' : 'OFF'}`;
+    button.classList.toggle('active', active);
+  }
+
+  function sync() {
+    coinsLabel.textContent = `Coins: ${Math.floor(state.coins)}`;
+    speedLabel.textContent = `Speed x${state.speed}`;
+    speedSlider.value = String(state.speed);
+    updateToggle(unlockBtn, 'Unlock Upgrades', state.dev.unlockAll);
+    updateToggle(freeBtn, 'Free Placement', state.dev.freePlacement);
+    updateToggle(livesBtn, 'Infinite Lives', state.dev.infiniteLives);
+  }
+
+  const throttled = throttle(sync, 80);
+  sync();
+
+  return {
+    el: container,
+    setOpen(open) {
+      container.style.display = open ? 'block' : 'none';
+    },
+    toggle() {
+      this.setOpen(container.style.display !== 'block');
+    },
+    update() {
+      throttled();
+    },
+    forceUpdate: sync,
+  };
 }
 
 function startWave(state) {
@@ -475,6 +684,50 @@ function endWave(state) {
   }
   updateSendButton(state);
   updateShop(state);
+  if (devTools) devTools.forceUpdate();
+}
+
+function devSkipWave(state) {
+  if (!state.waveActive) {
+    const next = state.waveIndex + 1;
+    if (!state.waves[next]) {
+      toast('No more waves to skip');
+      return;
+    }
+    startWave(state);
+  }
+  state.spawnQueue.clear();
+  state.enemies.length = 0;
+  endWave(state);
+}
+
+function devClearEnemies(state) {
+  if (state.enemies.length) {
+    state.enemies.length = 0;
+  }
+  if (state.waveActive && state.spawnQueue.isEmpty()) {
+    endWave(state);
+  }
+}
+
+function spawnTestGroup(state, traits) {
+  const spawnTraits = traits.slice();
+  let type = 'Grunt';
+  if (spawnTraits.includes('fortified')) type = 'Shielded';
+  else if (spawnTraits.includes('camo')) type = 'Runner';
+  else if (spawnTraits.includes('lead')) type = 'Grunt';
+  const startAt = state.gameTime + 0.3;
+  for (let i = 0; i < 10; i++) {
+    state.spawnQueue.add({
+      at: startAt + i * 0.25,
+      type,
+      lane: 0,
+      traits: spawnTraits,
+      hpMul: 1,
+    });
+  }
+  state.waveActive = true;
+  updateSendButton(state);
 }
 
 function setupControls(state) {
@@ -482,8 +735,7 @@ function setupControls(state) {
     if (!state.waveActive) startWave(state);
   });
   if (btnSpeed) btnSpeed.addEventListener('click', () => {
-    state.speed = state.speed === 1 ? 2 : 1;
-    updateSpeedButton(state);
+    setGameSpeed(state, state.speed === 1 ? 2 : 1);
   });
   if (btnPause) btnPause.addEventListener('click', () => {
     state.paused = !state.paused;
@@ -520,21 +772,28 @@ async function bootstrap() {
     stats: { pops: 0, damage: 0, cashSpent: 0, cashEarned: 0 },
     gameTime: 0,
     debugVisible: sandbox,
-    viewScale: 1,
-    viewOffsetX: 0,
-    viewOffsetY: 0,
+    clientToWorld: clientToWorldFactory(getViewport, 1, 1),
+    dev: {
+      panelOpen: sandbox || devParam,
+      freePlacement: false,
+      infiniteLives: false,
+      unlockAll: false,
+    },
   };
 
   abilities.ensureState(state);
+  refreshViewport(state);
 
   state.onEnemyKilled = (enemy, reward) => {
     state.stats.cashEarned += reward;
     const xpGain = BALANCE.hero.xpPerPop * Math.max(1, enemy.reward);
     grantHeroXP(state, xpGain);
     updateShop(state);
+    if (devTools) devTools.forceUpdate();
   };
 
   state.onEnemyEscaped = () => {
+    if (state.dev.infiniteLives) return;
     if (state.lives <= 0) {
       toast('Game Over');
       state.paused = true;
@@ -551,13 +810,28 @@ async function bootstrap() {
     state.worldW = baked.worldW;
     state.worldH = baked.worldH;
     const start = startStateFromMap(map);
-    state.coins = sandbox ? 9999 : start.coins;
+    const minPrice = Math.min(...Object.values(BALANCE.towers).map((t) => t.price));
+    state.coins = sandbox ? 9999 : Math.max(start.coins, minPrice);
     state.lives = start.lives;
     state.waves = wavesByName(map.waveset);
+    refreshViewport(state);
   } catch (err) {
     console.error(err);
     toast('Failed to load map');
     return;
+  }
+
+  if (panelEl) {
+    panelEl.innerHTML = '';
+    panelInfoEl = document.createElement('div');
+    panelInfoEl.className = 'tower-info';
+    panelEl.appendChild(panelInfoEl);
+  }
+  devTools = buildDevPanel(state, setGameSpeed, spawnTestGroup, devSkipWave, devClearEnemies);
+  if (devTools && panelEl) {
+    panelEl.appendChild(devTools.el);
+    devTools.setOpen(state.dev.panelOpen);
+    devTools.forceUpdate();
   }
 
   buildShop(state);
@@ -569,9 +843,9 @@ async function bootstrap() {
   updateSpeedButton(state);
   updatePauseButton(state);
   updateSendButton(state);
-  resizeCanvas(state);
-  window.addEventListener('resize', () => resizeCanvas(state));
   updatePanel(state);
+  if (devTools) devTools.forceUpdate();
+  window.addEventListener('resize', () => refreshViewport(state));
 
   let lastTime = nowSeconds();
 
@@ -607,14 +881,18 @@ async function bootstrap() {
 
   const loop = () => {
     const now = nowSeconds();
-    let frameDt = now - lastTime;
+    let rawDt = now - lastTime;
     lastTime = now;
-    if (frameDt > 0.3) frameDt = 0.3;
-    const scaled = state.paused ? 0 : clamp(frameDt * state.speed, 0, BALANCE.global.dtCap);
+    rawDt = Math.min(rawDt, 0.25);
+    const scaled = state.paused ? 0 : Math.min(BALANCE.global.dtCap || 0.05, rawDt * state.speed);
     if (!state.paused) {
       state.gameTime += scaled;
       state.spawnQueue.flush(state.gameTime, (entry) => spawnEnemy(state, entry));
+      const livesBefore = state.lives;
       advanceEnemies(state, scaled, state.gameTime, diff);
+      if (state.dev.infiniteLives && state.lives < livesBefore) {
+        state.lives = livesBefore;
+      }
       updateTowers(state, scaled, state.gameTime);
       updateBullets(state, scaled, state.gameTime, diff);
       abilities.update(scaled, state);
@@ -622,14 +900,9 @@ async function bootstrap() {
         endWave(state);
       }
     }
-    const scale = state.viewScale || 1;
-    const offsetX = (state.viewOffsetX || 0) * scale;
-    const offsetY = (state.viewOffsetY || 0) * scale;
-    ctx.save();
-    ctx.setTransform(scale, 0, 0, scale, offsetX, offsetY);
     render(state, ctx);
-    ctx.restore();
     refreshDebug(state);
+    if (devTools) devTools.update();
     requestAnimationFrame(loop);
   };
 
