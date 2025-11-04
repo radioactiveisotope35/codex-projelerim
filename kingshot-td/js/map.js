@@ -1,97 +1,67 @@
-import { pointInRect } from './utils.js';
-
 export async function loadMap(name = 'meadow') {
-  const url = `./maps/${name}.json`;
-  const res = await fetch(url, { cache: 'no-store' });
-  if (!res.ok) {
-    throw new Error(`Failed to load map data from ${url} (${res.status})`);
+  const safeName = String(name || 'meadow');
+  const url = `./maps/${safeName}.json`;
+  let response;
+  try {
+    response = await fetch(url, { cache: 'no-store' });
+  } catch (err) {
+    throw new Error(`Failed to fetch map ${url}: ${err.message}`);
   }
-  return res.json();
+  if (!response.ok) {
+    throw new Error(`Failed to load map ${url}: HTTP ${response.status}`);
+  }
+  return response.json();
 }
 
-export function pathToWorld(points, tileSize) {
-  return points.map(([tx, ty]) => ({
+function tileToWorld(tileSize, tx, ty) {
+  return {
     x: (tx + 0.5) * tileSize,
-    y: (ty + 0.5) * tileSize,
-  }));
-}
-
-function buildLane(path, tileSize) {
-  const points = pathToWorld(path, tileSize);
-  const segments = [];
-  let total = 0;
-  for (let i = 0; i < points.length - 1; i++) {
-    const from = points[i];
-    const to = points[i + 1];
-    const dx = to.x - from.x;
-    const dy = to.y - from.y;
-    const len = Math.hypot(dx, dy) || 0.0001;
-    segments.push({
-      from,
-      to,
-      len,
-      dx: dx / len,
-      dy: dy / len,
-      start: total,
-    });
-    total += len;
-  }
-  const lane = {
-    points,
-    segments,
-    length: total,
+    y: (ty + 0.5) * tileSize
   };
-  return lane;
 }
 
 export function bakeLanes(map) {
   const tileSize = map.tileSize;
-  const lanes = (map.paths || []).map((path, idx) => {
-    const lane = buildLane(path, tileSize);
-    lane.index = idx;
-    return lane;
-  });
-  return {
-    tileSize,
-    width: map.width * tileSize,
-    height: map.height * tileSize,
-    lanes,
-  };
-}
-
-export function buildPads(map) {
-  const tileSize = map.tileSize;
-  const size = tileSize * 0.75;
-  const offset = (tileSize - size) / 2;
-  return (map.buildable || []).map(([tx, ty]) => {
-    const pad = {
-      x: tx * tileSize + offset,
-      y: ty * tileSize + offset,
-      w: size,
-      h: size,
-      tx,
-      ty,
-      centerX: tx * tileSize + tileSize / 2,
-      centerY: ty * tileSize + tileSize / 2,
-      occupied: false,
-      hover: false,
+  const lanes = (map.paths || []).map(path => {
+    const points = path.map(([tx, ty]) => tileToWorld(tileSize, tx, ty));
+    const segments = [];
+    let totalLength = 0;
+    for (let i = 0; i < points.length - 1; i++) {
+      const a = points[i];
+      const b = points[i + 1];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.hypot(dx, dy);
+      segments.push({
+        ax: a.x,
+        ay: a.y,
+        bx: b.x,
+        by: b.y,
+        len,
+        start: totalLength
+      });
+      totalLength += len;
+    }
+    return {
+      points,
+      segments,
+      length: totalLength
     };
-    return pad;
   });
+
+  return {
+    lanes,
+    tileSize,
+    width: map.width,
+    height: map.height,
+    worldW: map.width * tileSize,
+    worldH: map.height * tileSize
+  };
 }
 
 export function startStateFromMap(map) {
   return {
-    coins: map.startCoins ?? 0,
-    lives: map.startLives ?? 20,
+    coins: map.startCoins,
+    lives: map.startLives
   };
-}
-
-export function padAt(pads, x, y) {
-  for (const pad of pads) {
-    if (!pad.occupied && pointInRect(x, y, pad)) {
-      return pad;
-    }
-  }
-  return null;
 }
