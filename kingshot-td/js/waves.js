@@ -1,6 +1,7 @@
 function createBuilder() {
   const waves = {};
   let current = 1;
+
   const api = {
     spawn(type, count = 10, gap = 0.6, lane = 0, hpMul = 1) {
       if (!waves[current]) waves[current] = [];
@@ -13,14 +14,17 @@ function createBuilder() {
       return api;
     }
   };
+
   function w(n) {
     current = n;
     if (!waves[current]) waves[current] = [];
     return api;
   }
+
   function build() {
     return waves;
   }
+
   return { w, build };
 }
 

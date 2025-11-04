@@ -1,4 +1,12 @@
-import { clamp, dist2, nowSeconds, pointToPolylineDistance, circleCircleOverlap, on } from './utils.js';
+import {
+  clamp,
+  dist2,
+  nowSeconds,
+  pointToPolylineDistance,
+  circleCircleOverlap,
+  projectAlongPolyline,
+  on
+} from './utils.js';
 import { loadMap, bakeLanes, startStateFromMap } from './map.js';
 import { render } from './renderer.js';
 import {
@@ -18,6 +26,9 @@ import { wavesByName } from './waves.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
+if (canvas) {
+  canvas.style.touchAction = 'none';
+}
 
 const hudCoins = document.getElementById('hud-coins');
 const hudLives = document.getElementById('hud-lives');
@@ -31,8 +42,6 @@ const toastsEl = document.getElementById('toasts');
 
 const state = {
   ready: false,
-  gameOver: false,
-  victoryShown: false,
   map: null,
   lanes: [],
   tileSize: 64,
@@ -44,6 +53,8 @@ const state = {
   maxWave: 0,
   speed: 1,
   paused: false,
+  gameOver: false,
+  victoryShown: false,
   selectedTowerType: 'Archer',
   selectedTowerId: null,
   placing: false,
@@ -55,7 +66,8 @@ const state = {
   spawning: false,
   WAVES: {},
   pointer: { x: 0, y: 0 },
-  view: { width: 0, height: 0, dpr: window.devicePixelRatio || 1, scale: 1, offsetX: 0, offsetY: 0 }
+  view: { width: 0, height: 0, dpr: window.devicePixelRatio || 1, scale: 1, offsetX: 0, offsetY: 0 },
+  offscreen: true
 };
 
 const shopCards = new Map();
@@ -148,6 +160,7 @@ function updateTowerPanel() {
 }
 
 function resizeCanvas() {
+  if (!canvas) return;
   const rect = canvas.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   canvas.width = rect.width * dpr;
@@ -168,7 +181,7 @@ function resizeCanvas() {
 }
 
 function clientToWorld(evt) {
-  if (!state.ready) return null;
+  if (!canvas || !state.ready) return null;
   const rect = canvas.getBoundingClientRect();
   const x = evt.clientX - rect.left;
   const y = evt.clientY - rect.top;
@@ -286,11 +299,7 @@ function selectTowerNear(x, y) {
       best = tower;
     }
   }
-  if (best) {
-    selectTower(best);
-  } else {
-    clearTowerSelection();
-  }
+  selectTower(best || null);
 }
 
 function placeTowerAt(x, y, type) {
@@ -318,25 +327,12 @@ function showPlacementFailure(reason) {
 }
 
 function canStartNextWave() {
-  if (!state.ready || state.gameOver) return false;
+  if (!state.ready || state.gameOver || state.victoryShown) return false;
   if (!state.WAVES) return false;
   if (state.waveIndex >= state.maxWave) return false;
-  if (state.spawnQueue.length > 0) return false;
+  if (state.spawnQueue.length > 0 || state.spawning) return false;
   if (state.enemies.some(e => e.alive)) return false;
   return true;
-}
-
-function updateHUD() {
-  if (hudCoins) hudCoins.textContent = state.coins.toString();
-  if (hudLives) hudLives.textContent = state.lives.toString();
-  if (hudWave) {
-    if (state.maxWave > 0) {
-      hudWave.textContent = `Wave ${Math.min(state.waveIndex, state.maxWave)}/${state.maxWave}`;
-    } else {
-      hudWave.textContent = 'Wave 0/0';
-    }
-  }
-  updateButtons();
 }
 
 function updateButtons() {
@@ -350,12 +346,27 @@ function updateButtons() {
   if (btnSend) {
     if (state.waveIndex >= state.maxWave) {
       btnSend.textContent = state.victoryShown ? 'Victory Achieved' : 'All Waves Sent';
+      btnSend.disabled = true;
     } else {
       btnSend.textContent = `Send Wave ${state.waveIndex + 1}`;
+      btnSend.disabled = !canStartNextWave();
     }
-    btnSend.disabled = !canStartNextWave();
-    if (state.gameOver || state.victoryShown) btnSend.disabled = true;
+    if (!state.ready) btnSend.disabled = true;
   }
+}
+
+function updateHUD() {
+  if (hudCoins) hudCoins.textContent = state.coins.toString();
+  if (hudLives) hudLives.textContent = state.lives.toString();
+  if (hudWave) {
+    if (state.maxWave > 0) {
+      const shownWave = Math.min(state.waveIndex, state.maxWave);
+      hudWave.textContent = `Wave ${shownWave}/${state.maxWave}`;
+    } else {
+      hudWave.textContent = 'Wave 0/0';
+    }
+  }
+  updateButtons();
 }
 
 function startWave(number) {
@@ -370,6 +381,7 @@ function startWave(number) {
     return;
   }
   state.waveIndex = number;
+  state.spawnQueue.length = 0;
   const now = nowSeconds();
   let cursor = now + 0.6;
   for (const segment of def) {
@@ -393,18 +405,14 @@ function startWave(number) {
 }
 
 function flushSpawns(now) {
-  for (let i = 0; i < state.spawnQueue.length; ) {
-    const spawn = state.spawnQueue[i];
-    if (spawn.at <= now) {
-      state.spawnQueue.splice(i, 1);
-      const laneIndex = clamp(Math.floor(spawn.lane || 0), 0, state.lanes.length - 1);
-      const lane = state.lanes[laneIndex];
-      if (!lane) continue;
-      const enemy = createEnemy(spawn.type, laneIndex, lane, spawn.hpMul);
-      state.enemies.push(enemy);
-    } else {
-      break;
-    }
+  while (state.spawnQueue.length > 0 && state.spawnQueue[0].at <= now) {
+    const spawn = state.spawnQueue.shift();
+    const laneIndex = state.lanes.length > 0 ? clamp(Math.floor(spawn.lane || 0), 0, state.lanes.length - 1) : 0;
+    const lane = state.lanes[laneIndex];
+    if (!lane) continue;
+    const offset = state.offscreen ? -Math.random() * 12 : 0;
+    const enemy = createEnemy(spawn.type, laneIndex, lane, spawn.hpMul, offset);
+    state.enemies.push(enemy);
   }
   if (state.spawnQueue.length === 0) {
     state.spawning = false;
@@ -415,54 +423,21 @@ function updateEnemies(dt, now) {
   for (const enemy of state.enemies) {
     if (!enemy.alive) continue;
     const lane = state.lanes[enemy.lane];
-    if (!lane || lane.segments.length === 0) {
+    if (!lane || lane.points.length < 2) {
       enemy.alive = false;
-      enemy.reachedEnd = true;
+      enemy.escaped = true;
       continue;
     }
     resetEnemySlow(enemy, now);
-    let remaining = enemy.baseSpeed * enemy.slowMul * dt;
-    while (remaining > 0 && enemy.alive) {
-      const seg = lane.segments[enemy.segIndex];
-      if (!seg) {
-        enemy.alive = false;
-        enemy.reachedEnd = true;
-        break;
-      }
-      const segRemaining = seg.len - enemy.segDistance;
-      if (segRemaining <= 0.0001) {
-        enemy.segIndex += 1;
-        enemy.segDistance = 0;
-        continue;
-      }
-      if (remaining < segRemaining) {
-        enemy.segDistance += remaining;
-        enemy.pathOffset += remaining;
-        remaining = 0;
-      } else {
-        enemy.segIndex += 1;
-        enemy.pathOffset += segRemaining;
-        enemy.segDistance = 0;
-        remaining -= segRemaining;
-        if (enemy.segIndex >= lane.segments.length) {
-          enemy.alive = false;
-          enemy.reachedEnd = true;
-          break;
-        }
-      }
-    }
-    enemy.pathOffset = Math.min(enemy.pathOffset, enemy.pathLength || enemy.pathOffset);
-    if (enemy.reachedEnd) {
-      const end = lane.points[lane.points.length - 1];
-      enemy.x = end.x;
-      enemy.y = end.y;
-    } else {
-      const seg = lane.segments[enemy.segIndex];
-      if (seg) {
-        const ratio = seg.len > 0 ? enemy.segDistance / seg.len : 0;
-        enemy.x = seg.ax + (seg.bx - seg.ax) * ratio;
-        enemy.y = seg.ay + (seg.by - seg.ay) * ratio;
-      }
+    const speed = enemy.baseSpeed * enemy.slowMul;
+    enemy.distance += speed * dt;
+    const pos = projectAlongPolyline(lane, enemy.distance);
+    enemy.x = pos.x;
+    enemy.y = pos.y;
+    const total = lane.length ?? enemy.pathLength;
+    if (pos.done || enemy.distance >= total + 1) {
+      enemy.alive = false;
+      enemy.escaped = true;
     }
   }
 }
@@ -471,9 +446,9 @@ function cleanupEnemies() {
   for (let i = state.enemies.length - 1; i >= 0; i--) {
     const enemy = state.enemies[i];
     if (enemy.alive) continue;
-    if (enemy.reachedEnd && !enemy.goalProcessed) {
+    if (enemy.escaped && !enemy.lifeDeducted) {
       state.lives = Math.max(0, state.lives - 1);
-      enemy.goalProcessed = true;
+      enemy.lifeDeducted = true;
       if (state.lives === 0 && !state.gameOver) {
         state.gameOver = true;
         state.paused = true;
@@ -502,8 +477,6 @@ function applyBulletImpact(bullet, target, now) {
         victims.push(enemy);
       }
     }
-  } else if (target && target.alive) {
-    victims.push(target);
   } else if (target) {
     victims.push(target);
   }
@@ -513,7 +486,7 @@ function applyBulletImpact(bullet, target, now) {
     if (bullet.slowPct > 0) {
       applySlow(enemy, bullet.slowPct, now);
     }
-    if (result.killed) {
+    if (result.killed && !enemy.escaped) {
       coinsEarned += enemy.reward;
     }
   }
@@ -527,137 +500,143 @@ function updateBullets(dt, now) {
   for (let i = state.bullets.length - 1; i >= 0; i--) {
     const bullet = state.bullets[i];
     bullet.life += dt;
-    if (bullet.life > CONFIG.bulletLifetime) {
-      state.bullets.splice(i, 1);
-      continue;
-    }
     const target = findEnemyById(bullet.targetId);
     if (!target) {
-      state.bullets.splice(i, 1);
+      if (bullet.life > CONFIG.bulletLifetime) {
+        state.bullets.splice(i, 1);
+      }
       continue;
     }
     const dx = target.x - bullet.x;
     const dy = target.y - bullet.y;
     const distance = Math.hypot(dx, dy);
     const step = bullet.speed * dt;
-    if (distance <= step + 1) {
+    if (distance <= step || distance === 0) {
       bullet.x = target.x;
       bullet.y = target.y;
       applyBulletImpact(bullet, target, now);
       state.bullets.splice(i, 1);
       continue;
     }
-    if (distance > 0) {
-      bullet.x += (dx / distance) * step;
-      bullet.y += (dy / distance) * step;
+    bullet.x += (dx / distance) * step;
+    bullet.y += (dy / distance) * step;
+    if (bullet.life > CONFIG.bulletLifetime) {
+      state.bullets.splice(i, 1);
     }
   }
 }
 
+function acquireTarget(tower) {
+  const range2 = tower.range * tower.range;
+  let best = null;
+  let bestProgress = -Infinity;
+  for (const enemy of state.enemies) {
+    if (!enemy.alive) continue;
+    const d2 = dist2(tower.x, tower.y, enemy.x, enemy.y);
+    if (d2 > range2) continue;
+    if (!best || enemy.distance > bestProgress) {
+      best = enemy;
+      bestProgress = enemy.distance;
+    }
+  }
+  return best;
+}
+
 function updateTowers(dt, now) {
-  if (state.enemies.length === 0) return;
   for (const tower of state.towers) {
     tower.cooldown = Math.max(0, tower.cooldown - dt);
-    const range2 = tower.range * tower.range;
-    let best = null;
-    let bestProgress = -Infinity;
-    for (const enemy of state.enemies) {
-      if (!enemy.alive) continue;
-      const d2 = dist2(tower.x, tower.y, enemy.x, enemy.y);
-      if (d2 > range2) continue;
-      if (enemy.pathOffset > bestProgress) {
-        bestProgress = enemy.pathOffset;
-        best = enemy;
-      }
-    }
-    if (best && tower.cooldown <= 0) {
-      const bullet = createBullet(tower, best.id);
-      state.bullets.push(bullet);
-      tower.cooldown += 1 / Math.max(0.01, tower.fireRate);
-    }
+    if (tower.cooldown > 0) continue;
+    const target = acquireTarget(tower);
+    if (!target) continue;
+    const bullet = createBullet(tower, target.id);
+    state.bullets.push(bullet);
+    tower.cooldown = 1 / Math.max(0.01, tower.def.fireRate);
   }
 }
 
 function handleVictoryCheck() {
-  if (state.victoryShown || state.gameOver) return;
+  if (!state.ready || state.victoryShown || state.gameOver) return;
   if (state.waveIndex < state.maxWave) return;
-  const activeEnemies = state.enemies.some(e => e.alive);
-  if (activeEnemies) return;
-  if (state.spawnQueue.length > 0) return;
+  if (state.spawnQueue.length > 0 || state.spawning) return;
+  if (state.enemies.some(e => e.alive)) return;
   state.victoryShown = true;
   state.paused = true;
-  showToast('Victory!');
+  showToast('Victory! All waves cleared.');
   updateButtons();
 }
 
 function setupUI() {
   if (btnSend) {
-    on(btnSend, 'click', () => {
-      if (!canStartNextWave()) {
-        showToast('Finish current wave first.');
-        return;
+    btnSend.addEventListener('click', () => {
+      if (canStartNextWave()) {
+        startWave(state.waveIndex + 1);
       }
-      startWave(state.waveIndex + 1);
     });
   }
   if (btnSpeed) {
-    on(btnSpeed, 'click', () => {
+    btnSpeed.addEventListener('click', () => {
       state.speed = state.speed === 1 ? 2 : 1;
       updateButtons();
     });
   }
   if (btnPause) {
-    on(btnPause, 'click', () => {
+    btnPause.addEventListener('click', () => {
       if (state.gameOver || state.victoryShown) return;
       state.paused = !state.paused;
-      lastTick = nowSeconds();
       updateButtons();
     });
   }
-  on(canvas, 'pointermove', event => {
-    if (!state.ready) return;
-    const world = clientToWorld(event);
-    if (!world) return;
-    state.pointer.x = world.x;
-    state.pointer.y = world.y;
-    if (state.placing) {
-      updateGhostFromPointer();
-    }
-  });
-  on(canvas, 'pointerdown', event => {
-    if (!state.ready) return;
-    if (event.button === 2) {
-      if (state.placing) cancelPlacement();
-      event.preventDefault();
-      return;
-    }
-    if (event.button !== 0) return;
-    const world = clientToWorld(event);
-    if (!world) return;
-    state.pointer.x = world.x;
-    state.pointer.y = world.y;
-    if (state.placing && state.ghost.type) {
-      updateGhostFromPointer();
-      if (state.ghost.valid) {
-        const result = placeTowerAt(state.ghost.x, state.ghost.y, state.ghost.type);
-        if (!event.shiftKey) {
-          cancelPlacement();
+  if (canvas) {
+    on(canvas, 'pointermove', event => {
+      if (!state.ready) return;
+      const world = clientToWorld(event);
+      if (!world) return;
+      state.pointer.x = world.x;
+      state.pointer.y = world.y;
+      if (state.placing) {
+        updateGhostFromPointer();
+      }
+    });
+    on(canvas, 'pointerdown', event => {
+      if (!state.ready) return;
+      if (event.button === 2) {
+        if (state.placing) cancelPlacement();
+        event.preventDefault();
+        return;
+      }
+      if (event.button !== 0) return;
+      const world = clientToWorld(event);
+      if (!world) return;
+      state.pointer.x = world.x;
+      state.pointer.y = world.y;
+      if (state.placing && state.ghost.type) {
+        updateGhostFromPointer();
+        if (state.ghost.valid) {
+          const result = placeTowerAt(state.ghost.x, state.ghost.y, state.ghost.type);
+          if (!result.ok) {
+            showPlacementFailure(result.reason);
+          }
+          if (!event.shiftKey) {
+            cancelPlacement();
+          } else {
+            refreshGhostValidity();
+          }
         } else {
-          refreshGhostValidity();
-        }
-        if (!result.ok) {
-          showPlacementFailure(result.reason);
+          showPlacementFailure(state.ghost.reason);
         }
       } else {
-        showPlacementFailure(state.ghost.reason);
+        selectTowerNear(world.x, world.y);
       }
-    } else {
-      selectTowerNear(world.x, world.y);
-    }
-  });
-  on(canvas, 'contextmenu', event => {
-    event.preventDefault();
-  });
+    });
+    on(canvas, 'pointerleave', () => {
+      if (state.placing) {
+        state.ghost.valid = false;
+      }
+    });
+    on(canvas, 'contextmenu', event => {
+      event.preventDefault();
+    });
+  }
   on(window, 'keydown', event => {
     if (event.key === 'Escape') {
       cancelPlacement();
@@ -696,6 +675,8 @@ async function bootstrap() {
   resizeCanvas();
   const params = new URLSearchParams(window.location.search);
   const mapName = params.get('map') || 'meadow';
+  const offscreenParam = params.get('offscreen');
+  state.offscreen = offscreenParam == null ? true : offscreenParam !== '0';
   let map;
   try {
     map = await loadMap(mapName);
@@ -704,7 +685,7 @@ async function bootstrap() {
     showToast('Failed to load map data.');
     return;
   }
-  const baked = bakeLanes(map);
+  const baked = bakeLanes(map, { offscreen: state.offscreen });
   const start = startStateFromMap(map);
   state.map = map;
   state.lanes = baked.lanes;

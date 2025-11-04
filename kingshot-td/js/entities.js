@@ -2,18 +2,18 @@ import { clamp } from './utils.js';
 
 export const CONFIG = {
   towerBaseRadius: 18,
+  pathClearFactor: 0.45,
   slowDuration: 1.5,
   minDamage: 1,
-  bulletLifetime: 4,
-  pathClearFactor: 0.45
+  bulletLifetime: 4
 };
 
 export const ENEMIES = {
-  Grunt: { baseHp: 36, speed: 45, armor: 0.08, magicResist: 0.05, reward: 8 },
-  Runner: { baseHp: 22, speed: 70, armor: 0, magicResist: 0.15, reward: 7 },
-  Tank: { baseHp: 140, speed: 32, armor: 0.35, magicResist: 0.1, reward: 16 },
-  Shielded: { baseHp: 90, speed: 34, armor: 0.55, magicResist: 0.2, reward: 15 },
-  Specter: { baseHp: 70, speed: 58, armor: 0.1, magicResist: 0.45, reward: 18 }
+  Grunt: { baseHp: 40, speed: 52, armor: 0.1, reward: 8 },
+  Runner: { baseHp: 24, speed: 78, armor: 0.05, reward: 7 },
+  Tank: { baseHp: 160, speed: 32, armor: 0.4, reward: 18 },
+  Shielded: { baseHp: 110, speed: 38, armor: 0.55, reward: 16 },
+  Specter: { baseHp: 90, speed: 65, armor: 0.2, reward: 20 }
 };
 
 export const TOWERS = {
@@ -59,35 +59,32 @@ export const TOWERS = {
   }
 };
 
-let enemyId = 1;
-let towerId = 1;
-let bulletId = 1;
+let nextEnemyId = 1;
+let nextTowerId = 1;
+let nextBulletId = 1;
 
-export function createEnemy(type, laneIndex, laneData, hpMul = 1) {
+export function createEnemy(type, laneIndex, lane, hpMul = 1, distanceOffset = 0) {
   const def = ENEMIES[type] || ENEMIES.Grunt;
   const hp = def.baseHp * hpMul;
-  const firstPoint = laneData?.points?.[0] || { x: 0, y: 0 };
+  const firstPoint = lane?.points?.[0] || { x: 0, y: 0 };
   return {
-    id: enemyId++,
+    id: nextEnemyId++,
     type,
     lane: laneIndex,
-    x: firstPoint.x,
-    y: firstPoint.y,
     hp,
     maxHp: hp,
-    baseSpeed: def.speed,
-    armor: def.armor || 0,
-    magicResist: def.magicResist || 0,
     reward: def.reward || 1,
+    baseSpeed: def.speed || 40,
+    armor: clamp(def.armor ?? 0, 0, 0.95),
     alive: true,
-    reachedEnd: false,
+    escaped: false,
+    dead: false,
+    distance: distanceOffset,
     slowUntil: 0,
     slowMul: 1,
-    pathOffset: 0,
-    segIndex: 0,
-    segDistance: 0,
-    pathLength: laneData?.length || 0,
-    goalProcessed: false
+    pathLength: lane?.length ?? 0,
+    x: firstPoint.x,
+    y: firstPoint.y
   };
 }
 
@@ -97,17 +94,11 @@ export function createTower(type, x, y) {
     throw new Error(`Unknown tower type: ${type}`);
   }
   return {
-    id: towerId++,
+    id: nextTowerId++,
     type,
     x,
     y,
     range: def.range,
-    fireRate: def.fireRate,
-    damage: def.damage,
-    splashRadius: def.splashRadius,
-    slowPct: def.slowPct,
-    damageType: def.damageType,
-    bulletSpeed: def.bulletSpeed,
     cooldown: 0,
     selected: false,
     def
@@ -116,16 +107,16 @@ export function createTower(type, x, y) {
 
 export function createBullet(tower, targetId) {
   return {
-    id: bulletId++,
+    id: nextBulletId++,
     type: tower.type,
     x: tower.x,
     y: tower.y,
     targetId,
-    speed: tower.bulletSpeed,
-    damage: tower.damage,
-    damageType: tower.damageType,
-    splashRadius: tower.splashRadius,
-    slowPct: tower.slowPct,
+    speed: tower.def.bulletSpeed,
+    damage: tower.def.damage,
+    damageType: tower.def.damageType,
+    splashRadius: tower.def.splashRadius,
+    slowPct: tower.def.slowPct,
     life: 0
   };
 }
@@ -137,13 +128,12 @@ export function applyDamage(enemy, damage, damageType) {
   let actual = damage;
   if (damageType === 'physical') {
     actual *= 1 - clamp(enemy.armor, 0, 0.95);
-  } else if (damageType === 'magic') {
-    actual *= 1 - clamp(enemy.magicResist || 0, 0, 0.95);
   }
   actual = Math.max(CONFIG.minDamage, actual);
   enemy.hp = Math.max(0, enemy.hp - actual);
   if (enemy.hp === 0) {
     enemy.alive = false;
+    enemy.dead = true;
     return { killed: true, dealt: actual };
   }
   return { killed: false, dealt: actual };
@@ -151,7 +141,7 @@ export function applyDamage(enemy, damage, damageType) {
 
 export function applySlow(enemy, slowPct, now) {
   if (!enemy.alive || slowPct <= 0) return;
-  const mul = 1 - slowPct;
+  const mul = 1 - clamp(slowPct, 0, 0.95);
   enemy.slowMul = Math.min(enemy.slowMul, mul);
   enemy.slowUntil = Math.max(enemy.slowUntil, now + CONFIG.slowDuration);
 }
@@ -163,9 +153,9 @@ export function resetEnemySlow(enemy, now) {
 }
 
 export function resetIds() {
-  enemyId = 1;
-  towerId = 1;
-  bulletId = 1;
+  nextEnemyId = 1;
+  nextTowerId = 1;
+  nextBulletId = 1;
 }
 
 export const BASE_RADIUS = CONFIG.towerBaseRadius;

@@ -25,15 +25,21 @@ export function drawGround(ctx, width, height) {
   ctx.fillRect(0, 0, width, height);
 }
 
-export function drawPath(ctx, lanes, tileSize) {
+export function drawPath(ctx, lanes, tileSize, worldW, worldH) {
+  if (!lanes || lanes.length === 0) return;
   const pathWidth = tileSize * 0.55;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, worldW, worldH);
+  ctx.clip();
+
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
   ctx.lineWidth = pathWidth;
   ctx.strokeStyle = COLORS.pathFill;
   for (const lane of lanes) {
     const pts = lane.points;
-    if (!pts || pts.length === 0) continue;
+    if (!pts || pts.length < 2) continue;
     ctx.beginPath();
     ctx.moveTo(pts[0].x, pts[0].y);
     for (let i = 1; i < pts.length; i++) {
@@ -41,11 +47,12 @@ export function drawPath(ctx, lanes, tileSize) {
     }
     ctx.stroke();
   }
+
   ctx.lineWidth = Math.max(2, pathWidth * 0.18);
   ctx.strokeStyle = COLORS.pathStroke;
   for (const lane of lanes) {
     const pts = lane.points;
-    if (!pts || pts.length === 0) continue;
+    if (!pts || pts.length < 2) continue;
     ctx.beginPath();
     ctx.moveTo(pts[0].x, pts[0].y);
     for (let i = 1; i < pts.length; i++) {
@@ -53,6 +60,8 @@ export function drawPath(ctx, lanes, tileSize) {
     }
     ctx.stroke();
   }
+
+  ctx.restore();
 }
 
 function drawTowerBody(ctx, tower) {
@@ -69,7 +78,7 @@ function drawTowerBody(ctx, tower) {
 
   ctx.fillStyle = COLORS.towerAccent;
   ctx.beginPath();
-  ctx.arc(0, -baseRadius * 0.4, baseRadius * 0.45, 0, Math.PI * 2);
+  ctx.arc(0, -baseRadius * 0.35, baseRadius * 0.45, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
@@ -97,9 +106,18 @@ export function drawTowers(ctx, towers) {
   }
 }
 
-export function drawEnemies(ctx, enemies) {
+export function drawEnemies(ctx, enemies, worldW, worldH) {
+  const margin = 32;
   for (const enemy of enemies) {
     if (!enemy.alive) continue;
+    if (
+      enemy.x < -margin ||
+      enemy.y < -margin ||
+      enemy.x > worldW + margin ||
+      enemy.y > worldH + margin
+    ) {
+      continue;
+    }
     const color = COLORS.enemies[enemy.type] || '#444';
     ctx.fillStyle = color;
     ctx.beginPath();
@@ -158,9 +176,9 @@ export function render(state, ctx) {
   ctx.translate(view.offsetX, view.offsetY);
   ctx.scale(view.scale, view.scale);
 
-  drawPath(ctx, state.lanes, state.tileSize);
+  drawPath(ctx, state.lanes, state.tileSize, state.worldW, state.worldH);
   drawTowers(ctx, state.towers);
-  drawEnemies(ctx, state.enemies);
+  drawEnemies(ctx, state.enemies, state.worldW, state.worldH);
   drawBullets(ctx, state.bullets);
   if (state.placing && state.ghost.type) {
     drawPlacementGhost(ctx, state.ghost);
