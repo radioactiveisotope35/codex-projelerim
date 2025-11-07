@@ -137,7 +137,7 @@ function prioritizeTarget(tower, enemies) {
         if (enemy.t < best.enemy.t) best = { enemy, d2 };
         break;
       case 'strong':
-        if (enemy.hp > best.enemy.hp) best = { enemy, d2 };
+        if (enemy.maxHp > best.enemy.maxHp) best = { enemy, d2 };
         break;
       case 'close':
         if (d2 < best.d2) best = { enemy, d2 };
