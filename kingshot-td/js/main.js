@@ -361,9 +361,10 @@ function setupPlacementEvents(state) {
   canvas.addEventListener('pointermove', (ev) => {
     if (!state.clientToWorld) return;
     const pos = state.clientToWorld(ev.clientX, ev.clientY);
-    const grid = state.tileSize / 4;
-    const snapX = Math.round(pos.x / grid) * grid;
-    const snapY = Math.round(pos.y / grid) * grid;
+    const tileX = Math.round(pos.x / state.tileSize - 0.5);
+    const tileY = Math.round(pos.y / state.tileSize - 0.5);
+    const snapX = (tileX + 0.5) * state.tileSize;
+    const snapY = (tileY + 0.5) * state.tileSize;
     if (state.placing && state.ghost.type) {
       const check = validatePlacement(state, snapX, snapY, state.ghost.type);
       state.ghost.x = snapX;
