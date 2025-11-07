@@ -4,22 +4,15 @@ const ASSETS = [
   './index.html',
   './manifest.webmanifest',
   './js/main.js',
-  './js/engine.js',
   './js/renderer.js',
-  './js/input.js',
-  './js/scenes.js',
   './js/map.js',
-  './js/pathfinding.js',
-  './js/towers.js',
-  './js/projectiles.js',
-  './js/enemies.js',
   './js/waves.js',
   './js/economy.js',
   './js/upgrades.js',
-  './js/ui.js',
-  './js/save.js',
   './js/balance.js',
-  './js/util.js',
+  './js/entities.js', // AKTİF SİSTEM İÇİN EKLENDİ
+  './js/utils.js',    // util.js SİLİNDİ, BU EKLENDİ
+  './js/abilities.js',// AKTİF SİSTEM İÇİN EKLENDİ
   './maps/meadow.json',
   './maps/canyon.json',
   './maps/crossroads.json'
