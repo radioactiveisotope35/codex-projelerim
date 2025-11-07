@@ -16,7 +16,6 @@ import * as upgrades from './upgrades.js';
 import * as abilities from './abilities.js';
 import {
   nowSeconds,
-  pointToPolylineDistance,
   dist2,
   SpawnQueue,
   clamp,
@@ -411,11 +410,12 @@ function validatePlacement(state, x, y, type) {
   if (x < radius || y < radius || x > state.worldW - radius || y > state.worldH - radius) {
     return { ok: false, reason: 'Bounds' };
   }
-  const pathClear = state.tileSize * BALANCE.global.pathClearFactor;
-  for (const lane of state.lanes) {
-    if (pointToPolylineDistance(x, y, lane) < pathClear) {
-      return { ok: false, reason: 'Path too close' };
-    }
+  const tileSize = state.tileSize || 1;
+  const tileX = Math.round(x / tileSize - 0.5);
+  const tileY = Math.round(y / tileSize - 0.5);
+  const key = `${tileX},${tileY}`;
+  if (!state.buildableSet || !state.buildableSet.has(key)) {
+    return { ok: false, reason: 'Not a buildable tile' };
   }
   for (const tower of state.towers) {
     if (dist2(x, y, tower.x, tower.y) < (radius * 2) ** 2) {
@@ -429,7 +429,9 @@ function validatePlacement(state, x, y, type) {
     const price = priceOf(type);
     if (state.coins < price) return { ok: false, reason: 'Coins' };
   }
-  return { ok: true };
+  const centerX = (tileX + 0.5) * tileSize;
+  const centerY = (tileY + 0.5) * tileSize;
+  return { ok: true, tileX, tileY, centerX, centerY };
 }
 
 function placeTower(state, x, y, type) {
@@ -438,7 +440,9 @@ function placeTower(state, x, y, type) {
     toast(valid.reason);
     return false;
   }
-  const tower = createTower(type, x, y);
+  const placeX = valid.centerX ?? x;
+  const placeY = valid.centerY ?? y;
+  const tower = createTower(type, placeX, placeY);
   state.towers.push(tower);
   if (!sandbox && !state.dev.freePlacement) {
     const cost = priceOf(type);
@@ -767,6 +771,7 @@ async function bootstrap() {
     heroPlaced: false,
     heroTower: null,
     heroAura: null,
+    buildableSet: new Set(),
     diff,
     sandbox,
     stats: { pops: 0, damage: 0, cashSpent: 0, cashEarned: 0 },
@@ -805,6 +810,9 @@ async function bootstrap() {
     const map = await loadMap(mapName);
     state.map = map;
     const baked = bakeLanes(map, { offscreen: true });
+    const buildable = Array.isArray(map.buildable) ? map.buildable : [];
+    state.map.buildable = buildable;
+    state.buildableSet = new Set(buildable.map(([tx, ty]) => `${tx},${ty}`));
     state.lanes = baked.lanes;
     state.tileSize = baked.tileSize;
     state.worldW = baked.worldW;
