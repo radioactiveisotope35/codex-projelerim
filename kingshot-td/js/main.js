@@ -475,14 +475,14 @@ function setupPlacementEvents(state) {
   });
 }
 
-function placementTileKey(tx, ty) {
+function tileKey(tx, ty) {
   const ix = Math.round(Number(tx));
   const iy = Math.round(Number(ty));
   if (!Number.isFinite(ix) || !Number.isFinite(iy)) return null;
   return `${ix},${iy}`;
 }
 
-function derivePathTileSet(paths) {
+function buildPathTileSet(paths) {
   const set = new Set();
   if (!Array.isArray(paths)) return set;
   const STEP_GUARD = 4096;
@@ -490,7 +490,7 @@ function derivePathTileSet(paths) {
     if (!Array.isArray(lane) || lane.length === 0) continue;
     let [cx, cy] = lane[0] || [];
     if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
-    const firstKey = placementTileKey(cx, cy);
+    const firstKey = tileKey(cx, cy);
     if (firstKey) set.add(firstKey);
     for (let i = 1; i < lane.length; i++) {
       const point = lane[i] || [];
@@ -504,12 +504,12 @@ function derivePathTileSet(paths) {
         if (guard++ > STEP_GUARD) break;
         if (cx !== nx) cx += stepX;
         if (cy !== ny) cy += stepY;
-        const key = placementTileKey(cx, cy);
+        const key = tileKey(cx, cy);
         if (key) set.add(key);
       }
       cx = nx;
       cy = ny;
-      const finalKey = placementTileKey(cx, cy);
+      const finalKey = tileKey(cx, cy);
       if (finalKey) set.add(finalKey);
     }
   }
@@ -525,7 +525,7 @@ function validatePlacement(state, x, y, type) {
   const tileSize = state.tileSize || 1;
   const tileX = Math.round(x / tileSize - 0.5);
   const tileY = Math.round(y / tileSize - 0.5);
-  const key = placementTileKey(tileX, tileY);
+  const key = tileKey(tileX, tileY);
   if (!key) {
     return { ok: false, reason: 'Bounds' };
   }
@@ -958,18 +958,18 @@ async function bootstrap() {
     const buildableKeys = [];
     for (const entry of buildable) {
       if (Array.isArray(entry) && entry.length >= 2) {
-        const key = placementTileKey(entry[0], entry[1]);
+        const key = tileKey(entry[0], entry[1]);
         if (key) buildableKeys.push(key);
         continue;
       }
       if (typeof entry === 'string') {
         const [sx, sy] = entry.split(',').map((v) => v.trim());
-        const key = placementTileKey(sx, sy);
+        const key = tileKey(sx, sy);
         if (key) buildableKeys.push(key);
       }
     }
     state.buildableSet = new Set(buildableKeys);
-    state.pathTiles = derivePathTileSet(map.paths);
+    state.pathTiles = buildPathTileSet(map.paths);
     state.lanes = baked.lanes;
     state.tileSize = baked.tileSize;
     state.worldW = baked.worldW;
