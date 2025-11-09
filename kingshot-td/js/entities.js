@@ -265,9 +265,12 @@ export function updateBullets(state, dt, now, diff) {
         directHits.add(enemy.id);
         pierceLeft -= 1;
         if (bullet.from?.stats) {
-          bullet.from.stats.damage += dealt;
+          const towerStats = bullet.from.stats;
+          towerStats.damage = (towerStats.damage ?? 0) + dealt;
         }
-        state.stats.damage += dealt;
+        if (state.stats) {
+          state.stats.damage = (state.stats.damage ?? 0) + dealt;
+        }
         if (enemy.hp <= 0) {
           const reward = popReward(enemy.type, diff);
           state.coins += reward;
@@ -291,9 +294,12 @@ export function updateBullets(state, dt, now, diff) {
               });
               if (dealtSplash > 0) {
                 if (bullet.from?.stats) {
-                  bullet.from.stats.damage += dealtSplash;
+                  const towerStats = bullet.from.stats;
+                  towerStats.damage = (towerStats.damage ?? 0) + dealtSplash;
                 }
-                state.stats.damage += dealtSplash;
+                if (state.stats) {
+                  state.stats.damage = (state.stats.damage ?? 0) + dealtSplash;
+                }
                 if (other.hp <= 0) {
                   const reward = popReward(other.type, diff);
                   state.coins += reward;

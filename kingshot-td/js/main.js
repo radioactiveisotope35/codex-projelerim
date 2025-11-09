@@ -868,7 +868,9 @@ async function bootstrap() {
       shatterLead: options.shatterLead,
     });
     if (dealt > 0) {
-      state.stats.damage += dealt;
+      if (state.stats) {
+        state.stats.damage = (state.stats.damage ?? 0) + dealt;
+      }
       if (!enemy.alive) {
         const reward = popReward(enemy.type, diff);
         state.coins += reward;
