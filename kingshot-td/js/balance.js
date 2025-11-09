@@ -7,9 +7,9 @@ export const BALANCE = {
   },
   economy: {
     sellRefund: 0.7,
-    cashPerPopBase: 8,
+    cashPerPopBase: 6,
     roundBonus(wave) {
-      return Math.floor(150 + wave * 35);
+      return Math.floor(80 + wave * 20);
     },
     difficulty: {
       normal: { hpMul: 1, cashMul: 1, roundBonusMul: 1 },
@@ -18,7 +18,7 @@ export const BALANCE = {
     },
   },
   enemies: {
-    Grunt: { hp: 30, speed: 55, armor: 0, reward: 6 },
+    Grunt: { hp: 20, speed: 55, armor: 0, reward: 4 },
     Runner: { hp: 20, speed: 95, armor: 0, reward: 7 },
     Tank: { hp: 140, speed: 40, armor: 0.2, reward: 18 },
     Shielded: { hp: 70, speed: 55, armor: 0.4, reward: 12 },
@@ -32,10 +32,10 @@ export const BALANCE = {
   },
   towers: {
     Archer: {
-      price: 250,
+      price: 170,
       range: 210,
       fireRate: 0.85,
-      damage: 10,
+      damage: 15,
       damageType: 'physical',
       bulletSpeed: 520,
       pierce: 1,

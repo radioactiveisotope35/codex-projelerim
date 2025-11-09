@@ -975,8 +975,7 @@ async function bootstrap() {
     state.worldW = baked.worldW;
     state.worldH = baked.worldH;
     const start = startStateFromMap(map);
-    const minPrice = Math.min(...Object.values(BALANCE.towers).map((t) => t.price));
-    state.coins = sandbox ? 9999 : Math.max(start.coins, minPrice);
+    state.coins = sandbox ? 9999 : start.coins;
     state.lives = start.lives;
     state.waves = wavesByName(map.waveset);
     refreshViewport(state);
