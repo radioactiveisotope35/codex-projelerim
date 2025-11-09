@@ -168,6 +168,7 @@ function buildBullet(tower, enemy, lane, now) {
     slowPct: tower.slowPct,
     slowDuration: tower.slowDuration,
     shatterLead: tower.shatterLead || false,
+    hitRadius: tower.baseRadius ?? BALANCE.global.baseRadius,
     ttl: 4,
     from: tower,
     hitSet: new Set(),
@@ -242,6 +243,13 @@ export function updateBullets(state, dt, now, diff) {
       state.bullets.splice(i, 1);
       continue;
     }
+    const rawRadius = Number.isFinite(bullet.hitRadius)
+      ? bullet.hitRadius
+      : Number.isFinite(bullet.from?.baseRadius)
+      ? bullet.from.baseRadius
+      : BALANCE.global.baseRadius;
+    const hitRadius = Math.max(1, rawRadius || BALANCE.global.baseRadius || 1);
+    const hitRadius2 = hitRadius * hitRadius;
     let hitSet = bullet.hitSet;
     if (!(hitSet instanceof Set)) {
       hitSet = new Set();

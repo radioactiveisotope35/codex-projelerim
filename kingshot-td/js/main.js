@@ -522,15 +522,38 @@ function validatePlacement(state, x, y, type) {
   if (!key) {
     return { ok: false, reason: 'Bounds' };
   }
+  const centerX = (tileX + 0.5) * tileSize;
+  const centerY = (tileY + 0.5) * tileSize;
   const buildableSet = state.buildableSet;
   const hasBuildable = buildableSet instanceof Set && buildableSet.size > 0;
   const restrict = state.map?.restrictPlacement === true;
+  const requireWhitelist = restrict && hasBuildable;
+  const onWhitelist = hasBuildable && buildableSet.has(key);
   const onPath = state.pathTiles?.has(key);
   if (!state.dev.freePlacement) {
     if (onPath) {
       return { ok: false, reason: 'Path' };
     }
-    if (restrict && hasBuildable && !buildableSet.has(key)) {
+    if (!onWhitelist) {
+      const lanes = Array.isArray(state.lanes) ? state.lanes : [];
+      const clearance = (state.tileSize || 1) * (BALANCE.global.pathClearFactor ?? 0);
+      if (clearance > 0 && lanes.length > 0) {
+        const threshold = radius + clearance;
+        let tooClose = false;
+        for (const lane of lanes) {
+          if (!Array.isArray(lane) || lane.length < 2) continue;
+          const dist = pointToPolylineDistance(centerX, centerY, lane);
+          if (dist < threshold) {
+            tooClose = true;
+            break;
+          }
+        }
+        if (tooClose) {
+          return { ok: false, reason: 'Too close to path' };
+        }
+      }
+    }
+    if (requireWhitelist && !onWhitelist) {
       return { ok: false, reason: 'Not a buildable tile' };
     }
   }
