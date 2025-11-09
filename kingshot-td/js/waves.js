@@ -1,6 +1,6 @@
 const BASE_WAVES = [
   null,
-  [group({ type: 'Grunt', count: 12, gap: 0.8, lane: 0 })],
+  [group({ type: 'Grunt', count: 10, gap: 2.2, lane: 0 })],
   [
     group({ type: 'Grunt', count: 18, gap: 0.75, lane: 0 }),
     group({ type: 'Runner', count: 6, gap: 0.65, lane: 1 }),
