@@ -44,7 +44,7 @@ export const BALANCE = {
       camoDetection: false,
     },
     Cannon: {
-      price: 450,
+      price: 320,
       range: 190,
       fireRate: 1.35,
       damage: 26,
@@ -56,7 +56,7 @@ export const BALANCE = {
       camoDetection: false,
     },
     Mage: {
-      price: 520,
+      price: 380,
       range: 200,
       fireRate: 1,
       damage: 22,
@@ -68,7 +68,7 @@ export const BALANCE = {
       camoDetection: false,
     },
     Frost: {
-      price: 360,
+      price: 280,
       range: 180,
       fireRate: 1.2,
       damage: 6,
@@ -80,7 +80,7 @@ export const BALANCE = {
       camoDetection: false,
     },
     Hero: {
-      price: 750,
+      price: 600,
       range: 230,
       fireRate: 1.1,
       damage: 18,
@@ -95,20 +95,20 @@ export const BALANCE = {
   upgrades: {
     costs: {
       Archer: {
-        A: [250, 600, 2400, 8200, 32000],
-        B: [230, 540, 2100, 6900, 28000],
+        A: [120, 350, 2400, 8200, 32000],
+        B: [100, 320, 2100, 6900, 28000],
       },
       Cannon: {
-        A: [300, 800, 3200, 11500, 42000],
-        B: [280, 750, 2800, 9800, 36000],
+        A: [150, 400, 3200, 11500, 42000],
+        B: [130, 380, 2800, 9800, 36000],
       },
       Mage: {
-        A: [280, 720, 2600, 9400, 36000],
-        B: [260, 680, 2400, 8600, 34000],
+        A: [140, 420, 2600, 9400, 36000],
+        B: [120, 390, 2400, 8600, 34000],
       },
       Frost: {
-        A: [220, 540, 1900, 6800, 26000],
-        B: [210, 520, 1800, 6400, 25000],
+        A: [110, 300, 1900, 6800, 26000],
+        B: [100, 280, 1800, 6400, 25000],
       },
       Hero: { A: [0, 0, 0, 0, 0], B: [0, 0, 0, 0, 0] },
     },
@@ -180,7 +180,7 @@ export const BALANCE = {
   },
   waves: {
     hpMul(n) {
-      return Math.pow(1.12, Math.max(0, n - 1));
+      return Math.pow(1.045, Math.max(0, n - 1));
     },
     pointsForWave(n) {
       return Math.floor(50 + 22 * n + Math.pow(n, 1.35) * 3);
