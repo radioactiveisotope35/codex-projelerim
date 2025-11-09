@@ -1,11 +1,48 @@
 import { BALANCE } from './balance.js';
 import { dist2, projectAlongPolyline } from './utils.js';
-import { popReward, sellRefund } from './economy.js';
+import { popReward, sellRefund, getDifficulty } from './economy.js';
 import { isActive } from './abilities.js';
 
 let ENEMY_ID = 1;
 let BULLET_ID = 1;
 let TOWER_ID = 1;
+
+export function handleEnemyDeath(state, enemy, diff) {
+  if (!enemy.alive) return;
+  enemy.alive = false;
+
+  const difficulty = diff || state?.diff || getDifficulty();
+  const reward = popReward(enemy.type, difficulty);
+  state.coins += reward;
+  if (state.stats) {
+    state.stats.pops = (state.stats.pops ?? 0) + 1;
+  }
+
+  if (state.onEnemyKilled) {
+    state.onEnemyKilled(enemy, reward);
+  }
+
+  const def = ENEMY_DEFS[enemy.type];
+  if (def && Array.isArray(def.spawnsOnDeath)) {
+    for (const spawn of def.spawnsOnDeath) {
+      const spawnCount = Math.max(0, spawn.count ?? 0);
+      const spawnTraits = Array.isArray(spawn.traits) ? spawn.traits : [];
+      const spawnHpMul = spawn.hpMul ?? 1;
+      for (let i = 0; i < spawnCount; i++) {
+        const child = createEnemy(spawn.type, enemy.lane, { x: enemy.x, y: enemy.y }, {
+          traits: spawnTraits,
+          hpMul: spawnHpMul,
+          wave: state.waveIndex,
+          diff: difficulty,
+        });
+        child.t = enemy.t;
+        child.x = enemy.x;
+        child.y = enemy.y;
+        state.enemies.push(child);
+      }
+    }
+  }
+}
 
 const TARGET_PRIORITIES = ['first', 'last', 'strong', 'close'];
 
@@ -231,9 +268,6 @@ export function applyDamage(enemy, rawDamage, damageType, { now, slowPct, slowDu
     enemy.slowMul = Math.min(enemy.slowMul, mult);
     enemy.slowUntil = Math.max(enemy.slowUntil, now + (slowDuration || 1.5));
   }
-  if (enemy.hp <= 0) {
-    enemy.alive = false;
-  }
   return dmg;
 }
 
@@ -282,11 +316,7 @@ export function updateBullets(state, dt, now, diff) {
           state.stats.damage = (state.stats.damage || 0) + dealt;
         }
         if (enemy.hp <= 0) {
-          const reward = popReward(enemy.type, diff);
-          state.coins += reward;
-          if (state.stats) state.stats.pops += 1;
-          enemy.alive = false;
-          if (state.onEnemyKilled) state.onEnemyKilled(enemy, reward);
+          handleEnemyDeath(state, enemy, diff);
         }
         if (splash > 0) {
           const radius2 = splash * splash;
@@ -310,11 +340,7 @@ export function updateBullets(state, dt, now, diff) {
                   state.stats.damage = (state.stats.damage || 0) + dealtSplash;
                 }
                 if (other.hp <= 0) {
-                  const reward = popReward(other.type, diff);
-                  state.coins += reward;
-                  if (state.stats) state.stats.pops += 1;
-                  other.alive = false;
-                  if (state.onEnemyKilled) state.onEnemyKilled(other, reward);
+                  handleEnemyDeath(state, other, diff);
                 }
               }
             }

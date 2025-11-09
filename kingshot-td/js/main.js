@@ -9,8 +9,9 @@ import {
   updateBullets,
   cyclePriority,
   applyDamage,
+  handleEnemyDeath,
 } from './entities.js';
-import { priceOf, getDifficulty, roundBonus, popReward } from './economy.js';
+import { priceOf, getDifficulty, roundBonus } from './economy.js';
 import { wavesByName, generateLateGameWave } from './waves.js';
 import * as upgrades from './upgrades.js';
 import * as abilities from './abilities.js';
@@ -1017,18 +1018,11 @@ async function bootstrap() {
       slowDuration: options.slowDuration,
       shatterLead: options.shatterLead,
     });
-    if (dealt > 0) {
-      if (state.stats) {
-        state.stats.damage = (state.stats.damage ?? 0) + dealt;
-      }
-      if (!enemy.alive) {
-        const reward = popReward(enemy.type, diff);
-        state.coins += reward;
-        if (state.stats) {
-          state.stats.pops = (state.stats.pops ?? 0) + 1;
-        }
-        if (state.onEnemyKilled) state.onEnemyKilled(enemy, reward);
-      }
+    if (dealt > 0 && state.stats) {
+      state.stats.damage += dealt;
+    }
+    if (enemy.hp <= 0) {
+      handleEnemyDeath(state, enemy, diff);
     }
   }
 

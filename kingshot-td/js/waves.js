@@ -174,10 +174,20 @@ export function generateLateGameWave(waveIndex) {
 
   while (points > 0 && guard < 20) {
     guard++;
-    const type = enemyTypes[Math.floor(Math.random() * enemyTypes.length)];
+    let type;
+    if (waveIndex > 25 && Math.random() < (0.05 + (waveIndex - 25) * 0.005)) {
+      type = 'Behemoth';
+      if ((balance.enemyPointCost[type] || Infinity) > points && groups.length > 0) {
+        type = 'Tank';
+      }
+    } else {
+      do {
+        type = enemyTypes[Math.floor(Math.random() * enemyTypes.length)];
+      } while (type === 'Behemoth');
+    }
     const cost = balance.enemyPointCost[type] || 999;
 
-    if (cost > points && groups.length > 0) continue;
+    if (cost > points && groups.length > 0) continue; // Avoid getting stuck
 
     const maxCount = Math.floor(points / cost);
     const count = Math.max(1, Math.min(maxCount, 10 + waveIndex / 5 + Math.floor(Math.random() * 10)));

@@ -19,6 +19,7 @@ const COLORS = {
     Shielded: '#555A6D',
     Tank: '#3B3C47',
     Specter: '#8A8ABF',
+    Behemoth: '#BF4F6B',
   },
 };
 

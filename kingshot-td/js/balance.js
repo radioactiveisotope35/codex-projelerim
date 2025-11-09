@@ -23,6 +23,7 @@ export const BALANCE = {
     Tank: { hp: 140, speed: 40, armor: 0.2, reward: 18 },
     Shielded: { hp: 70, speed: 55, armor: 0.4, reward: 12 },
     Specter: { hp: 42, speed: 68, armor: 0.1, reward: 11 },
+    Behemoth: { hp: 800, speed: 25, armor: 0.3, reward: 50, spawnsOnDeath: [{ type: 'Tank', count: 2 }] },
     traits: {
       camo: { visibleTo: 'camoDetection' },
       lead: { immuneTo: 'physical', weakTo: ['explosive', 'magic'], hpMul: 1 },
@@ -199,6 +200,7 @@ export const BALANCE = {
       Shielded: 6,
       Tank: 12,
       Specter: 7,
+      Behemoth: 60,
     },
     traitPointCost: {
       camo: 3,
