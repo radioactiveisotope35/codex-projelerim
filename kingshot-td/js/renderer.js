@@ -63,6 +63,221 @@ function seededRandomFactory(seed) {
   };
 }
 
+function pointSegmentDistance(px, py, ax, ay, bx, by) {
+  const vx = bx - ax;
+  const vy = by - ay;
+  const lenSq = vx * vx + vy * vy;
+  if (lenSq === 0) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * vx + (py - ay) * vy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const projX = ax + t * vx;
+  const projY = ay + t * vy;
+  return Math.hypot(px - projX, py - projY);
+}
+
+function distanceToLanes(lanes, x, y) {
+  if (!lanes || !lanes.length) return Infinity;
+  let min = Infinity;
+  for (const lane of lanes) {
+    for (let i = 1; i < lane.length; i++) {
+      const prev = lane[i - 1];
+      const curr = lane[i];
+      const dist = pointSegmentDistance(x, y, prev.x, prev.y, curr.x, curr.y);
+      if (dist < min) min = dist;
+    }
+  }
+  return min;
+}
+
+function sampleClearPoint(rand, w, h, lanes, minDist) {
+  const attempts = 28;
+  for (let i = 0; i < attempts; i++) {
+    const x = rand() * w;
+    const y = rand() * h;
+    if (distanceToLanes(lanes, x, y) >= minDist) {
+      return { x, y };
+    }
+  }
+  return null;
+}
+
+function drawGrassTufts(ctx, rand, w, h, lanes) {
+  const tuftCount = Math.max(16, Math.round((w * h) / 35000));
+  ctx.save();
+  for (let i = 0; i < tuftCount; i++) {
+    const point = sampleClearPoint(rand, w, h, lanes, 32);
+    if (!point) continue;
+    const { x, y } = point;
+    const bladeCount = 6 + Math.floor(rand() * 4);
+    const radius = 6 + rand() * 6;
+    ctx.save();
+    ctx.translate(x, y);
+    const angle = rand() * Math.PI * 2;
+    ctx.rotate(angle);
+    for (let b = 0; b < bladeCount; b++) {
+      const t = (b / (bladeCount - 1)) * 2 - 1;
+      const lean = (rand() * 0.4 - 0.2) * radius;
+      const bladeHeight = radius * (1.1 + rand() * 0.6);
+      ctx.beginPath();
+      ctx.moveTo(t * 3, 2);
+      ctx.quadraticCurveTo(lean * 0.5, -bladeHeight * 0.2, lean, -bladeHeight);
+      ctx.strokeStyle = `rgba(${80 + rand() * 40}, ${140 + rand() * 60}, ${70 + rand() * 40}, 0.8)`;
+      ctx.lineWidth = 1.2 + rand() * 0.6;
+      ctx.stroke();
+    }
+    ctx.restore();
+    ctx.save();
+    ctx.globalAlpha = 0.12;
+    ctx.fillStyle = 'rgba(20,60,30,1)';
+    ctx.beginPath();
+    ctx.ellipse(x + 4, y + 6, radius, radius * 0.6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+function drawTrees(ctx, rand, w, h, lanes) {
+  const treeCount = Math.max(6, Math.round((w * h) / 90000));
+  for (let i = 0; i < treeCount; i++) {
+    const point = sampleClearPoint(rand, w, h, lanes, 64);
+    if (!point) continue;
+    const { x, y } = point;
+    const canopyRadius = 26 + rand() * 18;
+    const trunkHeight = canopyRadius * (0.55 + rand() * 0.15);
+    const trunkWidth = canopyRadius * 0.25;
+
+    ctx.save();
+    ctx.translate(x, y);
+
+    ctx.save();
+    ctx.globalAlpha = 0.22;
+    ctx.fillStyle = 'rgba(0,0,0,1)';
+    ctx.beginPath();
+    ctx.ellipse(6, trunkHeight * 0.8, canopyRadius * 0.9, canopyRadius * 0.55, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    const trunkGrad = ctx.createLinearGradient(0, -trunkHeight * 0.2, 0, trunkHeight);
+    trunkGrad.addColorStop(0, '#5c3a23');
+    trunkGrad.addColorStop(1, '#402413');
+    ctx.fillStyle = trunkGrad;
+    ctx.fillRect(-trunkWidth / 2, 0, trunkWidth, trunkHeight);
+
+    const canopyGrad = ctx.createRadialGradient(0, -canopyRadius * 0.3, canopyRadius * 0.1, 0, 0, canopyRadius);
+    canopyGrad.addColorStop(0, `rgba(120, ${Math.round(180 + rand() * 30)}, 95, 0.95)`);
+    canopyGrad.addColorStop(1, `rgba(40, ${Math.round(95 + rand() * 25)}, 45, 0.95)`);
+    ctx.fillStyle = canopyGrad;
+    ctx.beginPath();
+    ctx.ellipse(0, -canopyRadius * 0.35, canopyRadius * 0.9, canopyRadius, rand() * Math.PI * 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.ellipse(-canopyRadius * 0.5, -canopyRadius * 0.6, canopyRadius * 0.6, canopyRadius * 0.75, rand() * 0.6, 0, Math.PI * 2);
+    ctx.ellipse(canopyRadius * 0.55, -canopyRadius * 0.45, canopyRadius * 0.65, canopyRadius * 0.7, rand() * 0.6, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+function drawLake(ctx, rand, w, h, lanes) {
+  const point = sampleClearPoint(rand, w, h, lanes, 70);
+  if (!point) return;
+  const { x, y } = point;
+  const baseRadius = Math.min(w, h) * (0.08 + rand() * 0.06);
+  const rx = baseRadius * (0.8 + rand() * 0.6);
+  const ry = baseRadius * (0.5 + rand() * 0.4);
+  const rotation = rand() * Math.PI;
+
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rotation);
+
+  ctx.save();
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = 'rgba(0,0,0,1)';
+  ctx.beginPath();
+  ctx.ellipse(6, ry * 0.9, rx * 0.85, ry * 0.6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  const waterGrad = ctx.createRadialGradient(0, 0, ry * 0.2, 0, 0, Math.max(rx, ry));
+  waterGrad.addColorStop(0, 'rgba(120, 205, 235, 0.95)');
+  waterGrad.addColorStop(0.6, 'rgba(70, 160, 205, 0.92)');
+  waterGrad.addColorStop(1, 'rgba(40, 110, 150, 0.9)');
+  ctx.fillStyle = waterGrad;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rx * 0.9, ry * 0.9, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawRiver(ctx, rand, w, h, lanes) {
+  const orientation = rand() < 0.5 ? 'horizontal' : 'vertical';
+  const segments = 6 + Math.floor(rand() * 4);
+  const points = [];
+  if (orientation === 'horizontal') {
+    const baseY = h * (0.25 + rand() * 0.5);
+    const amplitude = 40 + rand() * 35;
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments;
+      const x = t * w;
+      const sinOffset = Math.sin((t + rand() * 0.4) * Math.PI * (1.5 + rand())) * amplitude;
+      points.push({ x, y: baseY + sinOffset });
+    }
+  } else {
+    const baseX = w * (0.25 + rand() * 0.5);
+    const amplitude = 40 + rand() * 35;
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments;
+      const y = t * h;
+      const sinOffset = Math.sin((t + rand() * 0.4) * Math.PI * (1.5 + rand())) * amplitude;
+      points.push({ x: baseX + sinOffset, y });
+    }
+  }
+
+  let minDist = Infinity;
+  for (const p of points) {
+    const dist = distanceToLanes(lanes, p.x, p.y);
+    if (dist < minDist) minDist = dist;
+  }
+  if (minDist < 60) return;
+
+  const width = Math.max(36, Math.min(w, h) * 0.05);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) {
+    ctx.lineTo(points[i].x, points[i].y);
+  }
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  const grad = ctx.createLinearGradient(points[0].x, points[0].y, points[points.length - 1].x, points[points.length - 1].y);
+  grad.addColorStop(0, 'rgba(120, 205, 235, 0.9)');
+  grad.addColorStop(1, 'rgba(50, 135, 185, 0.9)');
+  ctx.strokeStyle = grad;
+  ctx.lineWidth = width;
+  ctx.globalAlpha = 0.92;
+  ctx.stroke();
+
+  ctx.lineWidth = Math.max(12, width * 0.5);
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.globalAlpha = 0.4;
+  ctx.stroke();
+
+  ctx.restore();
+}
+
 function drawGroundDetails(ctx, w, h, lanes) {
   if (typeof document === 'undefined') return;
   ensureGroundPattern();
@@ -79,25 +294,10 @@ function drawGroundDetails(ctx, w, h, lanes) {
 
   const seed = Math.floor((lanes?.length || 1) * 97 + w * 13 + h * 11);
   const rand = seededRandomFactory(seed);
-  const clumpCount = Math.max(8, Math.round((w * h) / 45000));
-
-  ctx.save();
-  for (let i = 0; i < clumpCount; i++) {
-    const x = rand() * w;
-    const y = rand() * h;
-    const radius = 18 + rand() * 24;
-    const shadowAlpha = 0.12 + rand() * 0.14;
-    ctx.fillStyle = `rgba(30, 80, 52, ${shadowAlpha.toFixed(2)})`;
-    ctx.beginPath();
-    ctx.ellipse(x, y, radius * (0.7 + rand() * 0.3), radius, rand() * Math.PI, 0, Math.PI * 2);
-    ctx.fill();
-    const highlightAlpha = 0.12 + rand() * 0.15;
-    ctx.fillStyle = `rgba(210, 250, 210, ${highlightAlpha.toFixed(2)})`;
-    ctx.beginPath();
-    ctx.ellipse(x + radius * 0.2, y - radius * 0.15, radius * (0.5 + rand() * 0.3), radius * 0.6, rand() * Math.PI, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.restore();
+  if (rand() < 0.6) drawLake(ctx, rand, w, h, lanes);
+  if (rand() < 0.5) drawRiver(ctx, rand, w, h, lanes);
+  drawGrassTufts(ctx, rand, w, h, lanes);
+  drawTrees(ctx, rand, w, h, lanes);
 }
 
 const HUD = {
