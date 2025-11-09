@@ -137,7 +137,7 @@ function prioritizeTarget(tower, enemies) {
         if (enemy.t < best.enemy.t) best = { enemy, d2 };
         break;
       case 'strong':
-        if (enemy.hp > best.enemy.hp) best = { enemy, d2 };
+        if (enemy.maxHp > best.enemy.maxHp) best = { enemy, d2 };
         break;
       case 'close':
         if (d2 < best.d2) best = { enemy, d2 };
@@ -170,6 +170,7 @@ function buildBullet(tower, enemy, lane, now) {
     shatterLead: tower.shatterLead || false,
     ttl: 4,
     from: tower,
+    directHits: new Set(),
   };
   if (tower.type === 'Mage' && isActive('arcaneSurge', tower._state)) {
     bullet.damage *= 2;
@@ -241,11 +242,35 @@ export function updateBullets(state, dt, now, diff) {
       state.bullets.splice(i, 1);
       continue;
     }
-    let pierceLeft = bullet.pierce;
+    let directHits = bullet.directHits;
+    if (!(directHits instanceof Set)) {
+      const legacy = bullet.hitSet ?? directHits;
+      if (legacy instanceof Set) {
+        directHits = new Set(legacy);
+      } else if (Array.isArray(legacy)) {
+        directHits = new Set(legacy);
+      } else if (typeof legacy === 'number' || typeof legacy === 'string') {
+        const numeric = Number(legacy);
+        directHits = new Set([Number.isNaN(numeric) ? legacy : numeric]);
+      } else if (legacy && typeof legacy[Symbol.iterator] === 'function') {
+        directHits = new Set(legacy);
+      } else if (legacy && typeof legacy === 'object') {
+        const entries = Object.keys(legacy).map((key) => {
+          const num = Number(key);
+          return Number.isNaN(num) ? key : num;
+        });
+        directHits = new Set(entries);
+      } else {
+        directHits = new Set();
+      }
+      bullet.directHits = directHits;
+      delete bullet.hitSet;
+    }
+    let pierceLeft = bullet.pierce ?? 1;
     const splash = bullet.splashRadius;
-    let hit = false;
     for (const enemy of state.enemies) {
       if (!enemy.alive) continue;
+      if (directHits.has(enemy.id)) continue;
       const d2 = dist2(bullet.x, bullet.y, enemy.x, enemy.y);
       if (d2 > 144) continue;
       const dealt = applyDamage(enemy, bullet.damage, bullet.damageType, {
@@ -255,35 +280,51 @@ export function updateBullets(state, dt, now, diff) {
         shatterLead: bullet.shatterLead,
       });
       if (dealt > 0) {
+        directHits.add(enemy.id);
         pierceLeft -= 1;
-        bullet.from.stats.damage += dealt;
-        state.stats.damage = (state.stats.damage || 0) + dealt;
+        if (bullet.from?.stats) {
+          const towerStats = bullet.from.stats;
+          towerStats.damage = (towerStats.damage ?? 0) + dealt;
+        }
+        if (state.stats) {
+          state.stats.damage = (state.stats.damage ?? 0) + dealt;
+        }
         if (enemy.hp <= 0) {
           const reward = popReward(enemy.type, diff);
           state.coins += reward;
-          state.stats.pops += 1;
+          if (state.stats) {
+            state.stats.pops += 1;
+          }
           enemy.alive = false;
           if (state.onEnemyKilled) state.onEnemyKilled(enemy, reward);
         }
         if (splash > 0) {
           const radius2 = splash * splash;
+          const slowSplashPct = bullet.slowPct ? bullet.slowPct * 0.5 : 0;
           for (const other of state.enemies) {
             if (!other.alive || other === enemy) continue;
             const ds = dist2(enemy.x, enemy.y, other.x, other.y);
             if (ds <= radius2) {
               const dealtSplash = applyDamage(other, bullet.damage * 0.7, bullet.damageType, {
                 now,
-                slowPct: bullet.slowPct * 0.5,
+                slowPct: slowSplashPct,
                 slowDuration: bullet.slowDuration,
                 shatterLead: bullet.shatterLead,
               });
               if (dealtSplash > 0) {
-                bullet.from.stats.damage += dealtSplash;
-                state.stats.damage = (state.stats.damage || 0) + dealtSplash;
+                if (bullet.from?.stats) {
+                  const towerStats = bullet.from.stats;
+                  towerStats.damage = (towerStats.damage ?? 0) + dealtSplash;
+                }
+                if (state.stats) {
+                  state.stats.damage = (state.stats.damage ?? 0) + dealtSplash;
+                }
                 if (other.hp <= 0) {
                   const reward = popReward(other.type, diff);
                   state.coins += reward;
-                  state.stats.pops += 1;
+                  if (state.stats) {
+                    state.stats.pops += 1;
+                  }
                   other.alive = false;
                   if (state.onEnemyKilled) state.onEnemyKilled(other, reward);
                 }
@@ -291,11 +332,11 @@ export function updateBullets(state, dt, now, diff) {
             }
           }
         }
-        hit = true;
       }
       if (pierceLeft <= 0) break;
     }
-    if (hit || pierceLeft <= 0) {
+    bullet.pierce = pierceLeft;
+    if (pierceLeft <= 0) {
       state.bullets.splice(i, 1);
     }
   }
