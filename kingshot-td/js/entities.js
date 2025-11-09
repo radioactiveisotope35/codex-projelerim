@@ -127,6 +127,7 @@ export function createTower(type, x, y) {
     totalSpent: base.price,
     sellValue: sellRefund(base.price),
     stats: { damage: 0, shots: 0 },
+    angle: -Math.PI / 2,
   };
   if (type === 'Hero') {
     tower.hero = true;
@@ -235,6 +236,9 @@ export function updateTowers(state, dt, now) {
     if (tower.cooldown > 0) continue;
     const target = prioritizeTarget(tower, state.enemies);
     if (!target) continue;
+    const dx = target.x - tower.x;
+    const dy = target.y - tower.y;
+    tower.angle = Math.atan2(dy, dx);
     const laneIndex = Number.isInteger(target.lane) ? target.lane : 0;
     const lanePath = (Array.isArray(lanes[laneIndex]) && lanes[laneIndex].length >= 2)
       ? lanes[laneIndex]

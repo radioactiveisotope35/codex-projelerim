@@ -378,16 +378,22 @@ export function drawTowers(ctx, towers) {
     ctx.fill();
     ctx.restore();
 
+    ctx.save();
+    ctx.translate(tower.x, tower.y);
+    ctx.rotate((tower.angle ?? -Math.PI / 2) + Math.PI / 2);
+
     if (asset) {
-      ctx.drawImage(asset, tower.x - halfSize, tower.y - halfSize, SIZE, SIZE);
+      ctx.drawImage(asset, -halfSize, -halfSize, SIZE, SIZE);
     } else {
       ctx.fillStyle = COLORS.towerBase;
-      circle(ctx, tower.x, tower.y, baseR);
+      circle(ctx, 0, 0, baseR);
       ctx.fill();
       ctx.fillStyle = COLORS.towerFill[tower.type] || '#ffffff';
-      circle(ctx, tower.x, tower.y - baseR * 0.2, baseR * 0.7);
+      circle(ctx, 0, -baseR * 0.2, baseR * 0.7);
       ctx.fill();
     }
+
+    ctx.restore();
 
     if (tower.selected) {
       ctx.save();
