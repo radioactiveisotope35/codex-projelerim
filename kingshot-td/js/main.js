@@ -360,6 +360,66 @@ function attachHotkeys(state) {
   });
 }
 
+function tileKey(tx, ty) {
+  return `${tx},${ty}`;
+}
+
+function normalizeBuildableList(list) {
+  const normalized = [];
+  const set = new Set();
+  if (!Array.isArray(list)) return { tiles: normalized, set };
+  for (const entry of list) {
+    let tx;
+    let ty;
+    if (Array.isArray(entry) && entry.length >= 2) {
+      [tx, ty] = entry;
+    } else if (typeof entry === 'string') {
+      const parts = entry.split(',');
+      if (parts.length >= 2) {
+        tx = Number(parts[0]);
+        ty = Number(parts[1]);
+      }
+    }
+    if (Number.isFinite(tx) && Number.isFinite(ty)) {
+      const key = tileKey(tx, ty);
+      if (!set.has(key)) {
+        normalized.push([tx, ty]);
+        set.add(key);
+      }
+    }
+  }
+  return { tiles: normalized, set };
+}
+
+function computePathTileSet(map) {
+  const set = new Set();
+  if (!map || !Array.isArray(map.paths)) return set;
+  for (const lane of map.paths) {
+    if (!Array.isArray(lane) || lane.length === 0) continue;
+    let [prevX, prevY] = lane[0];
+    if (Number.isFinite(prevX) && Number.isFinite(prevY)) {
+      set.add(tileKey(prevX, prevY));
+    }
+    for (let i = 1; i < lane.length; i++) {
+      const [nextX, nextY] = lane[i] || [];
+      if (!Number.isFinite(nextX) || !Number.isFinite(nextY)) continue;
+      const dx = Math.sign(nextX - prevX);
+      const dy = Math.sign(nextY - prevY);
+      let cx = prevX;
+      let cy = prevY;
+      while (cx !== nextX || cy !== nextY) {
+        if (cx !== nextX) cx += dx;
+        if (cy !== nextY) cy += dy;
+        set.add(tileKey(cx, cy));
+      }
+      set.add(tileKey(nextX, nextY));
+      prevX = nextX;
+      prevY = nextY;
+    }
+  }
+  return set;
+}
+
 function setupPlacementEvents(state) {
   if (!canvas) return;
   canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
@@ -421,29 +481,14 @@ function validatePlacement(state, x, y, type) {
   const tileSize = state.tileSize || 1;
   const tileX = Math.round(x / tileSize - 0.5);
   const tileY = Math.round(y / tileSize - 0.5);
+  const key = tileKey(tileX, tileY);
+  if (state.pathTiles instanceof Set && state.pathTiles.has(key)) {
+    return { ok: false, reason: 'Path' };
+  }
   const buildable = state.buildableSet;
-  if (buildable instanceof Set) {
-    if (buildable.size > 0) {
-      const key = `${tileX},${tileY}`;
-      if (!buildable.has(key)) {
-        return { ok: false, reason: 'Not a buildable tile' };
-      }
-    }
-  } else if (Array.isArray(buildable) && buildable.length > 0) {
-    let allowed = false;
-    for (const entry of buildable) {
-      if (Array.isArray(entry) && entry[0] === tileX && entry[1] === tileY) {
-        allowed = true;
-        break;
-      }
-      if (typeof entry === 'string' && entry === `${tileX},${tileY}`) {
-        allowed = true;
-        break;
-      }
-    }
-    if (!allowed) {
-      return { ok: false, reason: 'Not a buildable tile' };
-    }
+  const restrictPlacement = state.restrictPlacement === true || state.map?.restrictPlacement === true;
+  if (restrictPlacement && buildable instanceof Set && buildable.size > 0 && !buildable.has(key)) {
+    return { ok: false, reason: 'Not a buildable tile' };
   }
   for (const tower of state.towers) {
     if (dist2(x, y, tower.x, tower.y) < (radius * 2) ** 2) {
@@ -800,6 +845,8 @@ async function bootstrap() {
     heroTower: null,
     heroAura: null,
     buildableSet: new Set(),
+    pathTiles: new Set(),
+    restrictPlacement: false,
     diff,
     sandbox,
     stats: { pops: 0, damage: 0, cashSpent: 0, cashEarned: 0 },
@@ -840,9 +887,11 @@ async function bootstrap() {
     const map = await loadMap(mapName);
     state.map = map;
     const baked = bakeLanes(map, { offscreen: true });
-    const buildable = Array.isArray(map.buildable) ? map.buildable : [];
-    state.map.buildable = buildable;
-    state.buildableSet = new Set(buildable.map(([tx, ty]) => `${tx},${ty}`));
+    const { tiles: buildableTiles, set: buildableSet } = normalizeBuildableList(map.buildable);
+    state.map.buildable = buildableTiles;
+    state.buildableSet = buildableSet;
+    state.pathTiles = computePathTileSet(map);
+    state.restrictPlacement = map.restrictPlacement === true;
     state.lanes = baked.lanes;
     state.tileSize = baked.tileSize;
     state.worldW = baked.worldW;
