@@ -129,8 +129,13 @@ function refreshDebug(state) {
   const lines = [];
   lines.push(`Wave: ${state.waveIndex}`);
   lines.push(`Coins: ${state.coins} | Lives: ${state.lives}`);
-  lines.push(`Pops: ${state.stats.pops} | Damage: ${Math.round(state.stats.damage)}`);
-  lines.push(`Cash Spent: ${state.stats.cashSpent} | Earned: ${state.stats.cashEarned}`);
+  const stats = state.stats;
+  const pops = stats?.pops ?? 0;
+  const damage = Math.round(stats?.damage ?? 0);
+  const cashSpent = stats?.cashSpent ?? 0;
+  const cashEarned = stats?.cashEarned ?? 0;
+  lines.push(`Pops: ${pops} | Damage: ${damage}`);
+  lines.push(`Cash Spent: ${cashSpent} | Earned: ${cashEarned}`);
   lines.push('--- Towers ---');
   for (const tower of state.towers) {
     const dps = tower.stats.damage / Math.max(1, state.gameTime);
@@ -264,7 +269,7 @@ function setupPanelInteractions(state) {
       if (index >= 0) {
         state.towers.splice(index, 1);
         state.coins += tower.sellValue;
-        state.stats.cashEarned += tower.sellValue;
+        if (state.stats) state.stats.cashEarned += tower.sellValue;
         if (tower.hero) {
           state.heroPlaced = false;
           state.heroTower = null;
@@ -308,7 +313,7 @@ function setupPanelInteractions(state) {
         }
         const price = check.info.price;
         if (upgrades.applyUpgrade(state, state.selectedTower, path)) {
-          if (!sandbox) state.stats.cashSpent += price;
+          if (!sandbox && state.stats) state.stats.cashSpent += price;
           updateShop(state);
           updatePanel(state);
         }
@@ -450,7 +455,7 @@ function placeTower(state, x, y, type) {
   if (!sandbox && !state.dev.freePlacement) {
     const cost = priceOf(type);
     state.coins -= cost;
-    state.stats.cashSpent += cost;
+    if (state.stats) state.stats.cashSpent += cost;
   }
   if (tower.hero) {
     state.heroPlaced = true;
@@ -685,7 +690,7 @@ function endWave(state) {
     const bonus = roundBonus(state.waveIndex, diff);
     if (bonus > 0) {
       state.coins += bonus;
-      state.stats.cashEarned += bonus;
+      if (state.stats) state.stats.cashEarned += bonus;
       toast(`Wave ${state.waveIndex} cleared! +$${bonus}`);
     }
   }
