@@ -183,7 +183,8 @@ export const BALANCE = {
       return Math.pow(1.045, Math.max(0, n - 1));
     },
     pointsForWave(n) {
-      return Math.floor(50 + 22 * n + Math.pow(n, 1.35) * 3);
+      // Linear scaling to complement the exponential HP scaling
+      return Math.floor(100 + (n - 20) * 30);
     },
     enemyPointCost: {
       Grunt: 3,

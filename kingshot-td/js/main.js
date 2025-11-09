@@ -11,7 +11,7 @@ import {
   applyDamage,
 } from './entities.js';
 import { priceOf, getDifficulty, roundBonus, popReward } from './economy.js';
-import { wavesByName } from './waves.js';
+import { wavesByName, generateLateGameWave } from './waves.js';
 import * as upgrades from './upgrades.js';
 import * as abilities from './abilities.js';
 import {
@@ -475,14 +475,14 @@ function setupPlacementEvents(state) {
   });
 }
 
-function tileKey(tx, ty) {
+function placementTileKey(tx, ty) {
   const ix = Math.round(Number(tx));
   const iy = Math.round(Number(ty));
   if (!Number.isFinite(ix) || !Number.isFinite(iy)) return null;
   return `${ix},${iy}`;
 }
 
-function buildPathTileSet(paths) {
+function derivePathTileSet(paths) {
   const set = new Set();
   if (!Array.isArray(paths)) return set;
   const STEP_GUARD = 4096;
@@ -490,7 +490,7 @@ function buildPathTileSet(paths) {
     if (!Array.isArray(lane) || lane.length === 0) continue;
     let [cx, cy] = lane[0] || [];
     if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
-    const firstKey = tileKey(cx, cy);
+    const firstKey = placementTileKey(cx, cy);
     if (firstKey) set.add(firstKey);
     for (let i = 1; i < lane.length; i++) {
       const point = lane[i] || [];
@@ -504,12 +504,12 @@ function buildPathTileSet(paths) {
         if (guard++ > STEP_GUARD) break;
         if (cx !== nx) cx += stepX;
         if (cy !== ny) cy += stepY;
-        const key = tileKey(cx, cy);
+        const key = placementTileKey(cx, cy);
         if (key) set.add(key);
       }
       cx = nx;
       cy = ny;
-      const finalKey = tileKey(cx, cy);
+      const finalKey = placementTileKey(cx, cy);
       if (finalKey) set.add(finalKey);
     }
   }
@@ -525,7 +525,7 @@ function validatePlacement(state, x, y, type) {
   const tileSize = state.tileSize || 1;
   const tileX = Math.round(x / tileSize - 0.5);
   const tileY = Math.round(y / tileSize - 0.5);
-  const key = tileKey(tileX, tileY);
+  const key = placementTileKey(tileX, tileY);
   if (!key) {
     return { ok: false, reason: 'Bounds' };
   }
@@ -777,10 +777,11 @@ function buildDevPanel(state, setSpeed, spawnTests, skipWaveFn, clearEnemiesFn) 
 
 function startWave(state) {
   const next = state.waveIndex + 1;
-  const groups = state.waves[next];
+  let groups = state.waves[next];
+
   if (!groups) {
-    toast('No more waves!');
-    return;
+    groups = generateLateGameWave(next);
+    state.waves[next] = groups;
   }
   state.waveIndex = next;
   state.waveActive = true;
@@ -834,10 +835,6 @@ function endWave(state) {
 function devSkipWave(state) {
   if (!state.waveActive) {
     const next = state.waveIndex + 1;
-    if (!state.waves[next]) {
-      toast('No more waves to skip');
-      return;
-    }
     startWave(state);
   }
   state.spawnQueue.clear();
@@ -958,18 +955,18 @@ async function bootstrap() {
     const buildableKeys = [];
     for (const entry of buildable) {
       if (Array.isArray(entry) && entry.length >= 2) {
-        const key = tileKey(entry[0], entry[1]);
+        const key = placementTileKey(entry[0], entry[1]);
         if (key) buildableKeys.push(key);
         continue;
       }
       if (typeof entry === 'string') {
         const [sx, sy] = entry.split(',').map((v) => v.trim());
-        const key = tileKey(sx, sy);
+        const key = placementTileKey(sx, sy);
         if (key) buildableKeys.push(key);
       }
     }
     state.buildableSet = new Set(buildableKeys);
-    state.pathTiles = buildPathTileSet(map.paths);
+    state.pathTiles = derivePathTileSet(map.paths);
     state.lanes = baked.lanes;
     state.tileSize = baked.tileSize;
     state.worldW = baked.worldW;

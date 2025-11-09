@@ -1,3 +1,5 @@
+import { BALANCE } from './balance.js';
+
 const BASE_WAVES = [
   null,
   // Wave 1: (Phase 1 Fix) Gentle introduction to Grunts.
@@ -119,32 +121,6 @@ const BASE_WAVES = [
   ],
 
   // --- End of Phase 4 Replacement ---
-
-  [
-    group({ type: 'Tank', count: 12, gap: 0.75, lane: 1, traits: ['fortified', 'lead'], hpMul: 1.45 }),
-    group({ type: 'Runner', count: 30, gap: 0.4, lane: 0, traits: ['camo', 'regrow'], hpMul: 1.3 }),
-    group({ type: 'Specter', count: 24, gap: 0.45, lane: 0, traits: ['camo'], hpMul: 1.25 }),
-  ],
-  [
-    group({ type: 'Grunt', count: 40, gap: 0.45, lane: 0, traits: ['lead', 'regrow'], hpMul: 1.35 }),
-    group({ type: 'Shielded', count: 22, gap: 0.5, lane: 1, traits: ['fortified', 'lead'], hpMul: 1.45 }),
-    group({ type: 'Tank', count: 12, gap: 0.75, lane: 0, traits: ['fortified'], hpMul: 1.45 }),
-  ],
-  [
-    group({ type: 'Runner', count: 32, gap: 0.38, lane: 0, traits: ['camo', 'regrow'], hpMul: 1.35 }),
-    group({ type: 'Specter', count: 26, gap: 0.45, lane: 1, traits: ['camo', 'regrow'], hpMul: 1.4 }),
-    group({ type: 'Tank', count: 14, gap: 0.7, lane: 0, traits: ['fortified', 'lead'], hpMul: 1.5 }),
-  ],
-  [
-    group({ type: 'Shielded', count: 28, gap: 0.5, lane: 1, traits: ['fortified', 'lead'], hpMul: 1.5 }),
-    group({ type: 'Specter', count: 28, gap: 0.42, lane: 0, traits: ['camo', 'regrow'], hpMul: 1.45 }),
-    group({ type: 'Tank', count: 14, gap: 0.65, lane: 0, traits: ['fortified', 'lead'], hpMul: 1.55 }),
-  ],
-  [
-    group({ type: 'Tank', count: 16, gap: 0.65, lane: 0, traits: ['fortified', 'lead', 'regrow'], hpMul: 1.6 }),
-    group({ type: 'Specter', count: 30, gap: 0.4, lane: 1, traits: ['camo', 'regrow'], hpMul: 1.5 }),
-    group({ type: 'Shielded', count: 24, gap: 0.45, lane: 0, traits: ['fortified', 'lead'], hpMul: 1.6 }),
-  ],
 ];
 
 function group({ type, count, gap, lane = 0, traits = [], hpMul = 1 }) {
@@ -185,4 +161,60 @@ export function wavesByName(name) {
   if (key.includes('canyon')) return cloneWaves(BASE_WAVES, 1);
   if (key.includes('cross')) return cloneWaves(BASE_WAVES, 2);
   return cloneWaves(BASE_WAVES, 0);
+}
+
+export function generateLateGameWave(waveIndex) {
+  const balance = BALANCE.waves;
+  let points = balance.pointsForWave(waveIndex);
+  const availableTraits = balance.schedule(waveIndex);
+  const enemyTypes = Object.keys(balance.enemyPointCost);
+
+  const groups = [];
+  let guard = 0;
+
+  while (points > 0 && guard < 20) {
+    guard++;
+    const type = enemyTypes[Math.floor(Math.random() * enemyTypes.length)];
+    const cost = balance.enemyPointCost[type] || 999;
+
+    if (cost > points && groups.length > 0) continue;
+
+    const maxCount = Math.floor(points / cost);
+    const count = Math.max(1, Math.min(maxCount, 10 + waveIndex / 5 + Math.floor(Math.random() * 10)));
+    const gap = Math.max(0.2, 1.2 - waveIndex * 0.005);
+
+    const traits = [];
+    if (availableTraits.includes('camo') && Math.random() < 0.3 + waveIndex * 0.005) {
+      traits.push('camo');
+    }
+    if (availableTraits.includes('lead') && Math.random() < 0.25 + waveIndex * 0.005) {
+      traits.push('lead');
+    }
+    if (availableTraits.includes('regrow') && Math.random() < 0.2 + waveIndex * 0.005) {
+      traits.push('regrow');
+    }
+    if (availableTraits.includes('fortified') && Math.random() < 0.35 + waveIndex * 0.005) {
+      traits.push('fortified');
+    }
+
+    let totalCost = cost * count;
+    for (const trait of traits) {
+      totalCost += (balance.traitPointCost[trait] || 0) * count;
+    }
+
+    if (totalCost > points && count > 1) {
+      const newCount = Math.floor(points / (cost + (totalCost - cost * count) / count));
+      if (newCount > 0) {
+        groups.push(group({ type, count: newCount, gap, lane: guard % 2, traits }));
+        points -= totalCost * (newCount / count);
+      }
+    } else if (totalCost <= points) {
+      groups.push(group({ type, count, gap, lane: guard % 2, traits }));
+      points -= totalCost;
+    } else if (groups.length === 0) {
+      groups.push(group({ type, count: 1, gap, lane: 0, traits }));
+      points = 0;
+    }
+  }
+  return groups;
 }
