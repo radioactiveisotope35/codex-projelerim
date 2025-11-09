@@ -53,54 +53,73 @@ const BASE_WAVES = [
     group({ type: 'Grunt', count: 10, gap: 1.0, lane: 0, traits: ['lead'] }),
     group({ type: 'Shielded', count: 12, gap: 1.8, lane: 1 }),
   ],
+
+  // --- Start of Phase 4 Replacement ---
+
+  // Wave 11: A light wave to recover, mixing camo and lead.
   [
-    group({ type: 'Specter', count: 16, gap: 0.55, lane: 1, traits: ['camo'] }),
-    group({ type: 'Grunt', count: 20, gap: 0.65, lane: 0, traits: ['lead'] }),
+    group({ type: 'Runner', count: 12, gap: 1.2, lane: 0, traits: ['camo'] }),
+    group({ type: 'Grunt', count: 8, gap: 2.0, lane: 1, traits: ['lead'] }),
   ],
+
+  // Wave 12: More lead, and introducing the Tank.
   [
-    group({ type: 'Tank', count: 6, gap: 1, lane: 0, traits: ['lead'], hpMul: 1.15 }),
-    group({ type: 'Shielded', count: 14, gap: 0.6, lane: 1, hpMul: 1.05 }),
-    group({ type: 'Runner', count: 18, gap: 0.5, lane: 0, traits: ['camo'] }),
+    group({ type: 'Tank', count: 2, gap: 2.5, lane: 0 }),
+    group({ type: 'Shielded', count: 10, gap: 1.5, lane: 1, traits: ['lead'] }),
   ],
+
+  // Wave 13: A dense wave of Runners and Shielded.
   [
-    group({ type: 'Specter', count: 20, gap: 0.5, lane: 0, traits: ['camo'], hpMul: 1.1 }),
-    group({ type: 'Grunt', count: 26, gap: 0.55, lane: 1, traits: ['lead'], hpMul: 1.1 }),
+    group({ type: 'Runner', count: 25, gap: 0.8, lane: 0 }),
+    group({ type: 'Shielded', count: 15, gap: 1.3, lane: 1 }),
   ],
+
+  // Wave 14: Camo and Tank pressure.
   [
-    group({ type: 'Tank', count: 7, gap: 0.9, lane: 0, traits: ['lead'], hpMul: 1.2 }),
-    group({ type: 'Shielded', count: 16, gap: 0.55, lane: 1, hpMul: 1.1 }),
-    group({ type: 'Runner', count: 22, gap: 0.45, lane: 0, traits: ['camo'] }),
+    group({ type: 'Tank', count: 2, gap: 2.0, lane: 1 }),
+    group({ type: 'Specter', count: 20, gap: 1.0, lane: 0, traits: ['camo'] }),
   ],
+
+  // Wave 15: Introduce "Fortified" (on Grunts first).
   [
-    group({ type: 'Shielded', count: 12, gap: 0.65, lane: 1, traits: ['fortified', 'lead'], hpMul: 1.2 }),
-    group({ type: 'Tank', count: 6, gap: 0.85, lane: 0, traits: ['fortified'], hpMul: 1.25 }),
-    group({ type: 'Runner', count: 20, gap: 0.45, lane: 0, traits: ['camo'] }),
+    group({ type: 'Grunt', count: 15, gap: 1.0, lane: 0, traits: ['fortified'] }),
+    group({ type: 'Grunt', count: 15, gap: 1.0, lane: 1 }),
+    group({ type: 'Shielded', count: 10, gap: 2.0, lane: 0, traits: ['lead'] }),
   ],
+
+  // Wave 16: Heavier fortified wave with Tanks.
   [
-    group({ type: 'Specter', count: 22, gap: 0.45, lane: 0, traits: ['camo'], hpMul: 1.2 }),
-    group({ type: 'Tank', count: 8, gap: 0.9, lane: 1, traits: ['lead', 'fortified'], hpMul: 1.3 }),
-    group({ type: 'Grunt', count: 28, gap: 0.5, lane: 0, traits: ['lead'], hpMul: 1.15 }),
+    group({ type: 'Tank', count: 3, gap: 2.2, lane: 0, traits: ['fortified'] }),
+    group({ type: 'Runner', count: 18, gap: 1.0, lane: 1 }),
   ],
+
+  // Wave 17: Camo Lead. A specific test.
   [
-    group({ type: 'Shielded', count: 18, gap: 0.6, lane: 1, traits: ['fortified'], hpMul: 1.25 }),
-    group({ type: 'Runner', count: 26, gap: 0.4, lane: 0, traits: ['camo'] }),
-    group({ type: 'Specter', count: 16, gap: 0.5, lane: 0, traits: ['lead'], hpMul: 1.15 }),
+    group({ type: 'Specter', count: 12, gap: 1.5, lane: 0, traits: ['camo', 'lead'] }),
+    group({ type: 'Grunt', count: 20, gap: 0.9, lane: 1 }),
   ],
+
+  // Wave 18: Introduce "Regrow".
   [
-    group({ type: 'Grunt', count: 24, gap: 0.5, lane: 0, traits: ['regrow', 'lead'], hpMul: 1.2 }),
-    group({ type: 'Specter', count: 18, gap: 0.45, lane: 1, traits: ['regrow', 'camo'], hpMul: 1.25 }),
-    group({ type: 'Tank', count: 8, gap: 0.8, lane: 0, traits: ['fortified'], hpMul: 1.35 }),
+    group({ type: 'Runner', count: 20, gap: 0.8, lane: 0, traits: ['regrow'] }),
+    group({ type: 'Shielded', count: 15, gap: 1.2, lane: 1, traits: ['fortified'] }),
   ],
+
+  // Wave 19: A difficult mix of Camo, Regrow, and Fortified.
   [
-    group({ type: 'Runner', count: 28, gap: 0.4, lane: 0, traits: ['camo', 'regrow'], hpMul: 1.25 }),
-    group({ type: 'Shielded', count: 18, gap: 0.6, lane: 1, traits: ['fortified', 'lead'], hpMul: 1.35 }),
-    group({ type: 'Specter', count: 20, gap: 0.5, lane: 0, traits: ['camo'], hpMul: 1.2 }),
+    group({ type: 'Specter', count: 15, gap: 1.1, lane: 1, traits: ['camo', 'regrow'] }),
+    group({ type: 'Tank', count: 2, gap: 3.0, lane: 0, traits: ['fortified'] }),
   ],
+
+  // Wave 20: The "boss" wave for the mid-game. All major threats.
   [
-    group({ type: 'Tank', count: 10, gap: 0.8, lane: 0, traits: ['fortified', 'lead'], hpMul: 1.4 }),
-    group({ type: 'Specter', count: 24, gap: 0.45, lane: 1, traits: ['camo', 'regrow'], hpMul: 1.3 }),
-    group({ type: 'Shielded', count: 20, gap: 0.55, lane: 0, traits: ['fortified'], hpMul: 1.35 }),
+    group({ type: 'Tank', count: 4, gap: 2.0, lane: 0, traits: ['fortified'] }),
+    group({ type: 'Shielded', count: 15, gap: 1.0, lane: 1, traits: ['fortified', 'lead'] }),
+    group({ type: 'Runner', count: 10, gap: 0.5, lane: 0, traits: ['camo', 'regrow'] }),
   ],
+
+  // --- End of Phase 4 Replacement ---
+
   [
     group({ type: 'Tank', count: 12, gap: 0.75, lane: 1, traits: ['fortified', 'lead'], hpMul: 1.45 }),
     group({ type: 'Runner', count: 30, gap: 0.4, lane: 0, traits: ['camo', 'regrow'], hpMul: 1.3 }),
