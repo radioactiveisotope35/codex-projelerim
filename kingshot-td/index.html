@@ -46,6 +46,60 @@
       0%, 100% { transform: translate(-50%, 0); opacity: 0; }
       20%, 70% { transform: translate(-50%, -8px); opacity: 1; }
     }
+    .screen {
+      position: fixed;
+      inset: 0;
+      background: var(--panel-bg);
+      backdrop-filter: blur(10px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 1.5rem;
+      z-index: 100;
+      color: #fff;
+      padding: 2rem;
+      text-align: center;
+    }
+    .screen h1 {
+      font-size: 3rem;
+      margin: 0;
+      color: var(--ui-gold);
+    }
+    .screen-button {
+      background: var(--wood);
+      border: 2px solid var(--wood-dark);
+      color: #fff;
+      padding: 1rem 2rem;
+      border-radius: 1rem;
+      font-weight: 700;
+      font-size: 1.2rem;
+      box-shadow: 0 4px 0 var(--wood-dark);
+      cursor: pointer;
+      transition: all 0.1s ease;
+    }
+    .screen-button:active {
+      transform: translateY(2px);
+      box-shadow: 0 2px 0 var(--wood-dark);
+    }
+    .map-select-grid {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .map-card {
+      background: var(--wood-dark);
+      padding: 1.5rem 2.5rem;
+      border-radius: 1rem;
+      border: 2px solid var(--wood);
+      font-size: 1.1rem;
+    }
+    .map-card h3 { margin: 0 0 0.5rem 0; color: var(--ui-gold); }
+    .map-card p { margin: 0; opacity: 0.8; }
+    .hidden {
+      display: none !important;
+    }
     canvas {
       width: 100%;
       height: 100%;
@@ -217,8 +271,31 @@
   </style>
 </head>
 <body>
-  <canvas id="game"></canvas>
-  <div id="ui-layer">
+  <div id="main-menu-screen" class="screen">
+    <h1>KingShot TD</h1>
+    <button id="btn-start-game" class="screen-button">Start Game</button>
+  </div>
+
+  <div id="map-select-screen" class="screen hidden">
+    <h2>Select Map</h2>
+    <div class="map-select-grid">
+      <button class="screen-button map-card" data-map="meadow">
+        <h3>Meadow</h3>
+        <p>A simple, winding path.</p>
+      </button>
+      <button class="screen-button map-card" data-map="canyon">
+        <h3>Canyon</h3>
+        <p>Two paths merge.</p>
+      </button>
+      <button class="screen-button map-card" data-map="crossroads">
+        <h3>Crossroads</h3>
+        <p>Two separate paths.</p>
+      </button>
+    </div>
+  </div>
+
+  <canvas id="game" class="hidden"></canvas>
+  <div id="ui-layer" class="hidden">
     <div class="hud-top" id="hud-top">
       <span id="hud-coins">💰 0</span>
       <span id="hud-lives">❤️ 0</span>
