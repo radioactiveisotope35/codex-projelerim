@@ -170,7 +170,7 @@ function buildBullet(tower, enemy, lane, now) {
     shatterLead: tower.shatterLead || false,
     ttl: 4,
     from: tower,
-    hitSet: new Set(),
+    directHits: new Set(),
   };
   if (tower.type === 'Mage' && isActive('arcaneSurge', tower._state)) {
     bullet.damage *= 2;
@@ -242,12 +242,17 @@ export function updateBullets(state, dt, now, diff) {
       state.bullets.splice(i, 1);
       continue;
     }
-    const hitSet = bullet.hitSet || (bullet.hitSet = new Set());
+    let directHits = bullet.directHits;
+    if (!directHits) {
+      directHits = bullet.hitSet || new Set();
+      bullet.directHits = directHits;
+      delete bullet.hitSet;
+    }
     let pierceLeft = bullet.pierce ?? 1;
     const splash = bullet.splashRadius;
     for (const enemy of state.enemies) {
       if (!enemy.alive) continue;
-      if (hitSet.has(enemy.id)) continue;
+      if (directHits.has(enemy.id)) continue;
       const d2 = dist2(bullet.x, bullet.y, enemy.x, enemy.y);
       if (d2 > 144) continue;
       const dealt = applyDamage(enemy, bullet.damage, bullet.damageType, {
@@ -257,9 +262,11 @@ export function updateBullets(state, dt, now, diff) {
         shatterLead: bullet.shatterLead,
       });
       if (dealt > 0) {
-        hitSet.add(enemy.id);
+        directHits.add(enemy.id);
         pierceLeft -= 1;
-        bullet.from.stats.damage += dealt;
+        if (bullet.from?.stats) {
+          bullet.from.stats.damage += dealt;
+        }
         state.stats.damage += dealt;
         if (enemy.hp <= 0) {
           const reward = popReward(enemy.type, diff);
@@ -270,6 +277,7 @@ export function updateBullets(state, dt, now, diff) {
         }
         if (splash > 0) {
           const radius2 = splash * splash;
+          const slowSplashPct = bullet.slowPct ? bullet.slowPct * 0.5 : 0;
           for (const other of state.enemies) {
             if (!other.alive || other === enemy) continue;
             if (hitSet.has(other.id)) continue;
@@ -277,13 +285,14 @@ export function updateBullets(state, dt, now, diff) {
             if (ds <= radius2) {
               const dealtSplash = applyDamage(other, bullet.damage * 0.7, bullet.damageType, {
                 now,
-                slowPct: bullet.slowPct * 0.5,
+                slowPct: slowSplashPct,
                 slowDuration: bullet.slowDuration,
                 shatterLead: bullet.shatterLead,
               });
               if (dealtSplash > 0) {
-                hitSet.add(other.id);
-                bullet.from.stats.damage += dealtSplash;
+                if (bullet.from?.stats) {
+                  bullet.from.stats.damage += dealtSplash;
+                }
                 state.stats.damage += dealtSplash;
                 if (other.hp <= 0) {
                   const reward = popReward(other.type, diff);
