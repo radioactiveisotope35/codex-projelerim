@@ -129,8 +129,13 @@ function refreshDebug(state) {
   const lines = [];
   lines.push(`Wave: ${state.waveIndex}`);
   lines.push(`Coins: ${state.coins} | Lives: ${state.lives}`);
-  lines.push(`Pops: ${state.stats.pops} | Damage: ${Math.round(state.stats.damage)}`);
-  lines.push(`Cash Spent: ${state.stats.cashSpent} | Earned: ${state.stats.cashEarned}`);
+  const stats = state.stats;
+  const pops = stats?.pops ?? 0;
+  const damage = Math.round(stats?.damage ?? 0);
+  const cashSpent = stats?.cashSpent ?? 0;
+  const cashEarned = stats?.cashEarned ?? 0;
+  lines.push(`Pops: ${pops} | Damage: ${damage}`);
+  lines.push(`Cash Spent: ${cashSpent} | Earned: ${cashEarned}`);
   lines.push('--- Towers ---');
   for (const tower of state.towers) {
     const dps = tower.stats.damage / Math.max(1, state.gameTime);
@@ -264,7 +269,7 @@ function setupPanelInteractions(state) {
       if (index >= 0) {
         state.towers.splice(index, 1);
         state.coins += tower.sellValue;
-        state.stats.cashEarned += tower.sellValue;
+        if (state.stats) state.stats.cashEarned = (state.stats.cashEarned ?? 0) + tower.sellValue;
         if (tower.hero) {
           state.heroPlaced = false;
           state.heroTower = null;
@@ -308,7 +313,7 @@ function setupPanelInteractions(state) {
         }
         const price = check.info.price;
         if (upgrades.applyUpgrade(state, state.selectedTower, path)) {
-          if (!sandbox) state.stats.cashSpent += price;
+          if (!sandbox && state.stats) state.stats.cashSpent = (state.stats.cashSpent ?? 0) + price;
           updateShop(state);
           updatePanel(state);
         }
@@ -360,10 +365,13 @@ function setupPlacementEvents(state) {
   canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
   canvas.addEventListener('pointermove', (ev) => {
     if (!state.clientToWorld) return;
+    const tileSize = state.tileSize;
+    if (!tileSize) return;
     const pos = state.clientToWorld(ev.clientX, ev.clientY);
-    const grid = state.tileSize / 4;
-    const snapX = Math.round(pos.x / grid) * grid;
-    const snapY = Math.round(pos.y / grid) * grid;
+    const tileX = Math.round(pos.x / tileSize - 0.5);
+    const tileY = Math.round(pos.y / tileSize - 0.5);
+    const snapX = (tileX + 0.5) * tileSize;
+    const snapY = (tileY + 0.5) * tileSize;
     if (state.placing && state.ghost.type) {
       const check = validatePlacement(state, snapX, snapY, state.ghost.type);
       state.ghost.x = snapX;
@@ -413,9 +421,29 @@ function validatePlacement(state, x, y, type) {
   const tileSize = state.tileSize || 1;
   const tileX = Math.round(x / tileSize - 0.5);
   const tileY = Math.round(y / tileSize - 0.5);
-  const key = `${tileX},${tileY}`;
-  if (!state.buildableSet || !state.buildableSet.has(key)) {
-    return { ok: false, reason: 'Not a buildable tile' };
+  const buildable = state.buildableSet;
+  if (buildable instanceof Set) {
+    if (buildable.size > 0) {
+      const key = `${tileX},${tileY}`;
+      if (!buildable.has(key)) {
+        return { ok: false, reason: 'Not a buildable tile' };
+      }
+    }
+  } else if (Array.isArray(buildable) && buildable.length > 0) {
+    let allowed = false;
+    for (const entry of buildable) {
+      if (Array.isArray(entry) && entry[0] === tileX && entry[1] === tileY) {
+        allowed = true;
+        break;
+      }
+      if (typeof entry === 'string' && entry === `${tileX},${tileY}`) {
+        allowed = true;
+        break;
+      }
+    }
+    if (!allowed) {
+      return { ok: false, reason: 'Not a buildable tile' };
+    }
   }
   for (const tower of state.towers) {
     if (dist2(x, y, tower.x, tower.y) < (radius * 2) ** 2) {
@@ -447,7 +475,7 @@ function placeTower(state, x, y, type) {
   if (!sandbox && !state.dev.freePlacement) {
     const cost = priceOf(type);
     state.coins -= cost;
-    state.stats.cashSpent += cost;
+    if (state.stats) state.stats.cashSpent = (state.stats.cashSpent ?? 0) + cost;
   }
   if (tower.hero) {
     state.heroPlaced = true;
@@ -682,7 +710,7 @@ function endWave(state) {
     const bonus = roundBonus(state.waveIndex, diff);
     if (bonus > 0) {
       state.coins += bonus;
-      state.stats.cashEarned += bonus;
+      if (state.stats) state.stats.cashEarned = (state.stats.cashEarned ?? 0) + bonus;
       toast(`Wave ${state.waveIndex} cleared! +$${bonus}`);
     }
   }
@@ -790,7 +818,9 @@ async function bootstrap() {
   refreshViewport(state);
 
   state.onEnemyKilled = (enemy, reward) => {
-    state.stats.cashEarned += reward;
+    if (state.stats) {
+      state.stats.cashEarned = (state.stats.cashEarned ?? 0) + reward;
+    }
     const xpGain = BALANCE.hero.xpPerPop * Math.max(1, enemy.reward);
     grantHeroXP(state, xpGain);
     updateShop(state);
@@ -865,11 +895,15 @@ async function bootstrap() {
       shatterLead: options.shatterLead,
     });
     if (dealt > 0) {
-      state.stats.damage += dealt;
+      if (state.stats) {
+        state.stats.damage = (state.stats.damage ?? 0) + dealt;
+      }
       if (!enemy.alive) {
         const reward = popReward(enemy.type, diff);
         state.coins += reward;
-        state.stats.pops += 1;
+        if (state.stats) {
+          state.stats.pops = (state.stats.pops ?? 0) + 1;
+        }
         if (state.onEnemyKilled) state.onEnemyKilled(enemy, reward);
       }
     }
@@ -892,7 +926,7 @@ async function bootstrap() {
     let rawDt = now - lastTime;
     lastTime = now;
     rawDt = Math.min(rawDt, 0.25);
-    const scaled = state.paused ? 0 : Math.min(BALANCE.global.dtCap || 0.05, rawDt * state.speed);
+    const scaled = state.paused ? 0 : Math.min(BALANCE.global.dtCap || 0.05, rawDt) * state.speed;
     if (!state.paused) {
       state.gameTime += scaled;
       state.spawnQueue.flush(state.gameTime, (entry) => spawnEnemy(state, entry));
