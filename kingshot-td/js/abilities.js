@@ -1,3 +1,13 @@
+function hasCamoVision(state) {
+  if (!state) return false;
+  if (state.heroTower?.camoDetection) return true;
+  if (Array.isArray(state.towers) && state.towers.some((tower) => tower?.camoDetection)) return true;
+  if (state.abilities?.actives?.arcaneSurge > 0) {
+    return state.towers?.some((tower) => tower?.type === 'Mage');
+  }
+  return false;
+}
+
 const ABILITIES = {
   callOfArrows: {
     id: 'callOfArrows',
@@ -7,8 +17,10 @@ const ABILITIES = {
     description: 'Volley hits all visible non-lead enemies for 35 physical damage.',
     activate(state, context) {
       const { now, applyDamage } = context;
+      const camoVision = hasCamoVision(state);
       for (const enemy of state.enemies) {
         if (!enemy.alive || enemy.traits?.lead) continue;
+        if (enemy.traits?.camo && !camoVision) continue;
         applyDamage(enemy, 35, 'physical', { now, source: 'ability' });
       }
     },
@@ -31,6 +43,9 @@ const ABILITIES = {
     duration: 2,
     hotkey: '3',
     description: 'Freezes enemies around the selected tower for 2s.',
+    canUse(state) {
+      return !!state?.selectedTower;
+    },
     activate(state, context) {
       const { tower, now } = context;
       if (!tower) return false;
@@ -53,6 +68,9 @@ const ABILITIES = {
     cooldown: 70,
     hotkey: '4',
     description: 'Hero unleashes a massive magical burst dealing 120 damage in a wide radius.',
+    canUse(state) {
+      return !!state?.heroTower;
+    },
     activate(state, context) {
       const { now, hero, applyDamage } = context;
       if (!hero) return false;
@@ -101,7 +119,12 @@ export function isActive(id, state) {
 export function canUse(id, state) {
   if (!isUnlocked(id, state)) return false;
   const cd = state.abilities.cooldowns?.[id] || 0;
-  return cd <= 0;
+  if (cd > 0) return false;
+  const ability = ABILITIES[id];
+  if (ability?.canUse) {
+    return ability.canUse(state) !== false;
+  }
+  return true;
 }
 
 export function activate(id, state, context) {
