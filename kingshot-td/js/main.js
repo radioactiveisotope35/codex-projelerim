@@ -407,10 +407,13 @@ function computePathTileSet(map) {
       const dy = Math.sign(nextY - prevY);
       let cx = prevX;
       let cy = prevY;
+      let guard = 0;
       while (cx !== nextX || cy !== nextY) {
         if (cx !== nextX) cx += dx;
         if (cy !== nextY) cy += dy;
         set.add(tileKey(cx, cy));
+        guard++;
+        if (guard > 1024) break;
       }
       set.add(tileKey(nextX, nextY));
       prevX = nextX;
@@ -482,12 +485,13 @@ function validatePlacement(state, x, y, type) {
   const tileX = Math.round(x / tileSize - 0.5);
   const tileY = Math.round(y / tileSize - 0.5);
   const key = tileKey(tileX, tileY);
-  if (state.pathTiles instanceof Set && state.pathTiles.has(key)) {
+  const freePlacement = state.dev?.freePlacement === true;
+  if (!freePlacement && state.pathTiles instanceof Set && state.pathTiles.has(key)) {
     return { ok: false, reason: 'Path' };
   }
   const buildable = state.buildableSet;
   const restrictPlacement = state.restrictPlacement === true || state.map?.restrictPlacement === true;
-  if (restrictPlacement && buildable instanceof Set && buildable.size > 0 && !buildable.has(key)) {
+  if (!freePlacement && restrictPlacement && buildable instanceof Set && buildable.size > 0 && !buildable.has(key)) {
     return { ok: false, reason: 'Not a buildable tile' };
   }
   for (const tower of state.towers) {
