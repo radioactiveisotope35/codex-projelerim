@@ -421,9 +421,29 @@ function validatePlacement(state, x, y, type) {
   const tileSize = state.tileSize || 1;
   const tileX = Math.round(x / tileSize - 0.5);
   const tileY = Math.round(y / tileSize - 0.5);
-  const key = `${tileX},${tileY}`;
-  if (!state.buildableSet || !state.buildableSet.has(key)) {
-    return { ok: false, reason: 'Not a buildable tile' };
+  const buildable = state.buildableSet;
+  if (buildable instanceof Set) {
+    if (buildable.size > 0) {
+      const key = `${tileX},${tileY}`;
+      if (!buildable.has(key)) {
+        return { ok: false, reason: 'Not a buildable tile' };
+      }
+    }
+  } else if (Array.isArray(buildable) && buildable.length > 0) {
+    let allowed = false;
+    for (const entry of buildable) {
+      if (Array.isArray(entry) && entry[0] === tileX && entry[1] === tileY) {
+        allowed = true;
+        break;
+      }
+      if (typeof entry === 'string' && entry === `${tileX},${tileY}`) {
+        allowed = true;
+        break;
+      }
+    }
+    if (!allowed) {
+      return { ok: false, reason: 'Not a buildable tile' };
+    }
   }
   for (const tower of state.towers) {
     if (dist2(x, y, tower.x, tower.y) < (radius * 2) ** 2) {
