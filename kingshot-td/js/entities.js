@@ -137,7 +137,7 @@ function prioritizeTarget(tower, enemies) {
         if (enemy.t < best.enemy.t) best = { enemy, d2 };
         break;
       case 'strong':
-        if (enemy.hp > best.enemy.hp) best = { enemy, d2 };
+        if (enemy.maxHp > best.enemy.maxHp) best = { enemy, d2 };
         break;
       case 'close':
         if (d2 < best.d2) best = { enemy, d2 };
@@ -168,8 +168,10 @@ function buildBullet(tower, enemy, lane, now) {
     slowPct: tower.slowPct,
     slowDuration: tower.slowDuration,
     shatterLead: tower.shatterLead || false,
+    hitRadius: tower.baseRadius ?? BALANCE.global.baseRadius,
     ttl: 4,
     from: tower,
+    hitSet: new Set(),
   };
   if (tower.type === 'Mage' && isActive('arcaneSurge', tower._state)) {
     bullet.damage *= 2;
@@ -241,13 +243,25 @@ export function updateBullets(state, dt, now, diff) {
       state.bullets.splice(i, 1);
       continue;
     }
-    let pierceLeft = bullet.pierce;
+    const rawRadius = Number.isFinite(bullet.hitRadius)
+      ? bullet.hitRadius
+      : Number.isFinite(bullet.from?.baseRadius)
+      ? bullet.from.baseRadius
+      : BALANCE.global.baseRadius;
+    const hitRadius = Math.max(1, rawRadius || BALANCE.global.baseRadius || 1);
+    const hitRadius2 = hitRadius * hitRadius;
+    let hitSet = bullet.hitSet;
+    if (!(hitSet instanceof Set)) {
+      hitSet = new Set();
+      bullet.hitSet = hitSet;
+    }
+    let pierceLeft = bullet.pierce ?? 1;
     const splash = bullet.splashRadius;
-    let hit = false;
     for (const enemy of state.enemies) {
       if (!enemy.alive) continue;
+      if (hitSet.has(enemy.id)) continue;
       const d2 = dist2(bullet.x, bullet.y, enemy.x, enemy.y);
-      if (d2 > 144) continue;
+      if (d2 > hitRadius2) continue;
       const dealt = applyDamage(enemy, bullet.damage, bullet.damageType, {
         now,
         slowPct: bullet.slowPct,
@@ -255,6 +269,7 @@ export function updateBullets(state, dt, now, diff) {
         shatterLead: bullet.shatterLead,
       });
       if (dealt > 0) {
+        hitSet.add(enemy.id);
         pierceLeft -= 1;
         bullet.from.stats.damage += dealt;
         state.stats.damage = (state.stats.damage || 0) + dealt;
@@ -291,11 +306,11 @@ export function updateBullets(state, dt, now, diff) {
             }
           }
         }
-        hit = true;
       }
       if (pierceLeft <= 0) break;
     }
-    if (hit || pierceLeft <= 0) {
+    bullet.pierce = pierceLeft;
+    if (pierceLeft <= 0) {
       state.bullets.splice(i, 1);
     }
   }
