@@ -274,7 +274,9 @@ export function updateBullets(state, dt, now, diff) {
         if (enemy.hp <= 0) {
           const reward = popReward(enemy.type, diff);
           state.coins += reward;
-          state.stats.pops += 1;
+          if (state.stats) {
+            state.stats.pops += 1;
+          }
           enemy.alive = false;
           if (state.onEnemyKilled) state.onEnemyKilled(enemy, reward);
         }
@@ -303,7 +305,9 @@ export function updateBullets(state, dt, now, diff) {
                 if (other.hp <= 0) {
                   const reward = popReward(other.type, diff);
                   state.coins += reward;
-                  state.stats.pops += 1;
+                  if (state.stats) {
+                    state.stats.pops += 1;
+                  }
                   other.alive = false;
                   if (state.onEnemyKilled) state.onEnemyKilled(other, reward);
                 }

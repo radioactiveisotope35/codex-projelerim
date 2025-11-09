@@ -793,7 +793,9 @@ async function bootstrap() {
   refreshViewport(state);
 
   state.onEnemyKilled = (enemy, reward) => {
-    state.stats.cashEarned += reward;
+    if (state.stats) {
+      state.stats.cashEarned += reward;
+    }
     const xpGain = BALANCE.hero.xpPerPop * Math.max(1, enemy.reward);
     grantHeroXP(state, xpGain);
     updateShop(state);
@@ -874,7 +876,9 @@ async function bootstrap() {
       if (!enemy.alive) {
         const reward = popReward(enemy.type, diff);
         state.coins += reward;
-        state.stats.pops += 1;
+        if (state.stats) {
+          state.stats.pops += 1;
+        }
         if (state.onEnemyKilled) state.onEnemyKilled(enemy, reward);
       }
     }
