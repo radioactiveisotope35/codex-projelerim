@@ -269,7 +269,7 @@ function setupPanelInteractions(state) {
       if (index >= 0) {
         state.towers.splice(index, 1);
         state.coins += tower.sellValue;
-        if (state.stats) state.stats.cashEarned += tower.sellValue;
+        if (state.stats) state.stats.cashEarned = (state.stats.cashEarned ?? 0) + tower.sellValue;
         if (tower.hero) {
           state.heroPlaced = false;
           state.heroTower = null;
@@ -313,7 +313,7 @@ function setupPanelInteractions(state) {
         }
         const price = check.info.price;
         if (upgrades.applyUpgrade(state, state.selectedTower, path)) {
-          if (!sandbox && state.stats) state.stats.cashSpent += price;
+          if (!sandbox && state.stats) state.stats.cashSpent = (state.stats.cashSpent ?? 0) + price;
           updateShop(state);
           updatePanel(state);
         }
@@ -455,7 +455,7 @@ function placeTower(state, x, y, type) {
   if (!sandbox && !state.dev.freePlacement) {
     const cost = priceOf(type);
     state.coins -= cost;
-    if (state.stats) state.stats.cashSpent += cost;
+    if (state.stats) state.stats.cashSpent = (state.stats.cashSpent ?? 0) + cost;
   }
   if (tower.hero) {
     state.heroPlaced = true;
@@ -690,7 +690,7 @@ function endWave(state) {
     const bonus = roundBonus(state.waveIndex, diff);
     if (bonus > 0) {
       state.coins += bonus;
-      if (state.stats) state.stats.cashEarned += bonus;
+      if (state.stats) state.stats.cashEarned = (state.stats.cashEarned ?? 0) + bonus;
       toast(`Wave ${state.waveIndex} cleared! +$${bonus}`);
     }
   }
@@ -799,7 +799,7 @@ async function bootstrap() {
 
   state.onEnemyKilled = (enemy, reward) => {
     if (state.stats) {
-      state.stats.cashEarned += reward;
+      state.stats.cashEarned = (state.stats.cashEarned ?? 0) + reward;
     }
     const xpGain = BALANCE.hero.xpPerPop * Math.max(1, enemy.reward);
     grantHeroXP(state, xpGain);
@@ -882,7 +882,7 @@ async function bootstrap() {
         const reward = popReward(enemy.type, diff);
         state.coins += reward;
         if (state.stats) {
-          state.stats.pops += 1;
+          state.stats.pops = (state.stats.pops ?? 0) + 1;
         }
         if (state.onEnemyKilled) state.onEnemyKilled(enemy, reward);
       }

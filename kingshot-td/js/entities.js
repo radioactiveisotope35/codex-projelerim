@@ -268,11 +268,13 @@ export function updateBullets(state, dt, now, diff) {
     }
     let pierceLeft = bullet.pierce ?? 1;
     const splash = bullet.splashRadius;
+    const hitRadius = bullet.from?.baseRadius ?? BALANCE.global.baseRadius;
+    const hitRadius2 = hitRadius * hitRadius;
     for (const enemy of state.enemies) {
       if (!enemy.alive) continue;
       if (directHits.has(enemy.id)) continue;
       const d2 = dist2(bullet.x, bullet.y, enemy.x, enemy.y);
-      if (d2 > 144) continue;
+      if (d2 > hitRadius2) continue;
       const dealt = applyDamage(enemy, bullet.damage, bullet.damageType, {
         now,
         slowPct: bullet.slowPct,
@@ -293,7 +295,7 @@ export function updateBullets(state, dt, now, diff) {
           const reward = popReward(enemy.type, diff);
           state.coins += reward;
           if (state.stats) {
-            state.stats.pops += 1;
+            state.stats.pops = (state.stats.pops ?? 0) + 1;
           }
           enemy.alive = false;
           if (state.onEnemyKilled) state.onEnemyKilled(enemy, reward);
@@ -324,7 +326,7 @@ export function updateBullets(state, dt, now, diff) {
                   const reward = popReward(other.type, diff);
                   state.coins += reward;
                   if (state.stats) {
-                    state.stats.pops += 1;
+                    state.stats.pops = (state.stats.pops ?? 0) + 1;
                   }
                   other.alive = false;
                   if (state.onEnemyKilled) state.onEnemyKilled(other, reward);
