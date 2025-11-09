@@ -243,8 +243,26 @@ export function updateBullets(state, dt, now, diff) {
       continue;
     }
     let directHits = bullet.directHits;
-    if (!directHits) {
-      directHits = bullet.hitSet || new Set();
+    if (!(directHits instanceof Set)) {
+      const legacy = bullet.hitSet ?? directHits;
+      if (legacy instanceof Set) {
+        directHits = new Set(legacy);
+      } else if (Array.isArray(legacy)) {
+        directHits = new Set(legacy);
+      } else if (typeof legacy === 'number' || typeof legacy === 'string') {
+        const numeric = Number(legacy);
+        directHits = new Set([Number.isNaN(numeric) ? legacy : numeric]);
+      } else if (legacy && typeof legacy[Symbol.iterator] === 'function') {
+        directHits = new Set(legacy);
+      } else if (legacy && typeof legacy === 'object') {
+        const entries = Object.keys(legacy).map((key) => {
+          const num = Number(key);
+          return Number.isNaN(num) ? key : num;
+        });
+        directHits = new Set(entries);
+      } else {
+        directHits = new Set();
+      }
       bullet.directHits = directHits;
       delete bullet.hitSet;
     }
