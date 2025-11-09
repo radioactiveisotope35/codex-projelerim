@@ -29,7 +29,6 @@ import {
 } from './utils.js';
 
 const params = new URLSearchParams(globalThis.location?.search || '');
-const mapName = params.get('map') || 'meadow';
 const sandbox = params.get('sandbox') === '1';
 const devParam = params.get('dev') === '1';
 const diff = getDifficulty();
@@ -42,6 +41,33 @@ const btnPause = document.getElementById('btn-pause');
 const shopEl = document.getElementById('shop');
 const panelEl = document.getElementById('tower-panel');
 const toastEl = document.getElementById('toasts');
+
+const screens = {
+  menu: document.getElementById('main-menu-screen'),
+  mapSelect: document.getElementById('map-select-screen'),
+  game: [canvas, document.getElementById('ui-layer')],
+};
+
+function showScreen(screenId) {
+  Object.values(screens).forEach((screen) => {
+    if (Array.isArray(screen)) {
+      for (const el of screen) {
+        if (el) el.classList.add('hidden');
+      }
+    } else if (screen) {
+      screen.classList.add('hidden');
+    }
+  });
+
+  const toShow = screens[screenId];
+  if (Array.isArray(toShow)) {
+    for (const el of toShow) {
+      if (el) el.classList.remove('hidden');
+    }
+  } else if (toShow) {
+    toShow.classList.remove('hidden');
+  }
+}
 
 let debugOverlay = null;
 let panelInfoEl = null;
@@ -428,8 +454,10 @@ function computePathTileSet(map) {
 
 function setupPlacementEvents(state) {
   if (!canvas) return;
-  canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
-  canvas.addEventListener('pointermove', (ev) => {
+  canvas.oncontextmenu = (ev) => {
+    ev.preventDefault();
+  };
+  canvas.onpointermove = (ev) => {
     if (!state.clientToWorld) return;
     const tileSize = state.tileSize || 1;
     const pos = state.clientToWorld(ev.clientX, ev.clientY);
@@ -445,8 +473,8 @@ function setupPlacementEvents(state) {
       state.ghost.baseRadius = BALANCE.global.baseRadius;
       state.ghost.valid = check.ok;
     }
-  });
-  canvas.addEventListener('pointerdown', (ev) => {
+  };
+  canvas.onpointerdown = (ev) => {
     if (!state.clientToWorld) return;
     const pos = state.clientToWorld(ev.clientX, ev.clientY);
     if (ev.button === 2) {
@@ -474,7 +502,48 @@ function setupPlacementEvents(state) {
       }
     }
     selectTower(state, best);
-  });
+  };
+}
+
+function placementTileKey(tx, ty) {
+  const ix = Math.round(Number(tx));
+  const iy = Math.round(Number(ty));
+  if (!Number.isFinite(ix) || !Number.isFinite(iy)) return null;
+  return `${ix},${iy}`;
+}
+
+function derivePathTileSet(paths) {
+  const set = new Set();
+  if (!Array.isArray(paths)) return set;
+  const STEP_GUARD = 4096;
+  for (const lane of paths) {
+    if (!Array.isArray(lane) || lane.length === 0) continue;
+    let [cx, cy] = lane[0] || [];
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
+    const firstKey = placementTileKey(cx, cy);
+    if (firstKey) set.add(firstKey);
+    for (let i = 1; i < lane.length; i++) {
+      const point = lane[i] || [];
+      const nx = Number(point[0]);
+      const ny = Number(point[1]);
+      if (!Number.isFinite(nx) || !Number.isFinite(ny)) continue;
+      const stepX = Math.sign(nx - cx);
+      const stepY = Math.sign(ny - cy);
+      let guard = 0;
+      while (cx !== nx || cy !== ny) {
+        if (guard++ > STEP_GUARD) break;
+        if (cx !== nx) cx += stepX;
+        if (cy !== ny) cy += stepY;
+        const key = placementTileKey(cx, cy);
+        if (key) set.add(key);
+      }
+      cx = nx;
+      cy = ny;
+      const finalKey = placementTileKey(cx, cy);
+      if (finalKey) set.add(finalKey);
+    }
+  }
+  return set;
 }
 
 function placementTileKey(tx, ty) {
@@ -874,19 +943,25 @@ function spawnTestGroup(state, traits) {
 }
 
 function setupControls(state) {
-  if (btnSend) btnSend.addEventListener('click', () => {
-    if (!state.waveActive) startWave(state);
-  });
-  if (btnSpeed) btnSpeed.addEventListener('click', () => {
-    setGameSpeed(state, state.speed === 1 ? 2 : 1);
-  });
-  if (btnPause) btnPause.addEventListener('click', () => {
-    state.paused = !state.paused;
-    updatePauseButton(state);
-  });
+  if (btnSend) {
+    btnSend.onclick = () => {
+      if (!state.waveActive) startWave(state);
+    };
+  }
+  if (btnSpeed) {
+    btnSpeed.onclick = () => {
+      setGameSpeed(state, state.speed === 1 ? 2 : 1);
+    };
+  }
+  if (btnPause) {
+    btnPause.onclick = () => {
+      state.paused = !state.paused;
+      updatePauseButton(state);
+    };
+  }
 }
 
-async function bootstrap() {
+async function bootstrap(mapName) {
   const state = {
     map: null,
     lanes: [],
@@ -953,7 +1028,7 @@ async function bootstrap() {
   };
 
   try {
-    const map = await loadMap(mapName);
+    const map = await loadMap(mapName || 'meadow');
     state.map = map;
     const baked = bakeLanes(map, { offscreen: true });
     const buildable = Array.isArray(map.buildable) ? map.buildable : [];
@@ -985,6 +1060,7 @@ async function bootstrap() {
   } catch (err) {
     console.error(err);
     toast('Failed to load map');
+    showScreen('mapSelect');
     return;
   }
 
@@ -1075,4 +1151,27 @@ async function bootstrap() {
   requestAnimationFrame(loop);
 }
 
-bootstrap();
+function main() {
+  const startBtn = document.getElementById('btn-start-game');
+  startBtn?.addEventListener('click', () => {
+    showScreen('mapSelect');
+  });
+
+  document
+    .querySelectorAll('#map-select-screen [data-map]')
+    .forEach((button) => {
+      button.addEventListener('click', () => {
+        const map = button.dataset.map;
+        if (!map) return;
+        showScreen('game');
+        bootstrap(map).catch((err) => {
+          console.error('Failed to start game:', err);
+          showScreen('mapSelect');
+        });
+      });
+    });
+
+  showScreen('menu');
+}
+
+main();
