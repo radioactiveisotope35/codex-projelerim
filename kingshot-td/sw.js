@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kingshot-td-v1';
+const CACHE_NAME = 'kingshot-td-v2';
 const ASSETS = [
   './',
   './index.html',

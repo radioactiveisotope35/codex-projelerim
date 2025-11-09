@@ -11,7 +11,7 @@ import {
   applyDamage,
 } from './entities.js';
 import { priceOf, getDifficulty, roundBonus, popReward } from './economy.js';
-import { wavesByName } from './waves.js';
+import { wavesByName, generateLateGameWave } from './waves.js';
 import * as upgrades from './upgrades.js';
 import * as abilities from './abilities.js';
 import {
@@ -23,6 +23,7 @@ import {
   getViewport,
   clientToWorldFactory,
   throttle,
+  pointToPolylineDistance,
 } from './utils.js';
 
 const params = new URLSearchParams(globalThis.location?.search || '');
@@ -360,10 +361,12 @@ function setupPlacementEvents(state) {
   canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
   canvas.addEventListener('pointermove', (ev) => {
     if (!state.clientToWorld) return;
+    const tileSize = state.tileSize || 1;
     const pos = state.clientToWorld(ev.clientX, ev.clientY);
-    const grid = state.tileSize / 4;
-    const snapX = Math.round(pos.x / grid) * grid;
-    const snapY = Math.round(pos.y / grid) * grid;
+    const tileX = Math.round(pos.x / tileSize - 0.5);
+    const tileY = Math.round(pos.y / tileSize - 0.5);
+    const snapX = (tileX + 0.5) * tileSize;
+    const snapY = (tileY + 0.5) * tileSize;
     if (state.placing && state.ghost.type) {
       const check = validatePlacement(state, snapX, snapY, state.ghost.type);
       state.ghost.x = snapX;
@@ -404,6 +407,47 @@ function setupPlacementEvents(state) {
   });
 }
 
+function placementTileKey(tx, ty) {
+  const ix = Math.round(Number(tx));
+  const iy = Math.round(Number(ty));
+  if (!Number.isFinite(ix) || !Number.isFinite(iy)) return null;
+  return `${ix},${iy}`;
+}
+
+function derivePathTileSet(paths) {
+  const set = new Set();
+  if (!Array.isArray(paths)) return set;
+  const STEP_GUARD = 4096;
+  for (const lane of paths) {
+    if (!Array.isArray(lane) || lane.length === 0) continue;
+    let [cx, cy] = lane[0] || [];
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
+    const firstKey = placementTileKey(cx, cy);
+    if (firstKey) set.add(firstKey);
+    for (let i = 1; i < lane.length; i++) {
+      const point = lane[i] || [];
+      const nx = Number(point[0]);
+      const ny = Number(point[1]);
+      if (!Number.isFinite(nx) || !Number.isFinite(ny)) continue;
+      const stepX = Math.sign(nx - cx);
+      const stepY = Math.sign(ny - cy);
+      let guard = 0;
+      while (cx !== nx || cy !== ny) {
+        if (guard++ > STEP_GUARD) break;
+        if (cx !== nx) cx += stepX;
+        if (cy !== ny) cy += stepY;
+        const key = placementTileKey(cx, cy);
+        if (key) set.add(key);
+      }
+      cx = nx;
+      cy = ny;
+      const finalKey = placementTileKey(cx, cy);
+      if (finalKey) set.add(finalKey);
+    }
+  }
+  return set;
+}
+
 function validatePlacement(state, x, y, type) {
   const radius = BALANCE.global.baseRadius;
   if (!type) return { ok: false, reason: 'No tower selected' };
@@ -413,9 +457,39 @@ function validatePlacement(state, x, y, type) {
   const tileSize = state.tileSize || 1;
   const tileX = Math.round(x / tileSize - 0.5);
   const tileY = Math.round(y / tileSize - 0.5);
-  const key = `${tileX},${tileY}`;
-  if (!state.buildableSet || !state.buildableSet.has(key)) {
-    return { ok: false, reason: 'Not a buildable tile' };
+  const key = placementTileKey(tileX, tileY);
+  if (!key) {
+    return { ok: false, reason: 'Bounds' };
+  }
+  const centerX = (tileX + 0.5) * tileSize;
+  const centerY = (tileY + 0.5) * tileSize;
+  const buildableSet = state.buildableSet;
+  const hasBuildable = buildableSet instanceof Set && buildableSet.size > 0;
+  const restrict = state.map?.restrictPlacement === true;
+  const requireWhitelist = restrict && hasBuildable;
+  const onWhitelist = hasBuildable && buildableSet.has(key);
+  const onPath = state.pathTiles?.has(key);
+  if (!state.dev.freePlacement) {
+    if (onPath) {
+      return { ok: false, reason: 'Path' };
+    }
+    if (requireWhitelist && !onWhitelist) {
+      return { ok: false, reason: 'Not a buildable tile' };
+    }
+    if (!onWhitelist) {
+      const lanes = Array.isArray(state.lanes) ? state.lanes : [];
+      const clearance = (state.tileSize || 1) * (BALANCE.global.pathClearFactor ?? 0);
+      if (clearance > 0 && lanes.length > 0) {
+        const threshold = radius + clearance;
+        for (const lane of lanes) {
+          if (!Array.isArray(lane) || lane.length < 2) continue;
+          const dist = pointToPolylineDistance(centerX, centerY, lane);
+          if (dist < threshold) {
+            return { ok: false, reason: 'Too close to path' };
+          }
+        }
+      }
+    }
   }
   for (const tower of state.towers) {
     if (dist2(x, y, tower.x, tower.y) < (radius * 2) ** 2) {
@@ -429,8 +503,6 @@ function validatePlacement(state, x, y, type) {
     const price = priceOf(type);
     if (state.coins < price) return { ok: false, reason: 'Coins' };
   }
-  const centerX = (tileX + 0.5) * tileSize;
-  const centerY = (tileY + 0.5) * tileSize;
   return { ok: true, tileX, tileY, centerX, centerY };
 }
 
@@ -637,10 +709,11 @@ function buildDevPanel(state, setSpeed, spawnTests, skipWaveFn, clearEnemiesFn) 
 
 function startWave(state) {
   const next = state.waveIndex + 1;
-  const groups = state.waves[next];
+  let groups = state.waves[next];
+
   if (!groups) {
-    toast('No more waves!');
-    return;
+    groups = generateLateGameWave(next);
+    state.waves[next] = groups;
   }
   state.waveIndex = next;
   state.waveActive = true;
@@ -694,10 +767,6 @@ function endWave(state) {
 function devSkipWave(state) {
   if (!state.waveActive) {
     const next = state.waveIndex + 1;
-    if (!state.waves[next]) {
-      toast('No more waves to skip');
-      return;
-    }
     startWave(state);
   }
   state.spawnQueue.clear();
@@ -772,6 +841,7 @@ async function bootstrap() {
     heroTower: null,
     heroAura: null,
     buildableSet: new Set(),
+    pathTiles: new Set(),
     diff,
     sandbox,
     stats: { pops: 0, damage: 0, cashSpent: 0, cashEarned: 0 },
@@ -812,14 +882,27 @@ async function bootstrap() {
     const baked = bakeLanes(map, { offscreen: true });
     const buildable = Array.isArray(map.buildable) ? map.buildable : [];
     state.map.buildable = buildable;
-    state.buildableSet = new Set(buildable.map(([tx, ty]) => `${tx},${ty}`));
+    const buildableKeys = [];
+    for (const entry of buildable) {
+      if (Array.isArray(entry) && entry.length >= 2) {
+        const key = placementTileKey(entry[0], entry[1]);
+        if (key) buildableKeys.push(key);
+        continue;
+      }
+      if (typeof entry === 'string') {
+        const [sx, sy] = entry.split(',').map((v) => v.trim());
+        const key = placementTileKey(sx, sy);
+        if (key) buildableKeys.push(key);
+      }
+    }
+    state.buildableSet = new Set(buildableKeys);
+    state.pathTiles = derivePathTileSet(map.paths);
     state.lanes = baked.lanes;
     state.tileSize = baked.tileSize;
     state.worldW = baked.worldW;
     state.worldH = baked.worldH;
     const start = startStateFromMap(map);
-    const minPrice = Math.min(...Object.values(BALANCE.towers).map((t) => t.price));
-    state.coins = sandbox ? 9999 : Math.max(start.coins, minPrice);
+    state.coins = sandbox ? 9999 : start.coins;
     state.lives = start.lives;
     state.waves = wavesByName(map.waveset);
     refreshViewport(state);
@@ -892,7 +975,9 @@ async function bootstrap() {
     let rawDt = now - lastTime;
     lastTime = now;
     rawDt = Math.min(rawDt, 0.25);
-    const scaled = state.paused ? 0 : Math.min(BALANCE.global.dtCap || 0.05, rawDt * state.speed);
+    const scaled = state.paused
+      ? 0
+      : Math.min(BALANCE.global.dtCap || 0.05, rawDt) * state.speed;
     if (!state.paused) {
       state.gameTime += scaled;
       state.spawnQueue.flush(state.gameTime, (entry) => spawnEnemy(state, entry));
