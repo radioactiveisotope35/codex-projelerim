@@ -360,10 +360,13 @@ function setupPlacementEvents(state) {
   canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
   canvas.addEventListener('pointermove', (ev) => {
     if (!state.clientToWorld) return;
+    const tileSize = state.tileSize;
+    if (!tileSize) return;
     const pos = state.clientToWorld(ev.clientX, ev.clientY);
-    const grid = state.tileSize / 4;
-    const snapX = Math.round(pos.x / grid) * grid;
-    const snapY = Math.round(pos.y / grid) * grid;
+    const tileX = Math.round(pos.x / tileSize - 0.5);
+    const tileY = Math.round(pos.y / tileSize - 0.5);
+    const snapX = (tileX + 0.5) * tileSize;
+    const snapY = (tileY + 0.5) * tileSize;
     if (state.placing && state.ghost.type) {
       const check = validatePlacement(state, snapX, snapY, state.ghost.type);
       state.ghost.x = snapX;
@@ -865,7 +868,9 @@ async function bootstrap() {
       shatterLead: options.shatterLead,
     });
     if (dealt > 0) {
-      state.stats.damage += dealt;
+      if (state.stats) {
+        state.stats.damage = (state.stats.damage ?? 0) + dealt;
+      }
       if (!enemy.alive) {
         const reward = popReward(enemy.type, diff);
         state.coins += reward;
@@ -892,7 +897,7 @@ async function bootstrap() {
     let rawDt = now - lastTime;
     lastTime = now;
     rawDt = Math.min(rawDt, 0.25);
-    const scaled = state.paused ? 0 : Math.min(BALANCE.global.dtCap || 0.05, rawDt * state.speed);
+    const scaled = state.paused ? 0 : Math.min(BALANCE.global.dtCap || 0.05, rawDt) * state.speed;
     if (!state.paused) {
       state.gameTime += scaled;
       state.spawnQueue.flush(state.gameTime, (entry) => spawnEnemy(state, entry));
