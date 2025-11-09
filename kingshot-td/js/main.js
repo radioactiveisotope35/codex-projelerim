@@ -9,11 +9,13 @@ import {
   updateBullets,
   cyclePriority,
   applyDamage,
+  handleEnemyDeath,
 } from './entities.js';
-import { priceOf, getDifficulty, roundBonus, popReward } from './economy.js';
-import { wavesByName } from './waves.js';
+import { priceOf, getDifficulty, roundBonus } from './economy.js';
+import { wavesByName, generateLateGameWave } from './waves.js';
 import * as upgrades from './upgrades.js';
 import * as abilities from './abilities.js';
+import { generateAndLoadAssets } from './inCodeAssets.js';
 import {
   nowSeconds,
   dist2,
@@ -23,10 +25,10 @@ import {
   getViewport,
   clientToWorldFactory,
   throttle,
+  pointToPolylineDistance,
 } from './utils.js';
 
 const params = new URLSearchParams(globalThis.location?.search || '');
-const mapName = params.get('map') || 'meadow';
 const sandbox = params.get('sandbox') === '1';
 const devParam = params.get('dev') === '1';
 const diff = getDifficulty();
@@ -39,6 +41,33 @@ const btnPause = document.getElementById('btn-pause');
 const shopEl = document.getElementById('shop');
 const panelEl = document.getElementById('tower-panel');
 const toastEl = document.getElementById('toasts');
+
+const screens = {
+  menu: document.getElementById('main-menu-screen'),
+  mapSelect: document.getElementById('map-select-screen'),
+  game: [canvas, document.getElementById('ui-layer')],
+};
+
+function showScreen(screenId) {
+  Object.values(screens).forEach((screen) => {
+    if (Array.isArray(screen)) {
+      for (const el of screen) {
+        if (el) el.classList.add('hidden');
+      }
+    } else if (screen) {
+      screen.classList.add('hidden');
+    }
+  });
+
+  const toShow = screens[screenId];
+  if (Array.isArray(toShow)) {
+    for (const el of toShow) {
+      if (el) el.classList.remove('hidden');
+    }
+  } else if (toShow) {
+    toShow.classList.remove('hidden');
+  }
+}
 
 let debugOverlay = null;
 let panelInfoEl = null;
@@ -357,13 +386,17 @@ function attachHotkeys(state) {
 
 function setupPlacementEvents(state) {
   if (!canvas) return;
-  canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
-  canvas.addEventListener('pointermove', (ev) => {
+  canvas.oncontextmenu = (ev) => {
+    ev.preventDefault();
+  };
+  canvas.onpointermove = (ev) => {
     if (!state.clientToWorld) return;
+    const tileSize = state.tileSize || 1;
     const pos = state.clientToWorld(ev.clientX, ev.clientY);
-    const grid = state.tileSize / 4;
-    const snapX = Math.round(pos.x / grid) * grid;
-    const snapY = Math.round(pos.y / grid) * grid;
+    const tileX = Math.round(pos.x / tileSize - 0.5);
+    const tileY = Math.round(pos.y / tileSize - 0.5);
+    const snapX = (tileX + 0.5) * tileSize;
+    const snapY = (tileY + 0.5) * tileSize;
     if (state.placing && state.ghost.type) {
       const check = validatePlacement(state, snapX, snapY, state.ghost.type);
       state.ghost.x = snapX;
@@ -372,8 +405,8 @@ function setupPlacementEvents(state) {
       state.ghost.baseRadius = BALANCE.global.baseRadius;
       state.ghost.valid = check.ok;
     }
-  });
-  canvas.addEventListener('pointerdown', (ev) => {
+  };
+  canvas.onpointerdown = (ev) => {
     if (!state.clientToWorld) return;
     const pos = state.clientToWorld(ev.clientX, ev.clientY);
     if (ev.button === 2) {
@@ -401,7 +434,48 @@ function setupPlacementEvents(state) {
       }
     }
     selectTower(state, best);
-  });
+  };
+}
+
+function placementTileKey(tx, ty) {
+  const ix = Math.round(Number(tx));
+  const iy = Math.round(Number(ty));
+  if (!Number.isFinite(ix) || !Number.isFinite(iy)) return null;
+  return `${ix},${iy}`;
+}
+
+function derivePathTileSet(paths) {
+  const set = new Set();
+  if (!Array.isArray(paths)) return set;
+  const STEP_GUARD = 4096;
+  for (const lane of paths) {
+    if (!Array.isArray(lane) || lane.length === 0) continue;
+    let [cx, cy] = lane[0] || [];
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
+    const firstKey = placementTileKey(cx, cy);
+    if (firstKey) set.add(firstKey);
+    for (let i = 1; i < lane.length; i++) {
+      const point = lane[i] || [];
+      const nx = Number(point[0]);
+      const ny = Number(point[1]);
+      if (!Number.isFinite(nx) || !Number.isFinite(ny)) continue;
+      const stepX = Math.sign(nx - cx);
+      const stepY = Math.sign(ny - cy);
+      let guard = 0;
+      while (cx !== nx || cy !== ny) {
+        if (guard++ > STEP_GUARD) break;
+        if (cx !== nx) cx += stepX;
+        if (cy !== ny) cy += stepY;
+        const key = placementTileKey(cx, cy);
+        if (key) set.add(key);
+      }
+      cx = nx;
+      cy = ny;
+      const finalKey = placementTileKey(cx, cy);
+      if (finalKey) set.add(finalKey);
+    }
+  }
+  return set;
 }
 
 function validatePlacement(state, x, y, type) {
@@ -413,9 +487,39 @@ function validatePlacement(state, x, y, type) {
   const tileSize = state.tileSize || 1;
   const tileX = Math.round(x / tileSize - 0.5);
   const tileY = Math.round(y / tileSize - 0.5);
-  const key = `${tileX},${tileY}`;
-  if (!state.buildableSet || !state.buildableSet.has(key)) {
-    return { ok: false, reason: 'Not a buildable tile' };
+  const key = placementTileKey(tileX, tileY);
+  if (!key) {
+    return { ok: false, reason: 'Bounds' };
+  }
+  const centerX = (tileX + 0.5) * tileSize;
+  const centerY = (tileY + 0.5) * tileSize;
+  const buildableSet = state.buildableSet;
+  const hasBuildable = buildableSet instanceof Set && buildableSet.size > 0;
+  const restrict = state.map?.restrictPlacement === true;
+  const requireWhitelist = restrict && hasBuildable;
+  const onWhitelist = hasBuildable && buildableSet.has(key);
+  const onPath = state.pathTiles?.has(key);
+  if (!state.dev.freePlacement) {
+    if (onPath) {
+      return { ok: false, reason: 'Path' };
+    }
+    if (requireWhitelist && !onWhitelist) {
+      return { ok: false, reason: 'Not a buildable tile' };
+    }
+    if (!onWhitelist) {
+      const lanes = Array.isArray(state.lanes) ? state.lanes : [];
+      const clearance = (state.tileSize || 1) * (BALANCE.global.pathClearFactor ?? 0);
+      if (clearance > 0 && lanes.length > 0) {
+        const threshold = radius + clearance;
+        for (const lane of lanes) {
+          if (!Array.isArray(lane) || lane.length < 2) continue;
+          const dist = pointToPolylineDistance(centerX, centerY, lane);
+          if (dist < threshold) {
+            return { ok: false, reason: 'Too close to path' };
+          }
+        }
+      }
+    }
   }
   for (const tower of state.towers) {
     if (dist2(x, y, tower.x, tower.y) < (radius * 2) ** 2) {
@@ -429,8 +533,6 @@ function validatePlacement(state, x, y, type) {
     const price = priceOf(type);
     if (state.coins < price) return { ok: false, reason: 'Coins' };
   }
-  const centerX = (tileX + 0.5) * tileSize;
-  const centerY = (tileY + 0.5) * tileSize;
   return { ok: true, tileX, tileY, centerX, centerY };
 }
 
@@ -637,10 +739,11 @@ function buildDevPanel(state, setSpeed, spawnTests, skipWaveFn, clearEnemiesFn) 
 
 function startWave(state) {
   const next = state.waveIndex + 1;
-  const groups = state.waves[next];
+  let groups = state.waves[next];
+
   if (!groups) {
-    toast('No more waves!');
-    return;
+    groups = generateLateGameWave(next);
+    state.waves[next] = groups;
   }
   state.waveIndex = next;
   state.waveActive = true;
@@ -694,10 +797,6 @@ function endWave(state) {
 function devSkipWave(state) {
   if (!state.waveActive) {
     const next = state.waveIndex + 1;
-    if (!state.waves[next]) {
-      toast('No more waves to skip');
-      return;
-    }
     startWave(state);
   }
   state.spawnQueue.clear();
@@ -735,19 +834,25 @@ function spawnTestGroup(state, traits) {
 }
 
 function setupControls(state) {
-  if (btnSend) btnSend.addEventListener('click', () => {
-    if (!state.waveActive) startWave(state);
-  });
-  if (btnSpeed) btnSpeed.addEventListener('click', () => {
-    setGameSpeed(state, state.speed === 1 ? 2 : 1);
-  });
-  if (btnPause) btnPause.addEventListener('click', () => {
-    state.paused = !state.paused;
-    updatePauseButton(state);
-  });
+  if (btnSend) {
+    btnSend.onclick = () => {
+      if (!state.waveActive) startWave(state);
+    };
+  }
+  if (btnSpeed) {
+    btnSpeed.onclick = () => {
+      setGameSpeed(state, state.speed === 1 ? 2 : 1);
+    };
+  }
+  if (btnPause) {
+    btnPause.onclick = () => {
+      state.paused = !state.paused;
+      updatePauseButton(state);
+    };
+  }
 }
 
-async function bootstrap() {
+async function bootstrap(mapName) {
   const state = {
     map: null,
     lanes: [],
@@ -772,6 +877,8 @@ async function bootstrap() {
     heroTower: null,
     heroAura: null,
     buildableSet: new Set(),
+    pathTiles: new Set(),
+    assets: {},
     diff,
     sandbox,
     stats: { pops: 0, damage: 0, cashSpent: 0, cashEarned: 0 },
@@ -788,6 +895,9 @@ async function bootstrap() {
 
   abilities.ensureState(state);
   refreshViewport(state);
+
+  const assets = await generateAndLoadAssets();
+  state.assets = assets || {};
 
   state.onEnemyKilled = (enemy, reward) => {
     state.stats.cashEarned += reward;
@@ -807,25 +917,39 @@ async function bootstrap() {
   };
 
   try {
-    const map = await loadMap(mapName);
+    const map = await loadMap(mapName || 'meadow');
     state.map = map;
     const baked = bakeLanes(map, { offscreen: true });
     const buildable = Array.isArray(map.buildable) ? map.buildable : [];
     state.map.buildable = buildable;
-    state.buildableSet = new Set(buildable.map(([tx, ty]) => `${tx},${ty}`));
+    const buildableKeys = [];
+    for (const entry of buildable) {
+      if (Array.isArray(entry) && entry.length >= 2) {
+        const key = placementTileKey(entry[0], entry[1]);
+        if (key) buildableKeys.push(key);
+        continue;
+      }
+      if (typeof entry === 'string') {
+        const [sx, sy] = entry.split(',').map((v) => v.trim());
+        const key = placementTileKey(sx, sy);
+        if (key) buildableKeys.push(key);
+      }
+    }
+    state.buildableSet = new Set(buildableKeys);
+    state.pathTiles = derivePathTileSet(map.paths);
     state.lanes = baked.lanes;
     state.tileSize = baked.tileSize;
     state.worldW = baked.worldW;
     state.worldH = baked.worldH;
     const start = startStateFromMap(map);
-    const minPrice = Math.min(...Object.values(BALANCE.towers).map((t) => t.price));
-    state.coins = sandbox ? 9999 : Math.max(start.coins, minPrice);
+    state.coins = sandbox ? 9999 : start.coins;
     state.lives = start.lives;
     state.waves = wavesByName(map.waveset);
     refreshViewport(state);
   } catch (err) {
     console.error(err);
     toast('Failed to load map');
+    showScreen('mapSelect');
     return;
   }
 
@@ -864,14 +988,11 @@ async function bootstrap() {
       slowDuration: options.slowDuration,
       shatterLead: options.shatterLead,
     });
-    if (dealt > 0) {
+    if (dealt > 0 && state.stats) {
       state.stats.damage += dealt;
-      if (!enemy.alive) {
-        const reward = popReward(enemy.type, diff);
-        state.coins += reward;
-        state.stats.pops += 1;
-        if (state.onEnemyKilled) state.onEnemyKilled(enemy, reward);
-      }
+    }
+    if (enemy.hp <= 0) {
+      handleEnemyDeath(state, enemy, diff);
     }
   }
 
@@ -892,7 +1013,9 @@ async function bootstrap() {
     let rawDt = now - lastTime;
     lastTime = now;
     rawDt = Math.min(rawDt, 0.25);
-    const scaled = state.paused ? 0 : Math.min(BALANCE.global.dtCap || 0.05, rawDt * state.speed);
+    const scaled = state.paused
+      ? 0
+      : Math.min(BALANCE.global.dtCap || 0.05, rawDt) * state.speed;
     if (!state.paused) {
       state.gameTime += scaled;
       state.spawnQueue.flush(state.gameTime, (entry) => spawnEnemy(state, entry));
@@ -917,4 +1040,27 @@ async function bootstrap() {
   requestAnimationFrame(loop);
 }
 
-bootstrap();
+function main() {
+  const startBtn = document.getElementById('btn-start-game');
+  startBtn?.addEventListener('click', () => {
+    showScreen('mapSelect');
+  });
+
+  document
+    .querySelectorAll('#map-select-screen [data-map]')
+    .forEach((button) => {
+      button.addEventListener('click', () => {
+        const map = button.dataset.map;
+        if (!map) return;
+        showScreen('game');
+        bootstrap(map).catch((err) => {
+          console.error('Failed to start game:', err);
+          showScreen('mapSelect');
+        });
+      });
+    });
+
+  showScreen('menu');
+}
+
+main();
