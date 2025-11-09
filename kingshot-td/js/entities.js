@@ -137,7 +137,7 @@ function prioritizeTarget(tower, enemies) {
         if (enemy.t < best.enemy.t) best = { enemy, d2 };
         break;
       case 'strong':
-        if (enemy.hp > best.enemy.hp) best = { enemy, d2 };
+        if (enemy.maxHp > best.enemy.maxHp) best = { enemy, d2 };
         break;
       case 'close':
         if (d2 < best.d2) best = { enemy, d2 };
@@ -243,7 +243,6 @@ export function updateBullets(state, dt, now, diff) {
     }
     let pierceLeft = bullet.pierce;
     const splash = bullet.splashRadius;
-    let hit = false;
     for (const enemy of state.enemies) {
       if (!enemy.alive) continue;
       const d2 = dist2(bullet.x, bullet.y, enemy.x, enemy.y);
@@ -257,7 +256,7 @@ export function updateBullets(state, dt, now, diff) {
       if (dealt > 0) {
         pierceLeft -= 1;
         bullet.from.stats.damage += dealt;
-        state.stats.damage = (state.stats.damage || 0) + dealt;
+        state.stats.damage += dealt;
         if (enemy.hp <= 0) {
           const reward = popReward(enemy.type, diff);
           state.coins += reward;
@@ -279,7 +278,7 @@ export function updateBullets(state, dt, now, diff) {
               });
               if (dealtSplash > 0) {
                 bullet.from.stats.damage += dealtSplash;
-                state.stats.damage = (state.stats.damage || 0) + dealtSplash;
+                state.stats.damage += dealtSplash;
                 if (other.hp <= 0) {
                   const reward = popReward(other.type, diff);
                   state.coins += reward;
@@ -291,11 +290,11 @@ export function updateBullets(state, dt, now, diff) {
             }
           }
         }
-        hit = true;
       }
       if (pierceLeft <= 0) break;
     }
-    if (hit || pierceLeft <= 0) {
+    bullet.pierce = pierceLeft;
+    if (pierceLeft <= 0) {
       state.bullets.splice(i, 1);
     }
   }
