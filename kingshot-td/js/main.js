@@ -42,30 +42,35 @@ const shopEl = document.getElementById('shop');
 const panelEl = document.getElementById('tower-panel');
 const toastEl = document.getElementById('toasts');
 
-const screens = {
-  menu: document.getElementById('main-menu-screen'),
-  mapSelect: document.getElementById('map-select-screen'),
-  game: [canvas, document.getElementById('ui-layer')],
+const SCREEN_TARGETS = {
+  menu: ['main-menu-screen'],
+  mapSelect: ['map-select-screen'],
+  game: ['game', 'ui-layer'],
 };
 
-function showScreen(screenId) {
-  Object.values(screens).forEach((screen) => {
-    if (Array.isArray(screen)) {
-      for (const el of screen) {
-        if (el) el.classList.add('hidden');
-      }
-    } else if (screen) {
-      screen.classList.add('hidden');
+function allScreenIds() {
+  const result = [];
+  for (const value of Object.values(SCREEN_TARGETS)) {
+    if (Array.isArray(value)) {
+      result.push(...value);
     }
-  });
+  }
+  return result;
+}
 
-  const toShow = screens[screenId];
-  if (Array.isArray(toShow)) {
-    for (const el of toShow) {
-      if (el) el.classList.remove('hidden');
-    }
-  } else if (toShow) {
-    toShow.classList.remove('hidden');
+const ALL_SCREEN_IDS = allScreenIds();
+
+function showScreen(screenId) {
+  for (const id of ALL_SCREEN_IDS) {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('hidden');
+  }
+
+  const targets = SCREEN_TARGETS[screenId];
+  if (!targets) return;
+  for (const id of targets) {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('hidden');
   }
 }
 
@@ -503,47 +508,6 @@ function setupPlacementEvents(state) {
     }
     selectTower(state, best);
   };
-}
-
-function placementTileKey(tx, ty) {
-  const ix = Math.round(Number(tx));
-  const iy = Math.round(Number(ty));
-  if (!Number.isFinite(ix) || !Number.isFinite(iy)) return null;
-  return `${ix},${iy}`;
-}
-
-function derivePathTileSet(paths) {
-  const set = new Set();
-  if (!Array.isArray(paths)) return set;
-  const STEP_GUARD = 4096;
-  for (const lane of paths) {
-    if (!Array.isArray(lane) || lane.length === 0) continue;
-    let [cx, cy] = lane[0] || [];
-    if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
-    const firstKey = placementTileKey(cx, cy);
-    if (firstKey) set.add(firstKey);
-    for (let i = 1; i < lane.length; i++) {
-      const point = lane[i] || [];
-      const nx = Number(point[0]);
-      const ny = Number(point[1]);
-      if (!Number.isFinite(nx) || !Number.isFinite(ny)) continue;
-      const stepX = Math.sign(nx - cx);
-      const stepY = Math.sign(ny - cy);
-      let guard = 0;
-      while (cx !== nx || cy !== ny) {
-        if (guard++ > STEP_GUARD) break;
-        if (cx !== nx) cx += stepX;
-        if (cy !== ny) cy += stepY;
-        const key = placementTileKey(cx, cy);
-        if (key) set.add(key);
-      }
-      cx = nx;
-      cy = ny;
-      const finalKey = placementTileKey(cx, cy);
-      if (finalKey) set.add(finalKey);
-    }
-  }
-  return set;
 }
 
 function placementTileKey(tx, ty) {
@@ -1174,4 +1138,8 @@ function main() {
   showScreen('menu');
 }
 
-main();
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', main, { once: true });
+} else {
+  main();
+}
