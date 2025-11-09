@@ -1,9 +1,12 @@
 function hasCamoVision(state) {
   if (!state) return false;
-  if (state.heroTower?.heroLevel >= 15) return true;
-  if (state.abilities?.actives?.arcaneSurge > 0) return true;
-  if (!Array.isArray(state.towers)) return false;
-  return state.towers.some((tower) => tower?.camoDetection);
+  const towers = Array.isArray(state.towers) ? state.towers : [];
+  if (state.heroTower?.camoDetection) return true;
+  if (towers.some((tower) => tower?.camoDetection)) return true;
+  if (state.abilities?.actives?.arcaneSurge > 0) {
+    return towers.some((tower) => tower?.type === 'Mage');
+  }
+  return false;
 }
 
 const ABILITIES = {
