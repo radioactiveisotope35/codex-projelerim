@@ -485,6 +485,7 @@ function tileKey(tx, ty) {
 function buildPathTileSet(paths) {
   const set = new Set();
   if (!Array.isArray(paths)) return set;
+  const STEP_GUARD = 4096;
   for (const lane of paths) {
     if (!Array.isArray(lane) || lane.length === 0) continue;
     let [cx, cy] = lane[0] || [];
@@ -498,12 +499,18 @@ function buildPathTileSet(paths) {
       if (!Number.isFinite(nx) || !Number.isFinite(ny)) continue;
       const stepX = Math.sign(nx - cx);
       const stepY = Math.sign(ny - cy);
+      let guard = 0;
       while (cx !== nx || cy !== ny) {
+        if (guard++ > STEP_GUARD) break;
         if (cx !== nx) cx += stepX;
         if (cy !== ny) cy += stepY;
         const key = tileKey(cx, cy);
         if (key) set.add(key);
       }
+      cx = nx;
+      cy = ny;
+      const finalKey = tileKey(cx, cy);
+      if (finalKey) set.add(finalKey);
     }
   }
   return set;
@@ -534,27 +541,22 @@ function validatePlacement(state, x, y, type) {
     if (onPath) {
       return { ok: false, reason: 'Path' };
     }
+    if (requireWhitelist && !onWhitelist) {
+      return { ok: false, reason: 'Not a buildable tile' };
+    }
     if (!onWhitelist) {
       const lanes = Array.isArray(state.lanes) ? state.lanes : [];
       const clearance = (state.tileSize || 1) * (BALANCE.global.pathClearFactor ?? 0);
       if (clearance > 0 && lanes.length > 0) {
         const threshold = radius + clearance;
-        let tooClose = false;
         for (const lane of lanes) {
           if (!Array.isArray(lane) || lane.length < 2) continue;
           const dist = pointToPolylineDistance(centerX, centerY, lane);
           if (dist < threshold) {
-            tooClose = true;
-            break;
+            return { ok: false, reason: 'Too close to path' };
           }
         }
-        if (tooClose) {
-          return { ok: false, reason: 'Too close to path' };
-        }
       }
-    }
-    if (requireWhitelist && !onWhitelist) {
-      return { ok: false, reason: 'Not a buildable tile' };
     }
   }
   for (const tower of state.towers) {
@@ -958,8 +960,10 @@ async function bootstrap() {
       if (Array.isArray(entry) && entry.length >= 2) {
         const key = tileKey(entry[0], entry[1]);
         if (key) buildableKeys.push(key);
-      } else if (typeof entry === 'string') {
-        const [sx, sy] = entry.split(',');
+        continue;
+      }
+      if (typeof entry === 'string') {
+        const [sx, sy] = entry.split(',').map((v) => v.trim());
         const key = tileKey(sx, sy);
         if (key) buildableKeys.push(key);
       }

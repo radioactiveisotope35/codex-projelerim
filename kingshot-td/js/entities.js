@@ -190,15 +190,19 @@ function buildBullet(tower, enemy, lane, now) {
 }
 
 export function updateTowers(state, dt, now) {
-  const lanes = state.lanes;
+  const lanes = Array.isArray(state.lanes) ? state.lanes : [];
+  const fallbackLane = lanes.find((lane) => Array.isArray(lane) && lane.length >= 2) || null;
   for (const tower of state.towers) {
     tower._state = state;
     tower.cooldown = Math.max(0, tower.cooldown - dt);
     if (tower.cooldown > 0) continue;
-    const lane = lanes[0];
     const target = prioritizeTarget(tower, state.enemies);
     if (!target) continue;
-    const lanePath = lanes[target.lane] || lane;
+    const laneIndex = Number.isInteger(target.lane) ? target.lane : 0;
+    const lanePath = (Array.isArray(lanes[laneIndex]) && lanes[laneIndex].length >= 2)
+      ? lanes[laneIndex]
+      : fallbackLane;
+    if (!Array.isArray(lanePath) || lanePath.length < 2) continue;
     const bullet = buildBullet(tower, target, lanePath, now);
     tower.cooldown += tower.fireRate;
     tower.stats.shots++;
@@ -243,12 +247,12 @@ export function updateBullets(state, dt, now, diff) {
       state.bullets.splice(i, 1);
       continue;
     }
-    const rawRadius = Number.isFinite(bullet.hitRadius)
-      ? bullet.hitRadius
-      : Number.isFinite(bullet.from?.baseRadius)
-      ? bullet.from.baseRadius
-      : BALANCE.global.baseRadius;
-    const hitRadius = Math.max(1, rawRadius || BALANCE.global.baseRadius || 1);
+    let hitRadius = Number(bullet.hitRadius);
+    if (!Number.isFinite(hitRadius) || hitRadius <= 0) {
+      const sourceRadius = Number(bullet.from?.baseRadius);
+      hitRadius = Number.isFinite(sourceRadius) && sourceRadius > 0 ? sourceRadius : BALANCE.global.baseRadius;
+    }
+    hitRadius = Math.max(1, hitRadius || BALANCE.global.baseRadius || 1);
     const hitRadius2 = hitRadius * hitRadius;
     let hitSet = bullet.hitSet;
     if (!(hitSet instanceof Set)) {
@@ -272,18 +276,15 @@ export function updateBullets(state, dt, now, diff) {
         hitSet.add(enemy.id);
         pierceLeft -= 1;
         if (bullet.from?.stats) {
-          const towerStats = bullet.from.stats;
-          towerStats.damage = (towerStats.damage ?? 0) + dealt;
+          bullet.from.stats.damage += dealt;
         }
         if (state.stats) {
-          state.stats.damage = (state.stats.damage ?? 0) + dealt;
+          state.stats.damage = (state.stats.damage || 0) + dealt;
         }
         if (enemy.hp <= 0) {
           const reward = popReward(enemy.type, diff);
           state.coins += reward;
-          if (state.stats) {
-            state.stats.pops = (state.stats.pops ?? 0) + 1;
-          }
+          if (state.stats) state.stats.pops += 1;
           enemy.alive = false;
           if (state.onEnemyKilled) state.onEnemyKilled(enemy, reward);
         }
@@ -303,18 +304,15 @@ export function updateBullets(state, dt, now, diff) {
               });
               if (dealtSplash > 0) {
                 if (bullet.from?.stats) {
-                  const towerStats = bullet.from.stats;
-                  towerStats.damage = (towerStats.damage ?? 0) + dealtSplash;
+                  bullet.from.stats.damage += dealtSplash;
                 }
                 if (state.stats) {
-                  state.stats.damage = (state.stats.damage ?? 0) + dealtSplash;
+                  state.stats.damage = (state.stats.damage || 0) + dealtSplash;
                 }
                 if (other.hp <= 0) {
                   const reward = popReward(other.type, diff);
                   state.coins += reward;
-                  if (state.stats) {
-                    state.stats.pops = (state.stats.pops ?? 0) + 1;
-                  }
+                  if (state.stats) state.stats.pops += 1;
                   other.alive = false;
                   if (state.onEnemyKilled) state.onEnemyKilled(other, reward);
                 }
