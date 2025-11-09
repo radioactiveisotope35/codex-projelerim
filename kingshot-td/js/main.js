@@ -487,26 +487,31 @@ function validatePlacement(state, x, y, type) {
   const tileY = Math.round(y / tileSize - 0.5);
   const key = tileKey(tileX, tileY);
   const freePlacement = state.dev?.freePlacement === true;
+  const buildable = state.buildableSet;
+  const hasBuildableList = buildable instanceof Set && buildable.size > 0;
+  const isBuildable = hasBuildableList && buildable.has(key);
   const centerX = (tileX + 0.5) * tileSize;
   const centerY = (tileY + 0.5) * tileSize;
   if (!freePlacement) {
-    const lanes = state.lanes;
-    const clearance = (BALANCE.global.pathClearFactor ?? 0.45) * tileSize;
-    if (clearance > 0 && Array.isArray(lanes) && lanes.length > 0) {
-      for (const lane of lanes) {
-        if (!Array.isArray(lane) || lane.length < 2) continue;
-        const dist = pointToPolylineDistance(centerX, centerY, lane);
-        if (dist < clearance) {
-          return { ok: false, reason: 'Path' };
+    const shouldCheckPath = !isBuildable;
+    if (shouldCheckPath) {
+      const lanes = state.lanes;
+      const clearance = (BALANCE.global.pathClearFactor ?? 0.45) * tileSize;
+      if (clearance > 0 && Array.isArray(lanes) && lanes.length > 0) {
+        for (const lane of lanes) {
+          if (!Array.isArray(lane) || lane.length < 2) continue;
+          const dist = pointToPolylineDistance(centerX, centerY, lane);
+          if (dist < clearance) {
+            return { ok: false, reason: 'Path' };
+          }
         }
+      } else if (state.pathTiles instanceof Set && state.pathTiles.has(key)) {
+        return { ok: false, reason: 'Path' };
       }
-    } else if (state.pathTiles instanceof Set && state.pathTiles.has(key)) {
-      return { ok: false, reason: 'Path' };
     }
   }
-  const buildable = state.buildableSet;
   const restrictPlacement = state.restrictPlacement === true || state.map?.restrictPlacement === true;
-  if (!freePlacement && restrictPlacement && buildable instanceof Set && buildable.size > 0 && !buildable.has(key)) {
+  if (!freePlacement && restrictPlacement && hasBuildableList && !isBuildable) {
     return { ok: false, reason: 'Not a buildable tile' };
   }
   for (const tower of state.towers) {
