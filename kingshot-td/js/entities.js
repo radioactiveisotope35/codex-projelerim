@@ -170,7 +170,7 @@ function buildBullet(tower, enemy, lane, now) {
     shatterLead: tower.shatterLead || false,
     ttl: 4,
     from: tower,
-    directHits: new Set(),
+    hitSet: new Set(),
   };
   if (tower.type === 'Mage' && isActive('arcaneSurge', tower._state)) {
     bullet.damage *= 2;
@@ -242,37 +242,16 @@ export function updateBullets(state, dt, now, diff) {
       state.bullets.splice(i, 1);
       continue;
     }
-    let directHits = bullet.directHits;
-    if (!(directHits instanceof Set)) {
-      const legacy = bullet.hitSet ?? directHits;
-      if (legacy instanceof Set) {
-        directHits = new Set(legacy);
-      } else if (Array.isArray(legacy)) {
-        directHits = new Set(legacy);
-      } else if (typeof legacy === 'number' || typeof legacy === 'string') {
-        const numeric = Number(legacy);
-        directHits = new Set([Number.isNaN(numeric) ? legacy : numeric]);
-      } else if (legacy && typeof legacy[Symbol.iterator] === 'function') {
-        directHits = new Set(legacy);
-      } else if (legacy && typeof legacy === 'object') {
-        const entries = Object.keys(legacy).map((key) => {
-          const num = Number(key);
-          return Number.isNaN(num) ? key : num;
-        });
-        directHits = new Set(entries);
-      } else {
-        directHits = new Set();
-      }
-      bullet.directHits = directHits;
-      delete bullet.hitSet;
+    let hitSet = bullet.hitSet;
+    if (!(hitSet instanceof Set)) {
+      hitSet = new Set();
+      bullet.hitSet = hitSet;
     }
     let pierceLeft = bullet.pierce ?? 1;
     const splash = bullet.splashRadius;
-    const hitRadius = bullet.from?.baseRadius ?? BALANCE.global.baseRadius;
-    const hitRadius2 = hitRadius * hitRadius;
     for (const enemy of state.enemies) {
       if (!enemy.alive) continue;
-      if (directHits.has(enemy.id)) continue;
+      if (hitSet.has(enemy.id)) continue;
       const d2 = dist2(bullet.x, bullet.y, enemy.x, enemy.y);
       if (d2 > hitRadius2) continue;
       const dealt = applyDamage(enemy, bullet.damage, bullet.damageType, {
@@ -282,7 +261,7 @@ export function updateBullets(state, dt, now, diff) {
         shatterLead: bullet.shatterLead,
       });
       if (dealt > 0) {
-        directHits.add(enemy.id);
+        hitSet.add(enemy.id);
         pierceLeft -= 1;
         if (bullet.from?.stats) {
           const towerStats = bullet.from.stats;

@@ -429,8 +429,7 @@ function setupPlacementEvents(state) {
   canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
   canvas.addEventListener('pointermove', (ev) => {
     if (!state.clientToWorld) return;
-    const tileSize = state.tileSize;
-    if (!tileSize) return;
+    const tileSize = state.tileSize || 1;
     const pos = state.clientToWorld(ev.clientX, ev.clientY);
     const tileX = Math.round(pos.x / tileSize - 0.5);
     const tileY = Math.round(pos.y / tileSize - 0.5);
@@ -476,6 +475,40 @@ function setupPlacementEvents(state) {
   });
 }
 
+function tileKey(tx, ty) {
+  const ix = Math.round(Number(tx));
+  const iy = Math.round(Number(ty));
+  if (!Number.isFinite(ix) || !Number.isFinite(iy)) return null;
+  return `${ix},${iy}`;
+}
+
+function buildPathTileSet(paths) {
+  const set = new Set();
+  if (!Array.isArray(paths)) return set;
+  for (const lane of paths) {
+    if (!Array.isArray(lane) || lane.length === 0) continue;
+    let [cx, cy] = lane[0] || [];
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
+    const firstKey = tileKey(cx, cy);
+    if (firstKey) set.add(firstKey);
+    for (let i = 1; i < lane.length; i++) {
+      const point = lane[i] || [];
+      const nx = Number(point[0]);
+      const ny = Number(point[1]);
+      if (!Number.isFinite(nx) || !Number.isFinite(ny)) continue;
+      const stepX = Math.sign(nx - cx);
+      const stepY = Math.sign(ny - cy);
+      while (cx !== nx || cy !== ny) {
+        if (cx !== nx) cx += stepX;
+        if (cy !== ny) cy += stepY;
+        const key = tileKey(cx, cy);
+        if (key) set.add(key);
+      }
+    }
+  }
+  return set;
+}
+
 function validatePlacement(state, x, y, type) {
   const radius = BALANCE.global.baseRadius;
   if (!type) return { ok: false, reason: 'No tower selected' };
@@ -486,33 +519,20 @@ function validatePlacement(state, x, y, type) {
   const tileX = Math.round(x / tileSize - 0.5);
   const tileY = Math.round(y / tileSize - 0.5);
   const key = tileKey(tileX, tileY);
-  const freePlacement = state.dev?.freePlacement === true;
-  const buildable = state.buildableSet;
-  const hasBuildableList = buildable instanceof Set && buildable.size > 0;
-  const isBuildable = hasBuildableList && buildable.has(key);
-  const centerX = (tileX + 0.5) * tileSize;
-  const centerY = (tileY + 0.5) * tileSize;
-  if (!freePlacement) {
-    const shouldCheckPath = !isBuildable;
-    if (shouldCheckPath) {
-      const lanes = state.lanes;
-      const clearance = (BALANCE.global.pathClearFactor ?? 0.45) * tileSize;
-      if (clearance > 0 && Array.isArray(lanes) && lanes.length > 0) {
-        for (const lane of lanes) {
-          if (!Array.isArray(lane) || lane.length < 2) continue;
-          const dist = pointToPolylineDistance(centerX, centerY, lane);
-          if (dist < clearance) {
-            return { ok: false, reason: 'Path' };
-          }
-        }
-      } else if (state.pathTiles instanceof Set && state.pathTiles.has(key)) {
-        return { ok: false, reason: 'Path' };
-      }
-    }
+  if (!key) {
+    return { ok: false, reason: 'Bounds' };
   }
-  const restrictPlacement = state.restrictPlacement === true || state.map?.restrictPlacement === true;
-  if (!freePlacement && restrictPlacement && hasBuildableList && !isBuildable) {
-    return { ok: false, reason: 'Not a buildable tile' };
+  const buildableSet = state.buildableSet;
+  const hasBuildable = buildableSet instanceof Set && buildableSet.size > 0;
+  const restrict = state.map?.restrictPlacement === true;
+  const onPath = state.pathTiles?.has(key);
+  if (!state.dev.freePlacement) {
+    if (onPath) {
+      return { ok: false, reason: 'Path' };
+    }
+    if (restrict && hasBuildable && !buildableSet.has(key)) {
+      return { ok: false, reason: 'Not a buildable tile' };
+    }
   }
   for (const tower of state.towers) {
     if (dist2(x, y, tower.x, tower.y) < (radius * 2) ** 2) {
@@ -868,7 +888,6 @@ async function bootstrap() {
     heroAura: null,
     buildableSet: new Set(),
     pathTiles: new Set(),
-    restrictPlacement: false,
     diff,
     sandbox,
     stats: { pops: 0, damage: 0, cashSpent: 0, cashEarned: 0 },
@@ -909,11 +928,21 @@ async function bootstrap() {
     const map = await loadMap(mapName);
     state.map = map;
     const baked = bakeLanes(map, { offscreen: true });
-    const { tiles: buildableTiles, set: buildableSet } = normalizeBuildableList(map.buildable);
-    state.map.buildable = buildableTiles;
-    state.buildableSet = buildableSet;
-    state.pathTiles = computePathTileSet(map);
-    state.restrictPlacement = map.restrictPlacement === true;
+    const buildable = Array.isArray(map.buildable) ? map.buildable : [];
+    state.map.buildable = buildable;
+    const buildableKeys = [];
+    for (const entry of buildable) {
+      if (Array.isArray(entry) && entry.length >= 2) {
+        const key = tileKey(entry[0], entry[1]);
+        if (key) buildableKeys.push(key);
+      } else if (typeof entry === 'string') {
+        const [sx, sy] = entry.split(',');
+        const key = tileKey(sx, sy);
+        if (key) buildableKeys.push(key);
+      }
+    }
+    state.buildableSet = new Set(buildableKeys);
+    state.pathTiles = buildPathTileSet(map.paths);
     state.lanes = baked.lanes;
     state.tileSize = baked.tileSize;
     state.worldW = baked.worldW;
@@ -997,7 +1026,9 @@ async function bootstrap() {
     let rawDt = now - lastTime;
     lastTime = now;
     rawDt = Math.min(rawDt, 0.25);
-    const scaled = state.paused ? 0 : Math.min(BALANCE.global.dtCap || 0.05, rawDt) * state.speed;
+    const scaled = state.paused
+      ? 0
+      : Math.min(BALANCE.global.dtCap || 0.05, rawDt) * state.speed;
     if (!state.paused) {
       state.gameTime += scaled;
       state.spawnQueue.flush(state.gameTime, (entry) => spawnEnemy(state, entry));
