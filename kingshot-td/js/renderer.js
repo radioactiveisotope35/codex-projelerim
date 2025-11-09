@@ -1,4 +1,5 @@
 import { getViewport } from './utils.js';
+import { getAsset } from './inCodeAssets.js';
 
 const COLORS = {
   groundTop: '#7DBF85',
@@ -19,6 +20,7 @@ const COLORS = {
     Shielded: '#555A6D',
     Tank: '#3B3C47',
     Specter: '#8A8ABF',
+    Behemoth: '#BF4F6B',
   },
 };
 
@@ -72,20 +74,28 @@ export function drawPath(ctx, lanes, tileSize, worldW, worldH) {
 }
 
 export function drawTowers(ctx, towers) {
+  const SIZE = 40;
   for (const tower of towers) {
     const baseR = tower.baseRadius ?? 18;
+    const asset = getAsset(tower.type);
+    const halfSize = SIZE / 2;
+
     ctx.save();
     ctx.fillStyle = 'rgba(0,0,0,0.25)';
     circle(ctx, tower.x + 4, tower.y + 6, baseR * 0.6);
     ctx.fill();
     ctx.restore();
 
-    ctx.fillStyle = COLORS.towerBase;
-    circle(ctx, tower.x, tower.y, baseR);
-    ctx.fill();
-    ctx.fillStyle = COLORS.towerFill[tower.type] || '#ffffff';
-    circle(ctx, tower.x, tower.y - baseR * 0.2, baseR * 0.7);
-    ctx.fill();
+    if (asset) {
+      ctx.drawImage(asset, tower.x - halfSize, tower.y - halfSize, SIZE, SIZE);
+    } else {
+      ctx.fillStyle = COLORS.towerBase;
+      circle(ctx, tower.x, tower.y, baseR);
+      ctx.fill();
+      ctx.fillStyle = COLORS.towerFill[tower.type] || '#ffffff';
+      circle(ctx, tower.x, tower.y - baseR * 0.2, baseR * 0.7);
+      ctx.fill();
+    }
 
     if (tower.selected) {
       ctx.save();
@@ -128,20 +138,39 @@ function drawEnemyTraits(ctx, enemy, bodyRadius) {
 }
 
 export function drawEnemies(ctx, enemies, worldW, worldH) {
+  const BASE_SIZE = 32;
   for (const enemy of enemies) {
     if (enemy.x < -32 || enemy.y < -32 || enemy.x > worldW + 32 || enemy.y > worldH + 32) {
       continue;
     }
-    const bodyRadius = 14;
-    ctx.fillStyle = COLORS.enemy[enemy.type] || '#b33';
-    circle(ctx, enemy.x, enemy.y, bodyRadius);
-    ctx.fill();
+
+    let size = BASE_SIZE;
+    let bodyRadius = 14;
+    if (enemy.type === 'Behemoth') {
+      size = BASE_SIZE * 1.5;
+      bodyRadius = 22;
+    }
+    const asset = getAsset(enemy.type);
+    const halfSize = size / 2;
+
+    if (asset) {
+      ctx.drawImage(asset, enemy.x - halfSize, enemy.y - halfSize, size, size);
+    } else {
+      ctx.fillStyle = COLORS.enemy[enemy.type] || '#b33';
+      circle(ctx, enemy.x, enemy.y, bodyRadius);
+      ctx.fill();
+    }
+
     drawEnemyTraits(ctx, enemy, bodyRadius);
+
     const hpPct = Math.max(0, enemy.hp) / enemy.maxHp;
+    const hpW = size * 1.2;
+    const hpH = 5;
+    const hpY = enemy.y - bodyRadius - 10;
     ctx.fillStyle = '#222';
-    ctx.fillRect(enemy.x - 16, enemy.y - bodyRadius - 10, 32, 4);
+    ctx.fillRect(enemy.x - hpW / 2, hpY, hpW, hpH);
     ctx.fillStyle = hpPct > 0.5 ? '#4CAF50' : hpPct > 0.25 ? '#FFC107' : '#E53935';
-    ctx.fillRect(enemy.x - 16, enemy.y - bodyRadius - 10, 32 * hpPct, 4);
+    ctx.fillRect(enemy.x - hpW / 2, hpY, hpW * hpPct, hpH);
   }
 }
 
@@ -169,7 +198,8 @@ export function drawPlacementGhost(ctx, ghost) {
   ctx.restore();
 }
 
-export function render(state, ctx) {
+export function render(state, ctx, assets) {
+  void assets;
   const canvas = ctx.canvas;
   const vp = getViewport();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
