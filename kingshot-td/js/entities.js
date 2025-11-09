@@ -1,11 +1,48 @@
 import { BALANCE } from './balance.js';
 import { dist2, projectAlongPolyline } from './utils.js';
-import { popReward, sellRefund } from './economy.js';
+import { popReward, sellRefund, getDifficulty } from './economy.js';
 import { isActive } from './abilities.js';
 
 let ENEMY_ID = 1;
 let BULLET_ID = 1;
 let TOWER_ID = 1;
+
+export function handleEnemyDeath(state, enemy, diff) {
+  if (!enemy.alive) return;
+  enemy.alive = false;
+
+  const difficulty = diff || state?.diff || getDifficulty();
+  const reward = popReward(enemy.type, difficulty);
+  state.coins += reward;
+  if (state.stats) {
+    state.stats.pops = (state.stats.pops ?? 0) + 1;
+  }
+
+  if (state.onEnemyKilled) {
+    state.onEnemyKilled(enemy, reward);
+  }
+
+  const def = ENEMY_DEFS[enemy.type];
+  if (def && Array.isArray(def.spawnsOnDeath)) {
+    for (const spawn of def.spawnsOnDeath) {
+      const spawnCount = Math.max(0, spawn.count ?? 0);
+      const spawnTraits = Array.isArray(spawn.traits) ? spawn.traits : [];
+      const spawnHpMul = spawn.hpMul ?? 1;
+      for (let i = 0; i < spawnCount; i++) {
+        const child = createEnemy(spawn.type, enemy.lane, { x: enemy.x, y: enemy.y }, {
+          traits: spawnTraits,
+          hpMul: spawnHpMul,
+          wave: state.waveIndex,
+          diff: difficulty,
+        });
+        child.t = enemy.t;
+        child.x = enemy.x;
+        child.y = enemy.y;
+        state.enemies.push(child);
+      }
+    }
+  }
+}
 
 const TARGET_PRIORITIES = ['first', 'last', 'strong', 'close'];
 
@@ -90,6 +127,7 @@ export function createTower(type, x, y) {
     totalSpent: base.price,
     sellValue: sellRefund(base.price),
     stats: { damage: 0, shots: 0 },
+    angle: -Math.PI / 2,
   };
   if (type === 'Hero') {
     tower.hero = true;
@@ -137,7 +175,7 @@ function prioritizeTarget(tower, enemies) {
         if (enemy.t < best.enemy.t) best = { enemy, d2 };
         break;
       case 'strong':
-        if (enemy.hp > best.enemy.hp) best = { enemy, d2 };
+        if (enemy.maxHp > best.enemy.maxHp) best = { enemy, d2 };
         break;
       case 'close':
         if (d2 < best.d2) best = { enemy, d2 };
@@ -168,8 +206,10 @@ function buildBullet(tower, enemy, lane, now) {
     slowPct: tower.slowPct,
     slowDuration: tower.slowDuration,
     shatterLead: tower.shatterLead || false,
+    hitRadius: tower.baseRadius ?? BALANCE.global.baseRadius,
     ttl: 4,
     from: tower,
+    hitSet: new Set(),
   };
   if (tower.type === 'Mage' && isActive('arcaneSurge', tower._state)) {
     bullet.damage *= 2;
@@ -188,15 +228,22 @@ function buildBullet(tower, enemy, lane, now) {
 }
 
 export function updateTowers(state, dt, now) {
-  const lanes = state.lanes;
+  const lanes = Array.isArray(state.lanes) ? state.lanes : [];
+  const fallbackLane = lanes.find((lane) => Array.isArray(lane) && lane.length >= 2) || null;
   for (const tower of state.towers) {
     tower._state = state;
     tower.cooldown = Math.max(0, tower.cooldown - dt);
     if (tower.cooldown > 0) continue;
-    const lane = lanes[0];
     const target = prioritizeTarget(tower, state.enemies);
     if (!target) continue;
-    const lanePath = lanes[target.lane] || lane;
+    const dx = target.x - tower.x;
+    const dy = target.y - tower.y;
+    tower.angle = Math.atan2(dy, dx);
+    const laneIndex = Number.isInteger(target.lane) ? target.lane : 0;
+    const lanePath = (Array.isArray(lanes[laneIndex]) && lanes[laneIndex].length >= 2)
+      ? lanes[laneIndex]
+      : fallbackLane;
+    if (!Array.isArray(lanePath) || lanePath.length < 2) continue;
     const bullet = buildBullet(tower, target, lanePath, now);
     tower.cooldown += tower.fireRate;
     tower.stats.shots++;
@@ -225,9 +272,6 @@ export function applyDamage(enemy, rawDamage, damageType, { now, slowPct, slowDu
     enemy.slowMul = Math.min(enemy.slowMul, mult);
     enemy.slowUntil = Math.max(enemy.slowUntil, now + (slowDuration || 1.5));
   }
-  if (enemy.hp <= 0) {
-    enemy.alive = false;
-  }
   return dmg;
 }
 
@@ -241,13 +285,25 @@ export function updateBullets(state, dt, now, diff) {
       state.bullets.splice(i, 1);
       continue;
     }
-    let pierceLeft = bullet.pierce;
+    let hitRadius = Number(bullet.hitRadius);
+    if (!Number.isFinite(hitRadius) || hitRadius <= 0) {
+      const sourceRadius = Number(bullet.from?.baseRadius);
+      hitRadius = Number.isFinite(sourceRadius) && sourceRadius > 0 ? sourceRadius : BALANCE.global.baseRadius;
+    }
+    hitRadius = Math.max(1, hitRadius || BALANCE.global.baseRadius || 1);
+    const hitRadius2 = hitRadius * hitRadius;
+    let hitSet = bullet.hitSet;
+    if (!(hitSet instanceof Set)) {
+      hitSet = new Set();
+      bullet.hitSet = hitSet;
+    }
+    let pierceLeft = bullet.pierce ?? 1;
     const splash = bullet.splashRadius;
-    let hit = false;
     for (const enemy of state.enemies) {
       if (!enemy.alive) continue;
+      if (hitSet.has(enemy.id)) continue;
       const d2 = dist2(bullet.x, bullet.y, enemy.x, enemy.y);
-      if (d2 > 144) continue;
+      if (d2 > hitRadius2) continue;
       const dealt = applyDamage(enemy, bullet.damage, bullet.damageType, {
         now,
         slowPct: bullet.slowPct,
@@ -255,15 +311,16 @@ export function updateBullets(state, dt, now, diff) {
         shatterLead: bullet.shatterLead,
       });
       if (dealt > 0) {
+        hitSet.add(enemy.id);
         pierceLeft -= 1;
-        bullet.from.stats.damage += dealt;
-        state.stats.damage = (state.stats.damage || 0) + dealt;
+        if (bullet.from?.stats) {
+          bullet.from.stats.damage += dealt;
+        }
+        if (state.stats) {
+          state.stats.damage = (state.stats.damage || 0) + dealt;
+        }
         if (enemy.hp <= 0) {
-          const reward = popReward(enemy.type, diff);
-          state.coins += reward;
-          state.stats.pops += 1;
-          enemy.alive = false;
-          if (state.onEnemyKilled) state.onEnemyKilled(enemy, reward);
+          handleEnemyDeath(state, enemy, diff);
         }
         if (splash > 0) {
           const radius2 = splash * splash;
@@ -278,24 +335,24 @@ export function updateBullets(state, dt, now, diff) {
                 shatterLead: bullet.shatterLead,
               });
               if (dealtSplash > 0) {
-                bullet.from.stats.damage += dealtSplash;
-                state.stats.damage = (state.stats.damage || 0) + dealtSplash;
+                if (bullet.from?.stats) {
+                  bullet.from.stats.damage += dealtSplash;
+                }
+                if (state.stats) {
+                  state.stats.damage = (state.stats.damage || 0) + dealtSplash;
+                }
                 if (other.hp <= 0) {
-                  const reward = popReward(other.type, diff);
-                  state.coins += reward;
-                  state.stats.pops += 1;
-                  other.alive = false;
-                  if (state.onEnemyKilled) state.onEnemyKilled(other, reward);
+                  handleEnemyDeath(state, other, diff);
                 }
               }
             }
           }
         }
-        hit = true;
       }
       if (pierceLeft <= 0) break;
     }
-    if (hit || pierceLeft <= 0) {
+    bullet.pierce = pierceLeft;
+    if (pierceLeft <= 0) {
       state.bullets.splice(i, 1);
     }
   }

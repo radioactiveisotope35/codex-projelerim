@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kingshot-td-v1';
+const CACHE_NAME = 'kingshot-td-v3';
 const ASSETS = [
   './',
   './index.html',
@@ -13,6 +13,7 @@ const ASSETS = [
   './js/entities.js', // AKTİF SİSTEM İÇİN EKLENDİ
   './js/utils.js',    // util.js SİLİNDİ, BU EKLENDİ
   './js/abilities.js',// AKTİF SİSTEM İÇİN EKLENDİ
+  './js/inCodeAssets.js',
   './maps/meadow.json',
   './maps/canyon.json',
   './maps/crossroads.json'
