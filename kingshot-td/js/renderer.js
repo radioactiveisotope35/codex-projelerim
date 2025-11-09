@@ -23,6 +23,8 @@ const COLORS = {
     Tank: '#3B3C47',
     Specter: '#8A8ABF',
     Behemoth: '#BF4F6B',
+    GigaBehemoth: '#40E0D0',
+    TerraBehemoth: '#333333',
   },
 };
 
@@ -439,6 +441,12 @@ export function drawEnemies(ctx, enemies, worldW, worldH) {
     if (enemy.type === 'Behemoth') {
       size = BASE_SIZE * 1.5;
       bodyRadius = 22;
+    } else if (enemy.type === 'GigaBehemoth') {
+      size = BASE_SIZE * 1.8;
+      bodyRadius = 26;
+    } else if (enemy.type === 'TerraBehemoth') {
+      size = BASE_SIZE * 2.2;
+      bodyRadius = 32;
     }
     const asset = getAsset(enemy.type);
     const halfSize = size / 2;

@@ -199,6 +199,50 @@ const SVG_STRINGS = {
       <ellipse cx="32" cy="36" rx="22" ry="16" fill="url(#behemothGlow)" />
     </svg>
   `,
+  GigaBehemoth: `
+    <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="gigaHide" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0" stop-color="#40E0D0" />
+          <stop offset="1" stop-color="#20605A" />
+        </linearGradient>
+        <radialGradient id="gigaGlow" cx="0.5" cy="0.45" r="0.6">
+          <stop offset="0" stop-color="#AFFFF5" stop-opacity="0.8" />
+          <stop offset="1" stop-color="#40E0D0" stop-opacity="0" />
+        </radialGradient>
+      </defs>
+      <ellipse cx="32" cy="38" rx="28" ry="22" fill="url(#gigaHide)" />
+      <path d="M10 50 Q32 20 54 50" stroke="#0F2F2B" stroke-width="5" stroke-linecap="round" fill="none" />
+      <circle cx="22" cy="30" r="7" fill="#FFFFFF" />
+      <circle cx="22" cy="30" r="4" fill="#0F2F2B" />
+      <circle cx="42" cy="30" r="7" fill="#FFFFFF" />
+      <circle cx="42" cy="30" r="4" fill="#0F2F2B" />
+      <path d="M20 48 Q32 56 44 48" stroke="#0F2F2B" stroke-width="5" stroke-linecap="round" />
+      <ellipse cx="32" cy="36" rx="24" ry="18" fill="url(#gigaGlow)" />
+    </svg>
+  `,
+  TerraBehemoth: `
+    <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="terraHide" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0" stop-color="#555555" />
+          <stop offset="1" stop-color="#0A0A0A" />
+        </linearGradient>
+        <radialGradient id="terraGlow" cx="0.5" cy="0.45" r="0.6">
+          <stop offset="0" stop-color="#FF5555" stop-opacity="0.8" />
+          <stop offset="1" stop-color="#AA0000" stop-opacity="0" />
+        </radialGradient>
+      </defs>
+      <ellipse cx="32" cy="38" rx="30" ry="24" fill="url(#terraHide)" />
+      <path d="M8 52 Q32 22 56 52" stroke="#FF0000" stroke-width="5" stroke-linecap="round" fill="none" />
+      <circle cx="20" cy="30" r="8" fill="#AA0000" />
+      <circle cx="20" cy="30" r="4" fill="#FFAAAA" />
+      <circle cx="44" cy="30" r="8" fill="#AA0000" />
+      <circle cx="44" cy="30" r="4" fill="#FFAAAA" />
+      <path d="M20 50 Q32 60 44 50" stroke="#FF0000" stroke-width="5" stroke-linecap="round" />
+      <ellipse cx="32" cy="36" rx="26" ry="20" fill="url(#terraGlow)" />
+    </svg>
+  `,
 };
 
 const loadedAssets = {};

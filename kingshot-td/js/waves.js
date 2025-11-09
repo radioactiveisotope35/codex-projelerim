@@ -175,7 +175,19 @@ export function generateLateGameWave(waveIndex) {
   while (points > 0 && guard < 20) {
     guard++;
     let type;
-    if (waveIndex > 25 && Math.random() < (0.05 + (waveIndex - 25) * 0.005)) {
+    const rand = Math.random();
+
+    if (waveIndex > 60 && rand < (0.05 + (waveIndex - 60) * 0.005)) {
+      type = 'TerraBehemoth';
+      if ((balance.enemyPointCost[type] || Infinity) > points && groups.length > 0) {
+        type = 'GigaBehemoth';
+      }
+    } else if (waveIndex > 40 && rand < (0.05 + (waveIndex - 40) * 0.005)) {
+      type = 'GigaBehemoth';
+      if ((balance.enemyPointCost[type] || Infinity) > points && groups.length > 0) {
+        type = 'Behemoth';
+      }
+    } else if (waveIndex > 20 && rand < (0.05 + (waveIndex - 20) * 0.005)) {
       type = 'Behemoth';
       if ((balance.enemyPointCost[type] || Infinity) > points && groups.length > 0) {
         type = 'Tank';
@@ -183,7 +195,7 @@ export function generateLateGameWave(waveIndex) {
     } else {
       do {
         type = enemyTypes[Math.floor(Math.random() * enemyTypes.length)];
-      } while (type === 'Behemoth');
+      } while (type === 'Behemoth' || type === 'GigaBehemoth' || type === 'TerraBehemoth');
     }
     const cost = balance.enemyPointCost[type] || 999;
 

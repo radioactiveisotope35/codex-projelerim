@@ -24,6 +24,8 @@ export const BALANCE = {
     Shielded: { hp: 70, speed: 55, armor: 0.4, reward: 12 },
     Specter: { hp: 42, speed: 68, armor: 0.1, reward: 11 },
     Behemoth: { hp: 800, speed: 25, armor: 0.3, reward: 50, spawnsOnDeath: [{ type: 'Tank', count: 2 }] },
+    GigaBehemoth: { hp: 3000, speed: 18, armor: 0.4, reward: 150, spawnsOnDeath: [{ type: 'Behemoth', count: 2 }] },
+    TerraBehemoth: { hp: 12000, speed: 10, armor: 0.5, reward: 400, spawnsOnDeath: [{ type: 'GigaBehemoth', count: 2 }] },
     traits: {
       camo: { visibleTo: 'camoDetection' },
       lead: { immuneTo: 'physical', weakTo: ['explosive', 'magic'], hpMul: 1 },
@@ -201,6 +203,8 @@ export const BALANCE = {
       Tank: 12,
       Specter: 7,
       Behemoth: 60,
+      GigaBehemoth: 250,
+      TerraBehemoth: 1000,
     },
     traitPointCost: {
       camo: 3,
