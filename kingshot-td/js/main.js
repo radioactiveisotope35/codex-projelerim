@@ -15,6 +15,7 @@ import { priceOf, getDifficulty, roundBonus } from './economy.js';
 import { wavesByName, generateLateGameWave } from './waves.js';
 import * as upgrades from './upgrades.js';
 import * as abilities from './abilities.js';
+import { generateAndLoadAssets } from './inCodeAssets.js';
 import {
   nowSeconds,
   dist2,
@@ -911,6 +912,7 @@ async function bootstrap() {
     heroAura: null,
     buildableSet: new Set(),
     pathTiles: new Set(),
+    assets: {},
     diff,
     sandbox,
     stats: { pops: 0, damage: 0, cashSpent: 0, cashEarned: 0 },
@@ -927,6 +929,9 @@ async function bootstrap() {
 
   abilities.ensureState(state);
   refreshViewport(state);
+
+  const assets = await generateAndLoadAssets();
+  state.assets = assets || {};
 
   state.onEnemyKilled = (enemy, reward) => {
     if (state.stats) {
@@ -1061,7 +1066,7 @@ async function bootstrap() {
         endWave(state);
       }
     }
-    render(state, ctx);
+    render(state, ctx, state.assets);
     refreshDebug(state);
     if (devTools) devTools.update();
     requestAnimationFrame(loop);
