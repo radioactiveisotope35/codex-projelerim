@@ -2,10 +2,12 @@ import { getViewport } from './utils.js';
 import { getAsset } from './inCodeAssets.js';
 
 const COLORS = {
-  groundTop: '#7DBF85',
-  groundBottom: '#4E8C58',
-  path: '#E9D8B4',
-  pathStroke: '#C9B695',
+  groundTop: '#9ed8a8',
+  groundMid: '#77c191',
+  groundBottom: '#4f9363',
+  pathFill: '#f1dfb6',
+  pathEdgeLight: '#f6e7c8',
+  pathEdgeDark: '#c0a879',
   towerBase: '#6B442B',
   towerFill: {
     Archer: '#3B6FB6',
@@ -24,6 +26,80 @@ const COLORS = {
   },
 };
 
+let groundPatternCanvas = null;
+
+function ensureGroundPattern() {
+  if (groundPatternCanvas || typeof document === 'undefined') return;
+  const size = 160;
+  groundPatternCanvas = document.createElement('canvas');
+  groundPatternCanvas.width = size;
+  groundPatternCanvas.height = size;
+  const g = groundPatternCanvas.getContext('2d');
+  const gradient = g.createLinearGradient(0, 0, size, size);
+  gradient.addColorStop(0, 'rgba(255,255,255,0.18)');
+  gradient.addColorStop(1, 'rgba(255,255,255,0.02)');
+  g.fillStyle = gradient;
+  g.fillRect(0, 0, size, size);
+  const drawSpeckles = (count, color, radius) => {
+    for (let i = 0; i < count; i++) {
+      const x = Math.random() * size;
+      const y = Math.random() * size;
+      g.fillStyle = color;
+      g.beginPath();
+      g.arc(x, y, radius, 0, Math.PI * 2);
+      g.fill();
+    }
+  };
+  drawSpeckles(40, 'rgba(255,255,255,0.15)', 1.2);
+  drawSpeckles(40, 'rgba(0,0,0,0.1)', 1.1);
+  drawSpeckles(20, 'rgba(255,255,255,0.08)', 2.0);
+}
+
+function seededRandomFactory(seed) {
+  let x = seed >>> 0;
+  return () => {
+    x = (x * 1664525 + 1013904223) >>> 0;
+    return x / 0xffffffff;
+  };
+}
+
+function drawGroundDetails(ctx, w, h, lanes) {
+  if (typeof document === 'undefined') return;
+  ensureGroundPattern();
+  if (groundPatternCanvas) {
+    ctx.save();
+    ctx.globalAlpha = 0.35;
+    const pattern = ctx.createPattern(groundPatternCanvas, 'repeat');
+    if (pattern) {
+      ctx.fillStyle = pattern;
+      ctx.fillRect(0, 0, w, h);
+    }
+    ctx.restore();
+  }
+
+  const seed = Math.floor((lanes?.length || 1) * 97 + w * 13 + h * 11);
+  const rand = seededRandomFactory(seed);
+  const clumpCount = Math.max(8, Math.round((w * h) / 45000));
+
+  ctx.save();
+  for (let i = 0; i < clumpCount; i++) {
+    const x = rand() * w;
+    const y = rand() * h;
+    const radius = 18 + rand() * 24;
+    const shadowAlpha = 0.12 + rand() * 0.14;
+    ctx.fillStyle = `rgba(30, 80, 52, ${shadowAlpha.toFixed(2)})`;
+    ctx.beginPath();
+    ctx.ellipse(x, y, radius * (0.7 + rand() * 0.3), radius, rand() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+    const highlightAlpha = 0.12 + rand() * 0.15;
+    ctx.fillStyle = `rgba(210, 250, 210, ${highlightAlpha.toFixed(2)})`;
+    ctx.beginPath();
+    ctx.ellipse(x + radius * 0.2, y - radius * 0.15, radius * (0.5 + rand() * 0.3), radius * 0.6, rand() * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 const HUD = {
   coins: document.getElementById('hud-coins'),
   lives: document.getElementById('hud-lives'),
@@ -35,12 +111,15 @@ function circle(ctx, x, y, r) {
   ctx.arc(x, y, r, 0, Math.PI * 2);
 }
 
-export function drawGround(ctx, w, h) {
+export function drawGround(ctx, w, h, lanes) {
   const grad = ctx.createLinearGradient(0, 0, 0, h);
   grad.addColorStop(0, COLORS.groundTop);
+  grad.addColorStop(0.55, COLORS.groundMid);
   grad.addColorStop(1, COLORS.groundBottom);
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, h);
+
+  drawGroundDetails(ctx, w, h, lanes);
 }
 
 export function drawPath(ctx, lanes, tileSize, worldW, worldH) {
@@ -51,10 +130,11 @@ export function drawPath(ctx, lanes, tileSize, worldW, worldH) {
   ctx.clip();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  ctx.lineWidth = 0.55 * tileSize;
-  ctx.strokeStyle = COLORS.path;
-  ctx.shadowColor = 'rgba(0,0,0,0.15)';
-  ctx.shadowBlur = 12;
+  const strokeWidth = 0.55 * tileSize;
+  ctx.lineWidth = strokeWidth;
+  ctx.strokeStyle = COLORS.pathFill;
+  ctx.shadowColor = 'rgba(0,0,0,0.18)';
+  ctx.shadowBlur = 18;
   for (const lane of lanes) {
     ctx.beginPath();
     ctx.moveTo(lane[0].x, lane[0].y);
@@ -62,19 +142,29 @@ export function drawPath(ctx, lanes, tileSize, worldW, worldH) {
     ctx.stroke();
   }
   ctx.shadowBlur = 0;
-  ctx.lineWidth = Math.max(6, 0.55 * tileSize - 6);
-  ctx.strokeStyle = COLORS.pathStroke;
+  ctx.lineWidth = Math.max(6, strokeWidth - 6);
+  ctx.strokeStyle = COLORS.pathEdgeDark;
   for (const lane of lanes) {
     ctx.beginPath();
     ctx.moveTo(lane[0].x, lane[0].y);
     for (let i = 1; i < lane.length; i++) ctx.lineTo(lane[i].x, lane[i].y);
     ctx.stroke();
   }
+  ctx.lineWidth = Math.max(4, strokeWidth - 10);
+  ctx.strokeStyle = COLORS.pathEdgeLight;
+  ctx.globalAlpha = 0.65;
+  for (const lane of lanes) {
+    ctx.beginPath();
+    ctx.moveTo(lane[0].x, lane[0].y);
+    for (let i = 1; i < lane.length; i++) ctx.lineTo(lane[i].x, lane[i].y);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
   ctx.restore();
 }
 
 export function drawTowers(ctx, towers) {
-  const SIZE = 40;
+  const SIZE = 44;
   for (const tower of towers) {
     const baseR = tower.baseRadius ?? 18;
     const asset = getAsset(tower.type);
@@ -153,6 +243,13 @@ export function drawEnemies(ctx, enemies, worldW, worldH) {
     const asset = getAsset(enemy.type);
     const halfSize = size / 2;
 
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.beginPath();
+    ctx.ellipse(enemy.x + 6, enemy.y + halfSize * 0.4, halfSize * 0.7, halfSize * 0.35, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
     if (asset) {
       ctx.drawImage(asset, enemy.x - halfSize, enemy.y - halfSize, size, size);
     } else {
@@ -220,7 +317,7 @@ export function render(state, ctx, assets) {
   const sy = vp.viewH / state.worldH;
   ctx.setTransform(sx, 0, 0, sy, vp.viewX, vp.viewY);
 
-  drawGround(ctx, state.worldW, state.worldH);
+  drawGround(ctx, state.worldW, state.worldH, state.lanes);
   drawPath(ctx, state.lanes, state.tileSize, state.worldW, state.worldH);
   drawTowers(ctx, state.towers);
   drawEnemies(ctx, state.enemies, state.worldW, state.worldH);
