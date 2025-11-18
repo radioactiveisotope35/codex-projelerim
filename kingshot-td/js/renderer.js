@@ -1,5 +1,7 @@
 import { getViewport } from './utils.js';
 import { getAsset } from './inCodeAssets.js';
+// YENİ: Efekt çizim fonksiyonu
+import { drawEffects } from './visualEffects.js';
 
 const COLORS = {
   groundTop: '#9ed8a8',
@@ -382,6 +384,11 @@ export function drawTowers(ctx, towers) {
     ctx.translate(tower.x, tower.y);
     ctx.rotate((tower.angle ?? -Math.PI / 2) + Math.PI / 2);
 
+    // YENİ: Recoil animasyonu (Geri tepme)
+    if (tower.recoil > 0) {
+      ctx.translate(0, tower.recoil); // Koordinat sistemi döndüğü için Y ekseni "geriye" doğrudur
+    }
+
     if (asset) {
       ctx.drawImage(asset, -halfSize, -halfSize, SIZE, SIZE);
     } else {
@@ -536,6 +543,10 @@ export function render(state, ctx, assets) {
   drawTowers(ctx, state.towers);
   drawEnemies(ctx, state.enemies, state.worldW, state.worldH);
   drawBullets(ctx, state.bullets);
+  
+  // YENİ: Efektler en üste çizilsin
+  drawEffects(ctx);
+
   if (state.placing && state.ghost?.type) {
     drawPlacementGhost(ctx, state.ghost);
   }
