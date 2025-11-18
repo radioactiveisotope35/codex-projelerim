@@ -81,6 +81,8 @@ export function createEnemy(type, laneIndex, startPoint, opts = {}) {
     lastHitAt: 0,
     regrowDelay: 0,
     regrowRate: 0,
+    // YENİ: Yanıp sönme (Flash) sayacı
+    flashTime: 0, 
   };
 
   const traits = opts.traits || [];
@@ -136,8 +138,7 @@ export function createTower(type, x, y) {
     sellValue: sellRefund(base.price),
     stats: { damage: 0, shots: 0 },
     angle: -Math.PI / 2,
-    // YENİ: Recoil (Geri Tepme) değişkeni
-    recoil: 0,
+    // RECOIL KALDIRILDI
   };
   if (type === 'Hero') {
     tower.hero = true;
@@ -242,12 +243,6 @@ export function updateTowers(state, dt, now) {
   const fallbackLane = lanes.find((lane) => Array.isArray(lane) && lane.length >= 2) || null;
   for (const tower of state.towers) {
     tower._state = state;
-    
-    // YENİ: Recoil iyileşmesi (Geri tepen namlu yerine döner)
-    if (tower.recoil > 0) {
-      tower.recoil = Math.max(0, tower.recoil - dt * 30); // Hızlıca toparlan
-    }
-
     tower.cooldown = Math.max(0, tower.cooldown - dt);
     if (tower.cooldown > 0) continue;
     
@@ -265,10 +260,6 @@ export function updateTowers(state, dt, now) {
     if (!Array.isArray(lanePath) || lanePath.length < 2) continue;
     
     const bullet = buildBullet(tower, target, lanePath, now);
-    
-    // YENİ: Ateş anında recoil uygula
-    tower.recoil = 6; 
-
     tower.cooldown += tower.fireRate;
     tower.stats.shots++;
     state.bullets.push(bullet);
@@ -291,8 +282,10 @@ export function applyDamage(enemy, rawDamage, damageType, { now, slowPct, slowDu
   }
   dmg = Math.max(1, dmg);
 
+  // YENİ: Flash (Parlamayı) Tetikle
+  enemy.flashTime = 0.15; // 0.15 saniye boyunca beyaz parlasın
+
   // YENİ: Hasar yazısı ve küçük vuruş efekti
-  // Hasar türüne göre renk seçimi
   let color = '#fff';
   let particleType = 'white';
   if (damageType === 'magic') { color = '#d1c4e9'; particleType = 'magic'; }
@@ -407,6 +400,12 @@ export function advanceEnemies(state, dt, now, diff) {
       state.enemies.splice(i, 1);
       continue;
     }
+    
+    // YENİ: Flash süresini azalt
+    if (enemy.flashTime > 0) {
+        enemy.flashTime -= dt;
+    }
+
     const lane = state.lanes[enemy.lane] || state.lanes[0];
     const speed = enemyEffectiveSpeed(enemy, now);
     enemy.t += speed * dt;
