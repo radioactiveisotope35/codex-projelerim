@@ -80,7 +80,6 @@ export function drawEffects(ctx) {
     ctx.fillStyle = p.color;
     ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
     ctx.beginPath();
-    // Kare şeklinde çizmek performansı daireye göre daha az yorar
     ctx.rect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
     ctx.fill();
   }
