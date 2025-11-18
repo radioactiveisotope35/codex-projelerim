@@ -384,11 +384,6 @@ export function drawTowers(ctx, towers) {
     ctx.translate(tower.x, tower.y);
     ctx.rotate((tower.angle ?? -Math.PI / 2) + Math.PI / 2);
 
-    // YENİ: Recoil animasyonu (Geri tepme)
-    if (tower.recoil > 0) {
-      ctx.translate(0, tower.recoil); // Koordinat sistemi döndüğü için Y ekseni "geriye" doğrudur
-    }
-
     if (asset) {
       ctx.drawImage(asset, -halfSize, -halfSize, SIZE, SIZE);
     } else {
@@ -480,6 +475,23 @@ export function drawEnemies(ctx, enemies, worldW, worldH) {
     }
 
     drawEnemyTraits(ctx, enemy, bodyRadius);
+    
+    // YENİ: Düşman Yanıp Sönme (Flash) Efekti
+    if (enemy.flashTime > 0) {
+      ctx.save();
+      ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(0.8, enemy.flashTime * 5)})`;
+      ctx.beginPath();
+      // Düşmanın üzerine beyaz bir daire/elips çiziyoruz
+      if (asset) {
+         // Asset şekline yaklaşık bir elips
+         ctx.ellipse(enemy.x, enemy.y, halfSize * 0.8, halfSize * 0.7, 0, 0, Math.PI * 2);
+      } else {
+         // Daire
+         ctx.arc(enemy.x, enemy.y, bodyRadius, 0, Math.PI * 2);
+      }
+      ctx.fill();
+      ctx.restore();
+    }
 
     const hpPct = Math.max(0, enemy.hp) / enemy.maxHp;
     const hpW = size * 1.2;
