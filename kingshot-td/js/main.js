@@ -27,6 +27,8 @@ import {
   throttle,
   pointToPolylineDistance,
 } from './utils.js';
+// YENİ: Efekt güncelleme fonksiyonu
+import { updateEffects } from './visualEffects.js';
 
 const params = new URLSearchParams(globalThis.location?.search || '');
 const sandbox = params.get('sandbox') === '1';
@@ -1093,6 +1095,10 @@ async function bootstrap(mapName) {
       : Math.min(BALANCE.global.dtCap || 0.05, rawDt) * state.speed;
     if (!state.paused) {
       state.gameTime += scaled;
+      
+      // YENİ: Efektleri güncelle
+      updateEffects(scaled);
+
       state.spawnQueue.flush(state.gameTime, (entry) => spawnEnemy(state, entry));
       const livesBefore = state.lives;
       advanceEnemies(state, scaled, state.gameTime, diff);
