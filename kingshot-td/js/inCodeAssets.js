@@ -89,6 +89,21 @@ const SVG_STRINGS = {
       <circle cx="24" cy="24" r="6" fill="#FFFFFF" opacity="0.7" />
     </svg>
   `,
+  Tesla: `
+    <svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="teslaCoil" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0" stop-color="#FFF" />
+          <stop offset="1" stop-color="#00BCD4" />
+        </radialGradient>
+      </defs>
+      <rect x="16" y="24" width="16" height="20" fill="#455A64" />
+      <circle cx="24" cy="16" r="10" fill="url(#teslaCoil)" />
+      <path d="M24 6 L24 16" stroke="#FFF" stroke-width="2" />
+      <circle cx="24" cy="6" r="3" fill="#E0F7FA" />
+      <path d="M16 24 L32 24" stroke="#263238" stroke-width="2" />
+    </svg>
+  `,
   Hero: `
     <svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
       <defs>
