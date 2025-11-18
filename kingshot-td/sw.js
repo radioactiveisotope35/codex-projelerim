@@ -1,4 +1,4 @@
-const CACHE_NAME = 'kingshot-td-v3';
+const CACHE_NAME = 'kingshot-td-v4'; // Versiyonu artırdık
 const ASSETS = [
   './',
   './index.html',
@@ -13,7 +13,8 @@ const ASSETS = [
   './js/entities.js', 
   './js/utils.js',    
   './js/abilities.js',
-  './js/visualEffects.js', // YENİ DOSYA EKLENDİ
+  './js/visualEffects.js',
+  './js/audio.js', // YENİ DOSYA
   './js/inCodeAssets.js',
   './maps/meadow.json',
   './maps/canyon.json',
