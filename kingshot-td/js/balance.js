@@ -28,7 +28,7 @@ export const BALANCE = {
     TerraBehemoth: { hp: 12000, speed: 10, armor: 0.5, reward: 400, spawnsOnDeath: [{ type: 'GigaBehemoth', count: 2 }] },
     traits: {
       camo: { visibleTo: 'camoDetection' },
-      lead: { immuneTo: 'physical', weakTo: ['explosive', 'magic'], hpMul: 1 },
+      lead: { immuneTo: 'physical', weakTo: ['explosive', 'magic', 'energy'], hpMul: 1 },
       regrow: { delay: 2.5, rate: 0.2 },
       fortified: { hpMul: 1.5, armorBonus: 0.2 },
     },
@@ -82,6 +82,19 @@ export const BALANCE = {
       slowPct: 0.35,
       camoDetection: false,
     },
+    // YENİ KULE
+    Tesla: {
+      price: 450,
+      range: 170,
+      fireRate: 1.1,
+      damage: 18,
+      damageType: 'energy', // Enerji hasarı Lead'e vurur
+      bulletSpeed: 9999, // Anında vuruş
+      pierce: 3, // 3 kişi seker
+      splashRadius: 0,
+      slowPct: 0,
+      camoDetection: false,
+    },
     Hero: {
       price: 600,
       range: 230,
@@ -113,10 +126,14 @@ export const BALANCE = {
         A: [110, 300, 1900, 6800, 26000],
         B: [100, 280, 1800, 6400, 25000],
       },
+      // YENİ Tesla Geliştirmeleri
+      Tesla: {
+        A: [180, 450, 2800, 9200, 35000], // A: Zincirleme Kapasitesi
+        B: [150, 380, 2500, 8500, 32000], // B: Aşırı Yükleme (Hız/Hasar)
+      },
       Hero: { A: [0, 0, 0, 0, 0], B: [0, 0, 0, 0, 0] },
     },
     deltas: {
-      // Archer: Path A = Speed/Range, Path B = Damage/Pierce
       Archer: {
         A1: { range: +35 },
         A2: { fireRateMul: 0.8 },
@@ -129,7 +146,6 @@ export const BALANCE = {
         B4: { pierce: +2, damage: +5 },
         B5: { damage: +40, pierce: +2, camoDetection: true },
       },
-      // Cannon: Path A = Bigger Explosions, Path B = Faster Explosions
       Cannon: {
         A1: { splashRadius: +25 },
         A2: { pierce: +1 },
@@ -142,7 +158,6 @@ export const BALANCE = {
         B4: { fireRateMul: 0.7, damage: +15 },
         B5: { damage: +70, fireRateMul: 0.6 },
       },
-      // Mage: Path A = Arcane Power (Dmg/Pierce), Path B = Utility (Range/Camo)
       Mage: {
         A1: { damage: +8 },
         A2: { pierce: +1 },
@@ -155,7 +170,6 @@ export const BALANCE = {
         B4: { pierce: +2, bulletSpeed: +100 },
         B5: { damage: +30, camoDetection: true, fireRateMul: 0.7 },
       },
-      // Frost: Path A = Deeper Freeze, Path B = Ice Shards (Dmg)
       Frost: {
         A1: { slowPct: +0.15 },
         A2: { range: +30 },
@@ -167,6 +181,18 @@ export const BALANCE = {
         B3: { damage: +8, slowPct: +0.05 },
         B4: { range: +35, camoDetection: true },
         B5: { damage: +20, fireRateMul: 0.7, slowPct: +0.1 },
+      },
+      Tesla: {
+        A1: { pierce: +1 },
+        A2: { range: +25 },
+        A3: { pierce: +2, damage: +5 },
+        A4: { pierce: +3, damage: +10 },
+        A5: { pierce: +10, range: +50, damage: +20 }, // Süper İletken
+        B1: { fireRateMul: 0.85 },
+        B2: { damage: +5 },
+        B3: { fireRateMul: 0.75, camoDetection: true },
+        B4: { damage: +15, fireRateMul: 0.8 },
+        B5: { damage: +40, fireRateMul: 0.5 }, // Plazma Fırtınası
       },
     },
   },
@@ -193,7 +219,6 @@ export const BALANCE = {
       return Math.pow(1.045, Math.max(0, n - 1));
     },
     pointsForWave(n) {
-      // Linear scaling to complement the exponential HP scaling
       return Math.floor(100 + (n - 20) * 30);
     },
     enemyPointCost: {
