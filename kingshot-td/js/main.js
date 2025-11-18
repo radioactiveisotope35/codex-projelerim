@@ -28,1144 +28,572 @@ import {
   pointToPolylineDistance,
 } from './utils.js';
 import { updateEffects } from './visualEffects.js';
-// YENİ: Audio import
 import { initAudio, playSound } from './audio.js';
 
-const params = new URLSearchParams(globalThis.location?.search || '');
-const sandbox = params.get('sandbox') === '1';
-const devParam = params.get('dev') === '1';
-const diff = getDifficulty();
+// Global State
+let gameState = null;
+let animationFrameId = null;
 
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
-const btnSend = document.getElementById('btn-send');
-const btnSpeed = document.getElementById('btn-speed');
-const btnPause = document.getElementById('btn-pause');
-const shopEl = document.getElementById('shop');
-const panelEl = document.getElementById('tower-panel');
-const toastEl = document.getElementById('toasts');
-
-const SCREEN_TARGETS = {
-  menu: ['main-menu-screen'],
-  mapSelect: ['map-select-screen'],
-  game: ['game', 'ui-layer'],
+// DOM Elements
+const screens = {
+  menu: document.getElementById('main-menu-screen'),
+  mapSelect: document.getElementById('map-select-screen'),
+  game: document.getElementById('game'),
+  ui: document.getElementById('ui-layer'),
+  pause: document.getElementById('pause-screen'),
+  info: document.getElementById('info-screen')
 };
 
-function allScreenIds() {
-  const result = [];
-  for (const value of Object.values(SCREEN_TARGETS)) {
-    if (Array.isArray(value)) {
-      result.push(...value);
-    }
+const hud = {
+  lives: document.getElementById('hud-lives'),
+  coins: document.getElementById('hud-coins'),
+  wave: document.getElementById('hud-wave'),
+  shop: document.getElementById('shop'),
+  panel: document.getElementById('tower-panel'),
+  btnSend: document.getElementById('btn-send'),
+  btnSpeed: document.getElementById('btn-speed'),
+  btnPause: document.getElementById('btn-pause-game')
+};
+
+// --- EKRAN YÖNETİMİ ---
+function showScreen(name) {
+  Object.values(screens).forEach(el => el.classList.add('hidden'));
+  
+  if (name === 'menu') screens.menu.classList.remove('hidden');
+  if (name === 'mapSelect') screens.mapSelect.classList.remove('hidden');
+  if (name === 'info') screens.info.classList.remove('hidden');
+  if (name === 'game') {
+    screens.game.classList.remove('hidden');
+    screens.ui.classList.remove('hidden');
   }
-  return result;
-}
-
-const ALL_SCREEN_IDS = allScreenIds();
-
-function showScreen(screenId) {
-  for (const id of ALL_SCREEN_IDS) {
-    const el = document.getElementById(id);
-    if (el) el.classList.add('hidden');
-  }
-
-  const targets = SCREEN_TARGETS[screenId];
-  if (!targets) return;
-  for (const id of targets) {
-    const el = document.getElementById(id);
-    if (el) el.classList.remove('hidden');
-  }
-}
-
-let debugOverlay = null;
-let panelInfoEl = null;
-let devTools = null;
-
-function makeDebugOverlay() {
-  const div = document.createElement('div');
-  div.style.position = 'absolute';
-  div.style.top = '12px';
-  div.style.right = '12px';
-  div.style.maxWidth = '320px';
-  div.style.background = 'rgba(0,0,0,0.6)';
-  div.style.color = '#fff';
-  div.style.padding = '8px 12px';
-  div.style.fontSize = '12px';
-  div.style.lineHeight = '1.4';
-  div.style.pointerEvents = 'none';
-  document.body.appendChild(div);
-  return div;
-}
-
-function toast(message, duration = 2000) {
-  if (!toastEl) return;
-  const entry = document.createElement('div');
-  entry.textContent = message;
-  entry.style.padding = '6px 10px';
-  entry.style.marginTop = '6px';
-  entry.style.background = 'rgba(0,0,0,0.65)';
-  entry.style.color = '#fff';
-  entry.style.borderRadius = '6px';
-  toastEl.appendChild(entry);
-  setTimeout(() => entry.remove(), duration);
-}
-
-function refreshViewport(state) {
-  if (!canvas) return;
-  setupViewport(canvas);
-  if (state) {
-    const worldW = state.worldW || 1;
-    const worldH = state.worldH || 1;
-    state.clientToWorld = clientToWorldFactory(getViewport, worldW, worldH);
+  if (name === 'pause') {
+    screens.game.classList.remove('hidden');
+    screens.ui.classList.remove('hidden'); // UI altta görünsün
+    screens.pause.classList.remove('hidden');
   }
 }
 
-function setGameSpeed(state, value) {
-  // YENİ: 10x'e kadar izin ver
-  const next = clamp(Math.round(value), 1, 10);
-  if (state.speed !== next) {
-    state.speed = next;
+function toast(msg) {
+  const container = document.getElementById('toasts');
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 2000);
+}
+
+// --- ANSİKLOPEDİ (INFO) ---
+function buildEncyclopedia() {
+  const container = document.getElementById('info-content');
+  container.innerHTML = '';
+
+  // Kuleler Bölümü
+  let html = '<div class="info-section"><h3>KULELER</h3>';
+  for (const [key, def] of Object.entries(BALANCE.towers)) {
+    html += `
+      <div class="info-item">
+        <strong>${key}</strong> (${def.price}💰)<br>
+        <small>${getTowerDesc(key)}</small><br>
+        Hasar: ${def.damage} | Menzil: ${def.range} | Hız: ${def.fireRate}s
+      </div>
+    `;
   }
-  updateSpeedButton(state);
-  if (devTools) devTools.forceUpdate();
-}
+  html += '</div>';
 
-function updateShop(state) {
-  if (!shopEl) return;
-  for (const card of shopEl.querySelectorAll('[data-type]')) {
-    const type = card.dataset.type;
-    const price = priceOf(type);
-    const disabled = (!sandbox && !state.dev.freePlacement && state.coins < price) || (type === 'Hero' && state.heroPlaced);
-    card.classList.toggle('disabled', disabled);
-    const priceEl = card.querySelector('.price');
-    if (priceEl) priceEl.textContent = `$${price}`;
+  // Düşmanlar Bölümü
+  html += '<div class="info-section"><h3>DÜŞMANLAR</h3>';
+  for (const [key, def] of Object.entries(BALANCE.enemies)) {
+    if (key === 'traits') continue;
+    let tags = '';
+    if (def.hp > 100) tags += '<span class="tag">Tank</span>';
+    if (def.speed > 80) tags += '<span class="tag Fast">Hızlı</span>';
+    html += `
+      <div class="info-item">
+        <strong>${key}</strong> ${tags}<br>
+        Can: ${def.hp} | Hız: ${def.speed} | Zırh: %${def.armor * 100}
+      </div>
+    `;
   }
+  html += '</div>';
+  container.innerHTML = html;
 }
 
-function updateSpeedButton(state) {
-  if (!btnSpeed) return;
-  btnSpeed.textContent = `Speed x${state.speed}`;
-}
-
-function updatePauseButton(state) {
-  if (!btnPause) return;
-  btnPause.textContent = state.paused ? 'Resume' : 'Pause';
-}
-
-function updateSendButton(state) {
-  if (!btnSend) return;
-  btnSend.disabled = state.waveActive;
-}
-
-function refreshDebug(state) {
-  if (!state.debugVisible) {
-    if (debugOverlay) debugOverlay.style.display = 'none';
-    return;
-  }
-  if (!debugOverlay) debugOverlay = makeDebugOverlay();
-  debugOverlay.style.display = 'block';
-  const lines = [];
-  lines.push(`Wave: ${state.waveIndex}`);
-  lines.push(`Coins: ${state.coins} | Lives: ${state.lives}`);
-  const stats = state.stats;
-  const pops = stats?.pops ?? 0;
-  const damage = Math.round(stats?.damage ?? 0);
-  const cashSpent = stats?.cashSpent ?? 0;
-  const cashEarned = stats?.cashEarned ?? 0;
-  lines.push(`Pops: ${pops} | Damage: ${damage}`);
-  lines.push(`Cash Spent: ${cashSpent} | Earned: ${cashEarned}`);
-  lines.push('--- Towers ---');
-  for (const tower of state.towers) {
-    const dps = tower.stats.damage / Math.max(1, state.gameTime);
-    const dpb = tower.stats.damage / Math.max(1, tower.totalSpent);
-    lines.push(
-      `${tower.type}#${tower.id} dmg=${Math.round(tower.stats.damage)} dps=${dps.toFixed(1)} dpb=${dpb.toFixed(2)} prio=${tower.priority}`
-    );
-  }
-  debugOverlay.textContent = lines.join('\n');
-}
-
-function buildShop(state) {
-  if (!shopEl) return;
-  shopEl.innerHTML = '';
-  for (const type of Object.keys(BALANCE.towers)) {
-    const card = document.createElement('button');
-    card.className = 'tower-card';
-    card.dataset.type = type;
-    card.innerHTML = `<strong>${type}</strong><span class="price"></span>`;
-    card.addEventListener('click', () => {
-      state.selectedTowerType = type;
-      state.placing = true;
-      state.ghost.type = type;
-      state.ghost.range = BALANCE.towers[type].range;
-      state.ghost.baseRadius = BALANCE.global.baseRadius;
-      state.ghost.valid = false;
-    });
-    shopEl.appendChild(card);
-  }
-}
-
-function selectTower(state, tower) {
-  for (const t of state.towers) t.selected = false;
-  state.selectedTower = tower;
-  if (tower) tower.selected = true;
-  updatePanel(state);
-}
-
-function updatePanel(state) {
-  if (!panelInfoEl) return;
-  const tower = state.selectedTower;
-  if (!tower) {
-    panelInfoEl.innerHTML = '<p>Select a tower for details.</p>';
-    return;
-  }
-  const tiers = `A${tower.tiers.A} / B${tower.tiers.B}`;
-  const lines = [
-    `<h3>${tower.type} <small>Tier ${tiers}</small></h3>`,
-    `<p>Range: ${Math.round(tower.range)} | Damage: ${Math.round(tower.damage)} | Fire rate: ${(tower.fireRate).toFixed(2)}s</p>`,
-    `<p>Priority: <button data-action="priority">${tower.priority}</button></p>`,
-    `<p>Sell refund: $${tower.sellValue}</p>`,
-    '<div class="upgrades"><strong>Upgrades</strong><div class="paths"></div></div>',
-    '<div class="abilities"><strong>Abilities</strong><div class="ability-buttons"></div></div>',
-    '<p><button data-action="sell">Sell</button></p>',
-  ];
-  panelInfoEl.innerHTML = lines.join('');
-  const pathContainer = panelInfoEl.querySelector('.paths');
-  for (const path of ['A', 'B']) {
-    const tier = tower.tiers[path] + 1;
-    const btn = document.createElement('button');
-    btn.dataset.action = 'upgrade';
-    btn.dataset.path = path;
-    const info = upgrades.getUpgradeInfo(tower.type, path, tier);
-    if (!info) {
-      btn.disabled = true;
-      btn.textContent = `${path}-Path maxed`;
-    } else {
-      btn.textContent = `${path}${tier}: $${info.price}`;
-      let can = upgrades.canApplyUpgrade(state, tower, path);
-      if (state.dev.unlockAll) {
-        can = { ok: true, info, tier };
-      }
-      btn.disabled = !can.ok;
-      if (!can.ok && can.reason) btn.title = can.reason;
-    }
-    pathContainer.appendChild(btn);
-  }
-  const abilityWrap = panelInfoEl.querySelector('.ability-buttons');
-  for (const ability of abilities.list()) {
-    if (!abilities.isUnlocked(ability.id, state)) continue;
-    const status = abilities.uiStatus(ability.id, state);
-    const btn = document.createElement('button');
-    btn.dataset.action = 'ability';
-    btn.dataset.ability = ability.id;
-    btn.textContent = `${ability.name} [${ability.hotkey}]`;
-    btn.disabled = !abilities.canUse(ability.id, state);
-    if (status.cooldown > 0) {
-      btn.textContent += ` (${status.cooldown.toFixed(1)}s)`;
-    }
-    abilityWrap.appendChild(btn);
-  }
-}
-
-function applyHeroBonus(state, hero, level) {
-  const bonus = BALANCE.hero.levelBonuses[level];
-  if (!bonus) return;
-  if (bonus.range) hero.range += bonus.range;
-  if (bonus.damage) hero.damage += bonus.damage;
-  if (bonus.fireRateMul) hero.fireRate *= bonus.fireRateMul;
-  if (bonus.camoDetection) hero.camoDetection = true;
-  if (bonus.aura) {
-    state.heroAura = { range: hero.range + bonus.aura.range, dmgMul: bonus.aura.dmgMul };
-  }
-  if (bonus.ability) abilities.register(state, bonus.ability);
-  toast(`Hero reached level ${level}!`);
-}
-
-function grantHeroXP(state, amount) {
-  const hero = state.heroTower;
-  if (!hero) return;
-  hero.heroXP += amount;
-  const maxLevel = BALANCE.hero.maxLevel;
-  while (hero.heroLevel < maxLevel && hero.heroXP >= hero.heroNextXP) {
-    hero.heroXP -= hero.heroNextXP;
-    hero.heroLevel += 1;
-    hero.heroNextXP = BALANCE.hero.levelXp(hero.heroLevel);
-    applyHeroBonus(state, hero, hero.heroLevel);
-    updatePanel(state);
-  }
-}
-
-function setupPanelInteractions(state) {
-  if (!panelEl) return;
-  panelEl.addEventListener('click', (ev) => {
-    const btn = ev.target.closest('button');
-    if (!btn) return;
-    const action = btn.dataset.action;
-    if (action === 'sell' && state.selectedTower) {
-      const tower = state.selectedTower;
-      const index = state.towers.indexOf(tower);
-      if (index >= 0) {
-        state.towers.splice(index, 1);
-        state.coins += tower.sellValue;
-        if (state.stats) state.stats.cashEarned = (state.stats.cashEarned ?? 0) + tower.sellValue;
-        if (tower.hero) {
-          state.heroPlaced = false;
-          state.heroTower = null;
-          state.heroAura = null;
-        }
-        selectTower(state, null);
-        updateShop(state);
-        if (devTools) devTools.forceUpdate();
-        toast('Tower sold');
-      }
-    } else if (action === 'priority' && state.selectedTower) {
-      const newPrio = cyclePriority(state.selectedTower);
-      toast(`Priority: ${newPrio}`);
-      updatePanel(state);
-    } else if (action === 'upgrade' && state.selectedTower) {
-      const path = btn.dataset.path;
-      const tier = state.selectedTower.tiers[path] + 1;
-      const info = upgrades.getUpgradeInfo(state.selectedTower.type, path, tier);
-      if (!info) {
-        toast('No upgrade available');
-        return;
-      }
-      if (state.dev.unlockAll) {
-        const prevSandbox = state.sandbox;
-        const prevCoins = state.coins;
-        state.sandbox = true;
-        state.coins = Math.max(state.coins, info.price);
-        const ok = upgrades.applyUpgrade(state, state.selectedTower, path);
-        state.sandbox = prevSandbox;
-        state.coins = prevCoins;
-        if (ok) {
-          updatePanel(state);
-        } else {
-          toast('Upgrade failed');
-        }
-      } else {
-        const check = upgrades.canApplyUpgrade(state, state.selectedTower, path);
-        if (!check.ok) {
-          toast(check.reason || 'Cannot upgrade');
-          return;
-        }
-        const price = check.info.price;
-        if (upgrades.applyUpgrade(state, state.selectedTower, path)) {
-          if (!sandbox && state.stats) state.stats.cashSpent = (state.stats.cashSpent ?? 0) + price;
-          updateShop(state);
-          updatePanel(state);
-        }
-      }
-      if (devTools) devTools.forceUpdate();
-    } else if (action === 'ability') {
-      const abilityId = btn.dataset.ability;
-      if (state.triggerAbility) state.triggerAbility(abilityId);
-      updatePanel(state);
-    }
-  });
-}
-
-function attachHotkeys(state) {
-  document.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Escape') {
-      state.placing = false;
-      state.ghost.type = null;
-    }
-    if (ev.key === 'F2') {
-      state.debugVisible = !state.debugVisible;
-    }
-    if (ev.key === 'F9') {
-      state.dev.panelOpen = !state.dev.panelOpen;
-      if (devTools) devTools.setOpen(state.dev.panelOpen);
-      ev.preventDefault();
-    }
-    if (ev.key === '[') {
-      setGameSpeed(state, state.speed - 1);
-    }
-    if (ev.key === ']') {
-      setGameSpeed(state, state.speed + 1);
-    }
-    if (/^[0-9]$/.test(ev.key)) {
-      const target = ev.key === '0' ? 10 : Number(ev.key);
-      setGameSpeed(state, target);
-    }
-    for (const ability of abilities.list()) {
-      if (ability.hotkey === ev.key) {
-        if (state.triggerAbility) state.triggerAbility(ability.id);
-        updatePanel(state);
-      }
-    }
-  });
-}
-
-function tileKey(tx, ty) {
-  return `${tx},${ty}`;
-}
-
-function normalizeBuildableList(list) {
-  const normalized = [];
-  const set = new Set();
-  if (!Array.isArray(list)) return { tiles: normalized, set };
-  for (const entry of list) {
-    let tx;
-    let ty;
-    if (Array.isArray(entry) && entry.length >= 2) {
-      [tx, ty] = entry;
-    } else if (typeof entry === 'string') {
-      const parts = entry.split(',');
-      if (parts.length >= 2) {
-        tx = Number(parts[0]);
-        ty = Number(parts[1]);
-      }
-    }
-    if (Number.isFinite(tx) && Number.isFinite(ty)) {
-      const key = tileKey(tx, ty);
-      if (!set.has(key)) {
-        normalized.push([tx, ty]);
-        set.add(key);
-      }
-    }
-  }
-  return { tiles: normalized, set };
-}
-
-function computePathTileSet(map) {
-  const set = new Set();
-  if (!map || !Array.isArray(map.paths)) return set;
-  for (const lane of map.paths) {
-    if (!Array.isArray(lane) || lane.length === 0) continue;
-    let [prevX, prevY] = lane[0];
-    if (Number.isFinite(prevX) && Number.isFinite(prevY)) {
-      set.add(tileKey(prevX, prevY));
-    }
-    for (let i = 1; i < lane.length; i++) {
-      const [nextX, nextY] = lane[i] || [];
-      if (!Number.isFinite(nextX) || !Number.isFinite(nextY)) continue;
-      const dx = Math.sign(nextX - prevX);
-      const dy = Math.sign(nextY - prevY);
-      let cx = prevX;
-      let cy = prevY;
-      let guard = 0;
-      while (cx !== nextX || cy !== nextY) {
-        if (cx !== nextX) cx += dx;
-        if (cy !== nextY) cy += dy;
-        set.add(tileKey(cx, cy));
-        guard++;
-        if (guard > 1024) break;
-      }
-      set.add(tileKey(nextX, nextY));
-      prevX = nextX;
-      prevY = nextY;
-    }
-  }
-  return set;
-}
-
-function setupPlacementEvents(state) {
-  if (!canvas) return;
-  canvas.oncontextmenu = (ev) => {
-    ev.preventDefault();
+function getTowerDesc(type) {
+  const descs = {
+    Archer: 'Temel kule. Ucuz ve hızlı.',
+    Cannon: 'Alan hasarı vurur. Lead düşmanları yok eder.',
+    Mage: 'Yüksek büyü hasarı. Zırhlılara karşı etkili.',
+    Frost: 'Düşmanları yavaşlatır. Hasarı düşüktür.',
+    Tesla: 'Zincirleme elektrik saldırısı. Kalabalıklar için ideal.',
+    Hero: 'Seviye atladıkça güçlenen özel birim.'
   };
-  canvas.onpointermove = (ev) => {
-    if (!state.clientToWorld) return;
-    const tileSize = state.tileSize || 1;
-    const pos = state.clientToWorld(ev.clientX, ev.clientY);
-    const tileX = Math.round(pos.x / tileSize - 0.5);
-    const tileY = Math.round(pos.y / tileSize - 0.5);
-    const snapX = (tileX + 0.5) * tileSize;
-    const snapY = (tileY + 0.5) * tileSize;
-    if (state.placing && state.ghost.type) {
-      const check = validatePlacement(state, snapX, snapY, state.ghost.type);
-      state.ghost.x = snapX;
-      state.ghost.y = snapY;
-      state.ghost.range = BALANCE.towers[state.ghost.type].range;
-      state.ghost.baseRadius = BALANCE.global.baseRadius;
-      state.ghost.valid = check.ok;
-    }
-  };
-  canvas.onpointerdown = (ev) => {
-    // YENİ: Herhangi bir etkileşimde sesi başlat (Tarayıcı politikası gereği)
-    initAudio();
-    
-    if (!state.clientToWorld) return;
-    const pos = state.clientToWorld(ev.clientX, ev.clientY);
-    if (ev.button === 2) {
-      state.placing = false;
-      state.ghost.type = null;
-      return;
-    }
-    if (state.placing && state.ghost.type && state.ghost.valid) {
-      const placed = placeTower(state, state.ghost.x, state.ghost.y, state.ghost.type);
-      if (!ev.shiftKey || !placed) {
-        state.placing = false;
-        if (!placed) state.ghost.type = null;
-      }
-      updateShop(state);
-      if (devTools) devTools.forceUpdate();
-      return;
-    }
-    let best = null;
-    let bestDist = Infinity;
-    for (const tower of state.towers) {
-      const d2 = dist2(pos.x, pos.y, tower.x, tower.y);
-      if (d2 < (tower.baseRadius + 6) ** 2 && d2 < bestDist) {
-        best = tower;
-        bestDist = d2;
-      }
-    }
-    selectTower(state, best);
-  };
+  return descs[type] || 'Bilinmeyen kule.';
 }
 
-function placementTileKey(tx, ty) {
-  const ix = Math.round(Number(tx));
-  const iy = Math.round(Number(ty));
-  if (!Number.isFinite(ix) || !Number.isFinite(iy)) return null;
-  return `${ix},${iy}`;
-}
-
-function derivePathTileSet(paths) {
-  const set = new Set();
-  if (!Array.isArray(paths)) return set;
-  const STEP_GUARD = 4096;
-  for (const lane of paths) {
-    if (!Array.isArray(lane) || lane.length === 0) continue;
-    let [cx, cy] = lane[0] || [];
-    if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue;
-    const firstKey = placementTileKey(cx, cy);
-    if (firstKey) set.add(firstKey);
-    for (let i = 1; i < lane.length; i++) {
-      const point = lane[i] || [];
-      const nx = Number(point[0]);
-      const ny = Number(point[1]);
-      if (!Number.isFinite(nx) || !Number.isFinite(ny)) continue;
-      const stepX = Math.sign(nx - cx);
-      const stepY = Math.sign(ny - cy);
-      let guard = 0;
-      while (cx !== nx || cy !== ny) {
-        if (guard++ > STEP_GUARD) break;
-        if (cx !== nx) cx += stepX;
-        if (cy !== ny) cy += stepY;
-        const key = placementTileKey(cx, cy);
-        if (key) set.add(key);
-      }
-      cx = nx;
-      cy = ny;
-      const finalKey = placementTileKey(cx, cy);
-      if (finalKey) set.add(finalKey);
-    }
-  }
-  return set;
-}
-
-function validatePlacement(state, x, y, type) {
-  const radius = BALANCE.global.baseRadius;
-  if (!type) return { ok: false, reason: 'No tower selected' };
-  if (x < radius || y < radius || x > state.worldW - radius || y > state.worldH - radius) {
-    return { ok: false, reason: 'Bounds' };
-  }
-  const tileSize = state.tileSize || 1;
-  const tileX = Math.round(x / tileSize - 0.5);
-  const tileY = Math.round(y / tileSize - 0.5);
-  const key = placementTileKey(tileX, tileY);
-  if (!key) {
-    return { ok: false, reason: 'Bounds' };
-  }
-  const centerX = (tileX + 0.5) * tileSize;
-  const centerY = (tileY + 0.5) * tileSize;
-  const buildableSet = state.buildableSet;
-  const hasBuildable = buildableSet instanceof Set && buildableSet.size > 0;
-  const restrict = state.map?.restrictPlacement === true;
-  const requireWhitelist = restrict && hasBuildable;
-  const onWhitelist = hasBuildable && buildableSet.has(key);
-  const onPath = state.pathTiles?.has(key);
-  if (!state.dev.freePlacement) {
-    if (onPath) {
-      return { ok: false, reason: 'Path' };
-    }
-    if (requireWhitelist && !onWhitelist) {
-      return { ok: false, reason: 'Not a buildable tile' };
-    }
-    if (!onWhitelist) {
-      const lanes = Array.isArray(state.lanes) ? state.lanes : [];
-      const clearance = (state.tileSize || 1) * (BALANCE.global.pathClearFactor ?? 0);
-      if (clearance > 0 && lanes.length > 0) {
-        const threshold = radius + clearance;
-        for (const lane of lanes) {
-          if (!Array.isArray(lane) || lane.length < 2) continue;
-          const dist = pointToPolylineDistance(centerX, centerY, lane);
-          if (dist < threshold) {
-            return { ok: false, reason: 'Too close to path' };
-          }
-        }
-      }
-    }
-  }
-  for (const tower of state.towers) {
-    if (dist2(x, y, tower.x, tower.y) < (radius * 2) ** 2) {
-      return { ok: false, reason: 'Overlap' };
-    }
-  }
-  if (type === 'Hero' && state.heroPlaced) {
-    return { ok: false, reason: 'Hero already placed' };
-  }
-  if (!state.dev.freePlacement && !sandbox) {
-    const price = priceOf(type);
-    if (state.coins < price) return { ok: false, reason: 'Coins' };
-  }
-  return { ok: true, tileX, tileY, centerX, centerY };
-}
-
-function placeTower(state, x, y, type) {
-  const valid = validatePlacement(state, x, y, type);
-  if (!valid.ok) {
-    toast(valid.reason);
-    playSound('error'); // YENİ
-    return false;
-  }
-  const placeX = valid.centerX ?? x;
-  const placeY = valid.centerY ?? y;
-  const tower = createTower(type, placeX, placeY);
-  state.towers.push(tower);
-  if (!sandbox && !state.dev.freePlacement) {
-    const cost = priceOf(type);
-    state.coins -= cost;
-    if (state.stats) state.stats.cashSpent = (state.stats.cashSpent ?? 0) + cost;
-  }
-  if (tower.hero) {
-    state.heroPlaced = true;
-    state.heroTower = tower;
-  }
-  selectTower(state, tower);
-  updateShop(state);
-  if (devTools) devTools.forceUpdate();
-  return true;
-}
-
-function buildDevPanel(state, setSpeed, spawnTests, skipWaveFn, clearEnemiesFn) {
-  if (!panelEl) return null;
-  const container = document.createElement('div');
-  container.id = 'dev-panel';
-  container.style.marginTop = '12px';
-  container.style.padding = '10px';
-  container.style.background = 'rgba(0,0,0,0.55)';
-  container.style.color = '#fff';
-  container.style.borderRadius = '8px';
-  container.style.fontSize = '12px';
-  container.style.display = 'none';
-  container.style.gap = '8px';
-
-  const title = document.createElement('div');
-  title.textContent = 'Dev Cheats (F9)';
-  title.style.fontWeight = '600';
-  title.style.marginBottom = '6px';
-  container.appendChild(title);
-
-  const coinsRow = document.createElement('div');
-  coinsRow.style.display = 'flex';
-  coinsRow.style.flexWrap = 'wrap';
-  coinsRow.style.gap = '6px';
-  coinsRow.style.alignItems = 'center';
-  const coinsLabel = document.createElement('span');
-  coinsRow.appendChild(coinsLabel);
-  const add500 = document.createElement('button');
-  add500.textContent = '+500';
-  add500.addEventListener('click', () => {
-    state.coins += 500;
-    updateShop(state);
-    sync();
-  });
-  coinsRow.appendChild(add500);
-  const add5000 = document.createElement('button');
-  add5000.textContent = '+5000';
-  add5000.addEventListener('click', () => {
-    state.coins += 5000;
-    updateShop(state);
-    sync();
-  });
-  coinsRow.appendChild(add5000);
-  const setInput = document.createElement('input');
-  setInput.type = 'number';
-  setInput.placeholder = 'Coins';
-  setInput.style.width = '72px';
-  const setBtn = document.createElement('button');
-  setBtn.textContent = 'Set';
-  setBtn.addEventListener('click', () => {
-    const value = parseInt(setInput.value, 10);
-    if (Number.isFinite(value) && value >= 0) {
-      state.coins = value;
-      updateShop(state);
-      sync();
-    }
-  });
-  coinsRow.appendChild(setInput);
-  coinsRow.appendChild(setBtn);
-  container.appendChild(coinsRow);
-
-  const speedRow = document.createElement('div');
-  speedRow.style.display = 'flex';
-  speedRow.style.alignItems = 'center';
-  speedRow.style.gap = '8px';
-  const speedLabel = document.createElement('span');
-  speedRow.appendChild(speedLabel);
-  const speedSlider = document.createElement('input');
-  speedSlider.type = 'range';
-  speedSlider.min = '1';
-  speedSlider.max = '10';
-  speedSlider.value = String(state.speed);
-  speedSlider.addEventListener('input', () => {
-    setSpeed(state, Number(speedSlider.value));
-    sync();
-  });
-  speedRow.appendChild(speedSlider);
-  container.appendChild(speedRow);
-
-  const roundRow = document.createElement('div');
-  roundRow.style.display = 'flex';
-  roundRow.style.flexWrap = 'wrap';
-  roundRow.style.gap = '6px';
-  const skipBtn = document.createElement('button');
-  skipBtn.textContent = 'Skip Wave';
-  skipBtn.addEventListener('click', () => {
-    skipWaveFn(state);
-    sync();
-  });
-  const clearBtn = document.createElement('button');
-  clearBtn.textContent = 'Clear Enemies';
-  clearBtn.addEventListener('click', () => {
-    clearEnemiesFn(state);
-    sync();
-  });
-  roundRow.appendChild(skipBtn);
-  roundRow.appendChild(clearBtn);
-  container.appendChild(roundRow);
-
-  const togglesRow = document.createElement('div');
-  togglesRow.style.display = 'flex';
-  togglesRow.style.flexWrap = 'wrap';
-  togglesRow.style.gap = '6px';
-  const unlockBtn = document.createElement('button');
-  const freeBtn = document.createElement('button');
-  const livesBtn = document.createElement('button');
-  unlockBtn.addEventListener('click', () => {
-    state.dev.unlockAll = !state.dev.unlockAll;
-    updatePanel(state);
-    sync();
-  });
-  freeBtn.addEventListener('click', () => {
-    state.dev.freePlacement = !state.dev.freePlacement;
-    updateShop(state);
-    sync();
-  });
-  livesBtn.addEventListener('click', () => {
-    state.dev.infiniteLives = !state.dev.infiniteLives;
-    sync();
-  });
-  togglesRow.appendChild(unlockBtn);
-  togglesRow.appendChild(freeBtn);
-  togglesRow.appendChild(livesBtn);
-  container.appendChild(togglesRow);
-
-  const spawnRow = document.createElement('div');
-  spawnRow.style.display = 'flex';
-  spawnRow.style.flexWrap = 'wrap';
-  spawnRow.style.gap = '6px';
-  const spawnButtons = [
-    ['Test Grunts', []],
-    ['Test Camo', ['camo']],
-    ['Test Lead', ['lead']],
-    ['Test Fortified', ['fortified']],
-  ];
-  for (const [label, traits] of spawnButtons) {
-    const btn = document.createElement('button');
-    btn.textContent = label;
-    btn.addEventListener('click', () => {
-      spawnTests(state, traits);
-    });
-    spawnRow.appendChild(btn);
-  }
-  container.appendChild(spawnRow);
-
-  function updateToggle(button, text, active) {
-    button.textContent = `${text}: ${active ? 'ON' : 'OFF'}`;
-    button.classList.toggle('active', active);
-  }
-
-  function sync() {
-    coinsLabel.textContent = `Coins: ${Math.floor(state.coins)}`;
-    speedLabel.textContent = `Speed x${state.speed}`;
-    speedSlider.value = String(state.speed);
-    updateToggle(unlockBtn, 'Unlock Upgrades', state.dev.unlockAll);
-    updateToggle(freeBtn, 'Free Placement', state.dev.freePlacement);
-    updateToggle(livesBtn, 'Infinite Lives', state.dev.infiniteLives);
-  }
-
-  const throttled = throttle(sync, 80);
-  sync();
-
-  return {
-    el: container,
-    setOpen(open) {
-      container.style.display = open ? 'block' : 'none';
-    },
-    toggle() {
-      this.setOpen(container.style.display !== 'block');
-    },
-    update() {
-      throttled();
-    },
-    forceUpdate: sync,
-  };
-}
-
-function startWave(state) {
-  const next = state.waveIndex + 1;
-  let groups = state.waves[next];
-
-  if (!groups) {
-    groups = generateLateGameWave(next);
-    state.waves[next] = groups;
-  }
-  state.waveIndex = next;
-  state.waveActive = true;
-  const startTime = state.gameTime + 0.5;
-  let at = startTime;
-  for (const group of groups) {
-    for (let i = 0; i < group.count; i++) {
-      state.spawnQueue.add({
-        at,
-        type: group.type,
-        lane: group.lane,
-        traits: group.traits || [],
-        hpMul: group.hpMul || 1,
-      });
-      at += group.gap;
-    }
-  }
-  updateSendButton(state);
-  // YENİ: Dalga başlama sesi
-  playSound('wave-start');
-}
-
-function spawnEnemy(state, entry) {
-  const laneIndex = entry.lane % state.lanes.length;
-  const lane = state.lanes[laneIndex];
-  const start = lane[0];
-  const enemy = createEnemy(entry.type, laneIndex, start, {
-    traits: entry.traits,
-    hpMul: entry.hpMul,
-    wave: state.waveIndex,
-    diff,
-  });
-  enemy.t = -Math.random() * 14;
-  state.enemies.push(enemy);
-}
-
-function endWave(state) {
-  if (!state.waveActive) return;
-  state.waveActive = false;
-  if (!sandbox) {
-    const bonus = roundBonus(state.waveIndex, diff);
-    if (bonus > 0) {
-      state.coins += bonus;
-      if (state.stats) state.stats.cashEarned = (state.stats.cashEarned ?? 0) + bonus;
-      toast(`Wave ${state.waveIndex} cleared! +$${bonus}`);
-    }
-  }
-  updateSendButton(state);
-  updateShop(state);
-  if (devTools) devTools.forceUpdate();
-}
-
-function devSkipWave(state) {
-  if (!state.waveActive) {
-    const next = state.waveIndex + 1;
-    startWave(state);
-  }
-  state.spawnQueue.clear();
-  state.enemies.length = 0;
-  endWave(state);
-}
-
-function devClearEnemies(state) {
-  if (state.enemies.length) {
-    state.enemies.length = 0;
-  }
-  if (state.waveActive && state.spawnQueue.isEmpty()) {
-    endWave(state);
+// --- OYUN KONTROLLERİ ---
+function togglePause() {
+  if (!gameState) return;
+  gameState.paused = !gameState.paused;
+  
+  if (gameState.paused) {
+    showScreen('pause');
+    hud.btnPause.textContent = '▶';
+  } else {
+    showScreen('game'); // Pause ekranını gizle, oyunu göster
+    hud.btnPause.textContent = 'II';
   }
 }
 
-function spawnTestGroup(state, traits) {
-  const spawnTraits = traits.slice();
-  let type = 'Grunt';
-  if (spawnTraits.includes('fortified')) type = 'Shielded';
-  else if (spawnTraits.includes('camo')) type = 'Runner';
-  else if (spawnTraits.includes('lead')) type = 'Grunt';
-  const startAt = state.gameTime + 0.3;
-  for (let i = 0; i < 10; i++) {
-    state.spawnQueue.add({
-      at: startAt + i * 0.25,
-      type,
-      lane: 0,
-      traits: spawnTraits,
-      hpMul: 1,
-    });
-  }
-  state.waveActive = true;
-  updateSendButton(state);
+function quitGame() {
+  gameState = null;
+  if (animationFrameId) cancelAnimationFrame(animationFrameId);
+  showScreen('menu');
 }
 
-function setupControls(state) {
-  if (btnSend) {
-    btnSend.onclick = () => {
-      // Başlat butonuna basınca da ses aç
-      initAudio();
-      if (!state.waveActive) startWave(state);
-    };
-  }
-  if (btnSpeed) {
-    // YENİ: Hız döngüsü: 1 -> 2 -> 4 -> 6 -> 8 -> 10 -> 1
-    btnSpeed.onclick = () => {
-      let next = 1;
-      if (state.speed === 1) next = 2;
-      else if (state.speed === 2) next = 4;
-      else if (state.speed === 4) next = 6;
-      else if (state.speed === 6) next = 8;
-      else if (state.speed === 8) next = 10;
-      else next = 1;
-      setGameSpeed(state, next);
-    };
-  }
-  if (btnPause) {
-    btnPause.onclick = () => {
-      state.paused = !state.paused;
-      updatePauseButton(state);
-    };
-  }
+function restartGame() {
+  if (!gameState) return;
+  const mapName = gameState.mapName; // Harita ismini sakla
+  quitGame(); // Önce temizle
+  startGame(mapName); // Yeniden başlat
 }
 
-async function bootstrap(mapName) {
+// --- OYUN DÖNGÜSÜ VE MANTIĞI ---
+async function startGame(mapName) {
+  initAudio();
+  showScreen('game');
+  
+  // State Başlatma
   const state = {
+    mapName,
     map: null,
     lanes: [],
     tileSize: 64,
-    worldW: 0,
-    worldH: 0,
-    coins: 0,
-    lives: 0,
-    waveIndex: 0,
-    speed: 1,
-    paused: false,
-    enemies: [],
-    bullets: [],
-    towers: [],
-    selectedTowerType: 'Archer',
+    worldW: 0, worldH: 0,
+    coins: 0, lives: 0, waveIndex: 0,
+    speed: 1, paused: false,
+    enemies: [], bullets: [], towers: [],
     selectedTower: null,
     placing: false,
-    ghost: { x: 0, y: 0, type: null, range: 0, baseRadius: BALANCE.global.baseRadius, valid: false },
+    ghost: { x: 0, y: 0, type: null, valid: false },
     spawnQueue: new SpawnQueue(),
     waveActive: false,
-    heroPlaced: false,
-    heroTower: null,
-    heroAura: null,
-    buildableSet: new Set(),
-    pathTiles: new Set(),
-    assets: {},
-    diff,
-    sandbox,
-    stats: { pops: 0, damage: 0, cashSpent: 0, cashEarned: 0 },
+    heroPlaced: false, heroTower: null, heroAura: null,
     gameTime: 0,
-    debugVisible: sandbox,
+    assets: await generateAndLoadAssets(),
     clientToWorld: clientToWorldFactory(getViewport, 1, 1),
-    dev: {
-      panelOpen: sandbox || devParam,
-      freePlacement: false,
-      infiniteLives: false,
-      unlockAll: false,
-    },
+    dev: { freePlacement: false, infiniteLives: false, unlockAll: false },
+    abilities: { unlocked: new Set(), cooldowns: {}, actives: {} },
+    diff: getDifficulty(), // balance.js'den zorluk
+    stats: { pops: 0, damage: 0, cashSpent: 0 }
   };
 
-  abilities.ensureState(state);
-  refreshViewport(state);
+  gameState = state;
 
-  const assets = await generateAndLoadAssets();
-  state.assets = assets || {};
-
-  state.onEnemyKilled = (enemy, reward) => {
-    if (state.stats) {
-      state.stats.cashEarned = (state.stats.cashEarned ?? 0) + reward;
-    }
-    const xpGain = BALANCE.hero.xpPerPop * Math.max(1, enemy.reward);
-    grantHeroXP(state, xpGain);
-    updateShop(state);
-    if (devTools) devTools.forceUpdate();
-  };
-
-  state.onEnemyEscaped = () => {
-    if (state.dev.infiniteLives) return;
-    if (state.lives <= 0) {
-      toast('Game Over');
-      state.paused = true;
-      updatePauseButton(state);
-    }
-  };
-
+  // Harita Yükleme
   try {
-    const map = await loadMap(mapName || 'meadow');
+    const map = await loadMap(mapName);
     state.map = map;
     const baked = bakeLanes(map, { offscreen: true });
-    const buildable = Array.isArray(map.buildable) ? map.buildable : [];
-    state.map.buildable = buildable;
-    const buildableKeys = [];
-    for (const entry of buildable) {
-      if (Array.isArray(entry) && entry.length >= 2) {
-        const key = placementTileKey(entry[0], entry[1]);
-        if (key) buildableKeys.push(key);
-        continue;
-      }
-      if (typeof entry === 'string') {
-        const [sx, sy] = entry.split(',').map((v) => v.trim());
-        const key = placementTileKey(sx, sy);
-        if (key) buildableKeys.push(key);
-      }
-    }
-    state.buildableSet = new Set(buildableKeys);
-    state.pathTiles = derivePathTileSet(map.paths);
     state.lanes = baked.lanes;
     state.tileSize = baked.tileSize;
     state.worldW = baked.worldW;
     state.worldH = baked.worldH;
-    const start = startStateFromMap(map);
-    state.coins = sandbox ? 9999 : start.coins;
-    state.lives = start.lives;
+    
+    // Başlangıç değerleri
+    const startVals = startStateFromMap(map);
+    state.coins = startVals.coins;
+    state.lives = startVals.lives;
     state.waves = wavesByName(map.waveset);
+    
+    // Buildable/Path setleri
+    const buildableKeys = [];
+    if (map.buildable) {
+        map.buildable.forEach(p => {
+             const k = Math.round(p[0]) + ',' + Math.round(p[1]);
+             buildableKeys.push(k);
+        });
+    }
+    state.buildableSet = new Set(buildableKeys);
+    
+    // Path tilelarını hesapla (placement kontrolü için)
+    state.pathTiles = new Set();
+    map.paths.forEach(path => {
+        path.forEach(pt => {
+            state.pathTiles.add(Math.round(pt[0]) + ',' + Math.round(pt[1]));
+        });
+    });
+    
     refreshViewport(state);
-  } catch (err) {
-    console.error(err);
-    toast('Failed to load map');
-    showScreen('mapSelect');
+  } catch (e) {
+    console.error(e);
+    toast('Harita yüklenemedi!');
+    quitGame();
     return;
   }
 
-  if (panelEl) {
-    panelEl.innerHTML = '';
-    panelInfoEl = document.createElement('div');
-    panelInfoEl.className = 'tower-info';
-    panelEl.appendChild(panelInfoEl);
-  }
-  devTools = buildDevPanel(state, setGameSpeed, spawnTestGroup, devSkipWave, devClearEnemies);
-  if (devTools && panelEl) {
-    panelEl.appendChild(devTools.el);
-    devTools.setOpen(state.dev.panelOpen);
-    devTools.forceUpdate();
-  }
-
   buildShop(state);
-  updateShop(state);
-  setupPanelInteractions(state);
-  setupPlacementEvents(state);
-  setupControls(state);
-  attachHotkeys(state);
-  updateSpeedButton(state);
-  updatePauseButton(state);
-  updateSendButton(state);
-  updatePanel(state);
-  if (devTools) devTools.forceUpdate();
-  window.addEventListener('resize', () => refreshViewport(state));
-
+  updateHUD(state);
+  
   let lastTime = nowSeconds();
 
-  function abilityDamage(enemy, damage, type, options = {}) {
-    const dealt = applyDamage(enemy, damage, type, {
-      now: state.gameTime,
-      slowPct: options.slowPct,
-      slowDuration: options.slowDuration,
-      shatterLead: options.shatterLead,
-    });
-    if (dealt > 0 && state.stats) {
-      state.stats.damage += dealt;
-    }
-    if (enemy.hp <= 0) {
-      handleEnemyDeath(state, enemy, diff);
-    }
-  }
-
-  function triggerAbilityWithContext(id) {
-    const ok = abilities.activate(id, state, {
-      now: state.gameTime,
-      tower: state.selectedTower,
-      hero: state.heroTower,
-      applyDamage: (enemy, dmg, type, options = {}) => abilityDamage(enemy, dmg, type, options),
-    });
-    if (!ok) toast('Ability not ready');
-  }
-
-  state.triggerAbility = (id) => triggerAbilityWithContext(id);
-
   const loop = () => {
+    if (!gameState) return; // Oyun bittiyse dur
+    
     const now = nowSeconds();
-    let rawDt = now - lastTime;
+    let dt = now - lastTime;
     lastTime = now;
-    rawDt = Math.min(rawDt, 0.25);
-    const scaled = state.paused
-      ? 0
-      : Math.min(BALANCE.global.dtCap || 0.05, rawDt) * state.speed;
+    dt = Math.min(dt, 0.2); // Lag spike koruması
+
+    // Oyun mantığı (Pause değilse)
     if (!state.paused) {
-      state.gameTime += scaled;
-      
-      updateEffects(scaled);
+       const scaledDt = dt * state.speed;
+       state.gameTime += scaledDt;
+       
+       // Efektler
+       updateEffects(scaledDt);
+       abilities.update(scaledDt, state);
 
-      state.spawnQueue.flush(state.gameTime, (entry) => spawnEnemy(state, entry));
-      const livesBefore = state.lives;
-      advanceEnemies(state, scaled, state.gameTime, diff);
-      if (state.dev.infiniteLives && state.lives < livesBefore) {
-        state.lives = livesBefore;
-      }
-      updateTowers(state, scaled, state.gameTime);
-      updateBullets(state, scaled, state.gameTime, diff);
-      abilities.update(scaled, state);
-      if (state.waveActive && state.spawnQueue.isEmpty() && state.enemies.length === 0) {
-        endWave(state);
-      }
+       // Spawn
+       state.spawnQueue.flush(state.gameTime, (entry) => {
+          spawnEnemy(state, entry);
+       });
+
+       // Varlık güncellemeleri
+       advanceEnemies(state, scaledDt, state.gameTime, state.diff);
+       updateTowers(state, scaledDt, state.gameTime);
+       updateBullets(state, scaledDt, state.gameTime, state.diff);
+
+       // Dalga bitiş kontrolü
+       if (state.waveActive && state.spawnQueue.isEmpty() && state.enemies.length === 0) {
+           endWave(state);
+       }
+       
+       // Oyun Bitti Kontrolü
+       if (state.lives <= 0 && !state.dev.infiniteLives) {
+           toast("OYUN BİTTİ!");
+           state.paused = true;
+           showScreen('pause'); // Pause ekranını aç ama belki "Game Over" özel ekranı yapılabilir
+       }
     }
+
     render(state, ctx, state.assets);
-    refreshDebug(state);
-    if (devTools) devTools.update();
-    requestAnimationFrame(loop);
+    updateHUD(state);
+    
+    animationFrameId = requestAnimationFrame(loop);
   };
-
-  requestAnimationFrame(loop);
+  
+  loop();
 }
 
-function main() {
-  const startBtn = document.getElementById('btn-start-game');
-  startBtn?.addEventListener('click', () => {
-    // YENİ: Menüden oyuna geçerken ses motorunu başlat
-    initAudio();
-    showScreen('mapSelect');
-  });
+// --- YARDIMCI FONKSİYONLAR ---
 
-  document
-    .querySelectorAll('#map-select-screen [data-map]')
-    .forEach((button) => {
-      button.addEventListener('click', () => {
-        initAudio();
-        const map = button.dataset.map;
-        if (!map) return;
-        showScreen('game');
-        bootstrap(map).catch((err) => {
-          console.error('Failed to start game:', err);
-          showScreen('mapSelect');
-        });
-      });
+function spawnEnemy(state, entry) {
+    const laneIndex = entry.lane % state.lanes.length;
+    const lane = state.lanes[laneIndex];
+    const start = lane[0];
+    const enemy = createEnemy(entry.type, laneIndex, start, {
+        traits: entry.traits,
+        hpMul: entry.hpMul,
+        wave: state.waveIndex,
+        diff: state.diff
     });
-
-  showScreen('menu');
+    enemy.t = -Math.random() * 14; // Biraz dağıt
+    state.enemies.push(enemy);
 }
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', main, { once: true });
-} else {
-  main();
+function endWave(state) {
+    state.waveActive = false;
+    const bonus = roundBonus(state.waveIndex, state.diff);
+    if (bonus > 0) {
+        state.coins += bonus;
+        state.stats.cashEarned += bonus;
+        toast(`Dalga Tamamlandı! +${bonus}💰`);
+    }
+    updateHUD(state);
+    hud.btnSend.disabled = false;
+    playSound('wave-clear'); // Varsa çal
 }
+
+function buildShop(state) {
+    hud.shop.innerHTML = '';
+    for (const type of Object.keys(BALANCE.towers)) {
+        const btn = document.createElement('div');
+        btn.className = 'tower-shop-btn';
+        btn.innerHTML = `
+            <strong>${type}</strong>
+            <span class="price">${priceOf(type)}💰</span>
+        `;
+        btn.onclick = () => {
+            if (state.coins >= priceOf(type) || state.dev.freePlacement) {
+                state.selectedTowerType = type;
+                state.placing = true;
+                state.ghost.type = type;
+                state.ghost.valid = false;
+                selectTower(state, null); // Panel kapat
+            } else {
+                toast('Yetersiz Bakiye!');
+                playSound('error');
+            }
+        };
+        hud.shop.appendChild(btn);
+    }
+}
+
+function updateHUD(state) {
+    hud.lives.textContent = Math.floor(state.lives);
+    hud.coins.textContent = Math.floor(state.coins);
+    hud.wave.textContent = "Dalga " + state.waveIndex;
+    hud.btnSend.disabled = state.waveActive;
+    hud.btnSpeed.textContent = "Hız: " + state.speed + "x";
+    
+    // Shop butonlarını güncelle (paran yetiyor mu?)
+    const shopBtns = hud.shop.children;
+    let idx = 0;
+    for (const type of Object.keys(BALANCE.towers)) {
+        const price = priceOf(type);
+        const btn = shopBtns[idx++];
+        if (btn) {
+            if (state.coins < price && !state.dev.freePlacement) btn.classList.add('disabled');
+            else btn.classList.remove('disabled');
+            // Hero kontrolü
+            if (type === 'Hero' && state.heroPlaced) btn.classList.add('disabled');
+        }
+    }
+    
+    // Panel güncelleme
+    updatePanel(state);
+}
+
+function selectTower(state, tower) {
+    state.towers.forEach(t => t.selected = false);
+    state.selectedTower = tower;
+    if (tower) tower.selected = true;
+    
+    const panel = hud.panel;
+    if (!tower) {
+        panel.classList.remove('active');
+        return;
+    }
+    
+    panel.classList.add('active');
+    panel.innerHTML = `
+        <h3>${tower.type} (Lv.${tower.hero ? tower.heroLevel : '1'})</h3>
+        <div>Hasar: ${Math.round(tower.damage)}</div>
+        <div>Menzil: ${Math.round(tower.range)}</div>
+        <div style="margin-top:5px">Öncelik: <button id="btn-prio" class="btn btn-small" style="padding:2px 6px; font-size:0.8rem">${tower.priority}</button></div>
+        <div style="margin-top:10px; border-top:1px solid rgba(255,255,255,0.1); padding-top:5px">
+            <div class="upgrade-row" id="upg-row"></div>
+        </div>
+        <button id="btn-sell" class="btn btn-danger btn-small" style="width:100%; margin-top:10px">Sat (${tower.sellValue}💰)</button>
+    `;
+    
+    // Event Listeners for Panel
+    panel.querySelector('#btn-prio').onclick = () => {
+        cyclePriority(tower);
+        playSound('build'); // Klik sesi
+    };
+    panel.querySelector('#btn-sell').onclick = () => {
+        state.towers = state.towers.filter(t => t !== tower);
+        state.coins += tower.sellValue;
+        if (tower.hero) { state.heroPlaced = false; state.heroTower = null; }
+        playSound('build'); // Satma sesi (aynı olabilir)
+        selectTower(state, null);
+        createExplosionEffect(tower.x, tower.y); // Görsel geri bildirim
+    };
+    
+    // Upgrade Butonları
+    const upgRow = panel.querySelector('#upg-row');
+    if (!tower.hero) {
+        ['A', 'B'].forEach(path => {
+            const tier = tower.tiers[path];
+            const info = upgrades.getUpgradeInfo(tower.type, path, tier + 1);
+            const btn = document.createElement('button');
+            btn.className = 'upgrade-btn btn';
+            if (!info) {
+                btn.textContent = "MAX";
+                btn.disabled = true;
+            } else {
+                btn.innerHTML = `${path}${tier+1}<br>${info.price}💰`;
+                const check = upgrades.canApplyUpgrade(state, tower, path);
+                if (!check.ok) btn.disabled = true;
+                btn.onclick = () => {
+                    if (upgrades.applyUpgrade(state, tower, path)) {
+                        playSound('build');
+                        selectTower(state, tower); // Refresh
+                    }
+                };
+            }
+            upgRow.appendChild(btn);
+        });
+    } else {
+        upgRow.innerHTML = "<small>Kahraman otomatik seviye atlar.</small>";
+    }
+}
+
+function createExplosionEffect(x, y) {
+    // Basit bir duman efekti visualEffects.js üzerinden çağrılabilir
+    // Şimdilik boş, visualEffects'e eklenebilir.
+}
+
+// --- INPUT HANDLERS ---
+function setupInputs() {
+    // Mouse Move (Yerleştirme Hayaleti)
+    screens.game.onpointermove = (ev) => {
+        if (!gameState || !gameState.placing) return;
+        const pos = gameState.clientToWorld(ev.clientX, ev.clientY);
+        
+        // Grid Snap
+        const tx = Math.floor(pos.x / gameState.tileSize);
+        const ty = Math.floor(pos.y / gameState.tileSize);
+        const snapX = (tx + 0.5) * gameState.tileSize;
+        const snapY = (ty + 0.5) * gameState.tileSize;
+        
+        gameState.ghost.x = snapX;
+        gameState.ghost.y = snapY;
+        
+        // Validasyon (Basitçe mesafe ve path kontrolü, detaylısı entities.js'de var ama burada basit check)
+        gameState.ghost.valid = true; 
+        // Detaylı validasyon placeTower içinde yapılıyor, burada sadece görsel güncelliyoruz
+    };
+    
+    // Mouse Click (Yerleştirme / Seçme)
+    screens.game.onpointerdown = (ev) => {
+        if (!gameState) return;
+        // Sağ tık iptal
+        if (ev.button === 2) {
+            gameState.placing = false;
+            gameState.ghost.type = null;
+            return;
+        }
+        
+        const pos = gameState.clientToWorld(ev.clientX, ev.clientY);
+        
+        if (gameState.placing) {
+            // Kule Koy
+            if (placeTowerLogic(gameState, gameState.ghost.x, gameState.ghost.y)) {
+                if (!ev.shiftKey) {
+                    gameState.placing = false;
+                    gameState.ghost.type = null;
+                }
+            }
+        } else {
+            // Kule Seç
+            let picked = null;
+            let minDist = 30;
+            gameState.towers.forEach(t => {
+                const d = Math.hypot(t.x - pos.x, t.y - pos.y);
+                if (d < minDist) { minDist = d; picked = t; }
+            });
+            selectTower(gameState, picked);
+        }
+    };
+}
+
+function placeTowerLogic(state, x, y) {
+    // Basit validasyon
+    if (x < 0 || y < 0 || x > state.worldW || y > state.worldH) return false;
+    // Para kontrolü
+    const price = priceOf(state.selectedTowerType);
+    if (state.coins < price && !state.dev.freePlacement) return false;
+    
+    // Üst üste binme kontrolü
+    for (const t of state.towers) {
+        if (Math.hypot(t.x - x, t.y - y) < 10) return false;
+    }
+    
+    // Path kontrolü (Basit) - Gelişmişi için map verisine bakmak lazım
+    const key = Math.floor(x/64) + ',' + Math.floor(y/64);
+    if (state.pathTiles && state.pathTiles.has(key)) {
+        toast("Yola inşa edilemez!");
+        playSound('error');
+        return false;
+    }
+
+    // İnşa et
+    const t = createTower(state.selectedTowerType, x, y);
+    state.towers.push(t);
+    if (!state.dev.freePlacement) state.coins -= price;
+    if (t.hero) { state.heroPlaced = true; state.heroTower = t; }
+    
+    playSound('build');
+    createExplosionEffect(x, y);
+    return true;
+}
+
+// --- INITIALIZATION ---
+window.onload = () => {
+    // Buton Eventleri
+    document.getElementById('btn-start-menu').onclick = () => showScreen('mapSelect');
+    document.getElementById('btn-info-menu').onclick = () => { buildEncyclopedia(); showScreen('info'); };
+    document.getElementById('btn-back-menu').onclick = () => showScreen('menu');
+    document.getElementById('btn-close-info').onclick = () => showScreen('menu');
+    
+    // Harita Kartları
+    document.querySelectorAll('.card[data-map]').forEach(el => {
+        el.onclick = () => startGame(el.dataset.map);
+    });
+    
+    // Oyun İçi Butonlar
+    hud.btnSend.onclick = () => {
+        if (gameState && !gameState.waveActive) {
+             // Bir sonraki dalgayı başlat (waves.js'den lojiği çekmemiz lazım veya main içinde startWave kopyası)
+             // Burada main.js içindeki startWave logicini entegre ediyoruz:
+             const next = gameState.waveIndex + 1;
+             let groups = gameState.waves[next];
+             if (!groups) {
+                 groups = generateLateGameWave(next);
+                 gameState.waves[next] = groups;
+             }
+             gameState.waveIndex = next;
+             gameState.waveActive = true;
+             let at = gameState.gameTime + 0.5;
+             groups.forEach(g => {
+                 for(let i=0; i<g.count; i++){
+                     gameState.spawnQueue.add({
+                         at, type: g.type, lane: g.lane, traits: g.traits, hpMul: g.hpMul
+                     });
+                     at += g.gap;
+                 }
+             });
+             playSound('wave-start');
+             updateHUD(gameState);
+        }
+    };
+    
+    hud.btnSpeed.onclick = () => {
+        if (!gameState) return;
+        const speeds = [1, 2, 4, 6, 8, 10];
+        let idx = speeds.indexOf(gameState.speed);
+        gameState.speed = speeds[(idx + 1) % speeds.length];
+        updateHUD(gameState);
+    };
+    
+    hud.btnPause.onclick = togglePause;
+    
+    // Pause Menü Butonları
+    document.getElementById('btn-resume').onclick = togglePause;
+    document.getElementById('btn-restart').onclick = restartGame;
+    document.getElementById('btn-quit').onclick = quitGame;
+    
+    // Klavye
+    document.addEventListener('keydown', (ev) => {
+        if (ev.key === 'Escape' || ev.key === 'p' || ev.key === 'P') {
+            if (gameState) {
+                if (gameState.placing) {
+                    gameState.placing = false; // Önce placing iptal
+                    gameState.ghost.type = null;
+                } else {
+                    togglePause();
+                }
+            }
+        }
+    });
+    
+    setupInputs();
+    showScreen('menu');
+};
+
+// Resize Handler
+window.onresize = () => {
+    if (gameState) refreshViewport(gameState);
+};
