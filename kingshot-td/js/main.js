@@ -27,8 +27,9 @@ import {
   throttle,
   pointToPolylineDistance,
 } from './utils.js';
-// YENİ: Efekt güncelleme fonksiyonu
 import { updateEffects } from './visualEffects.js';
+// YENİ: Audio import
+import { initAudio, playSound } from './audio.js';
 
 const params = new URLSearchParams(globalThis.location?.search || '');
 const sandbox = params.get('sandbox') === '1';
@@ -120,6 +121,7 @@ function refreshViewport(state) {
 }
 
 function setGameSpeed(state, value) {
+  // YENİ: 10x'e kadar izin ver
   const next = clamp(Math.round(value), 1, 10);
   if (state.speed !== next) {
     state.speed = next;
@@ -482,6 +484,9 @@ function setupPlacementEvents(state) {
     }
   };
   canvas.onpointerdown = (ev) => {
+    // YENİ: Herhangi bir etkileşimde sesi başlat (Tarayıcı politikası gereği)
+    initAudio();
+    
     if (!state.clientToWorld) return;
     const pos = state.clientToWorld(ev.clientX, ev.clientY);
     if (ev.button === 2) {
@@ -615,6 +620,7 @@ function placeTower(state, x, y, type) {
   const valid = validatePlacement(state, x, y, type);
   if (!valid.ok) {
     toast(valid.reason);
+    playSound('error'); // YENİ
     return false;
   }
   const placeX = valid.centerX ?? x;
@@ -837,6 +843,8 @@ function startWave(state) {
     }
   }
   updateSendButton(state);
+  // YENİ: Dalga başlama sesi
+  playSound('wave-start');
 }
 
 function spawnEnemy(state, entry) {
@@ -911,12 +919,22 @@ function spawnTestGroup(state, traits) {
 function setupControls(state) {
   if (btnSend) {
     btnSend.onclick = () => {
+      // Başlat butonuna basınca da ses aç
+      initAudio();
       if (!state.waveActive) startWave(state);
     };
   }
   if (btnSpeed) {
+    // YENİ: Hız döngüsü: 1 -> 2 -> 4 -> 6 -> 8 -> 10 -> 1
     btnSpeed.onclick = () => {
-      setGameSpeed(state, state.speed === 1 ? 2 : 1);
+      let next = 1;
+      if (state.speed === 1) next = 2;
+      else if (state.speed === 2) next = 4;
+      else if (state.speed === 4) next = 6;
+      else if (state.speed === 6) next = 8;
+      else if (state.speed === 8) next = 10;
+      else next = 1;
+      setGameSpeed(state, next);
     };
   }
   if (btnPause) {
@@ -1096,7 +1114,6 @@ async function bootstrap(mapName) {
     if (!state.paused) {
       state.gameTime += scaled;
       
-      // YENİ: Efektleri güncelle
       updateEffects(scaled);
 
       state.spawnQueue.flush(state.gameTime, (entry) => spawnEnemy(state, entry));
@@ -1124,6 +1141,8 @@ async function bootstrap(mapName) {
 function main() {
   const startBtn = document.getElementById('btn-start-game');
   startBtn?.addEventListener('click', () => {
+    // YENİ: Menüden oyuna geçerken ses motorunu başlat
+    initAudio();
     showScreen('mapSelect');
   });
 
@@ -1131,6 +1150,7 @@ function main() {
     .querySelectorAll('#map-select-screen [data-map]')
     .forEach((button) => {
       button.addEventListener('click', () => {
+        initAudio();
         const map = button.dataset.map;
         if (!map) return;
         showScreen('game');
