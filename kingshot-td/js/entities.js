@@ -2,8 +2,9 @@ import { BALANCE } from './balance.js';
 import { dist2, projectAlongPolyline } from './utils.js';
 import { popReward, sellRefund, getDifficulty } from './economy.js';
 import { isActive } from './abilities.js';
-// YENİ: Efekt importları
-import { spawnParticles, spawnFloatingText } from './visualEffects.js';
+import { spawnParticles, spawnFloatingText, spawnLightning } from './visualEffects.js';
+// YENİ: Ses import
+import { playSound } from './audio.js';
 
 let ENEMY_ID = 1;
 let BULLET_ID = 1;
@@ -13,8 +14,10 @@ export function handleEnemyDeath(state, enemy, diff) {
   if (!enemy.alive) return;
   enemy.alive = false;
   
-  // YENİ: Ölüm efekti
   spawnParticles(enemy.x, enemy.y, 12, 'blood');
+  // YENİ: Ölüm sesi
+  playSound('kill');
+
   if (enemy.type === 'Tank' || enemy.type === 'Behemoth' || enemy.type === 'GigaBehemoth') {
     spawnParticles(enemy.x, enemy.y, 25, 'explosion');
   }
@@ -81,7 +84,6 @@ export function createEnemy(type, laneIndex, startPoint, opts = {}) {
     lastHitAt: 0,
     regrowDelay: 0,
     regrowRate: 0,
-    // YENİ: Yanıp sönme (Flash) sayacı
     flashTime: 0, 
   };
 
@@ -138,7 +140,6 @@ export function createTower(type, x, y) {
     sellValue: sellRefund(base.price),
     stats: { damage: 0, shots: 0 },
     angle: -Math.PI / 2,
-    // RECOIL KALDIRILDI
   };
   if (type === 'Hero') {
     tower.hero = true;
@@ -146,6 +147,8 @@ export function createTower(type, x, y) {
     tower.heroXP = 0;
     tower.heroNextXP = BALANCE.hero.levelXp(1);
   }
+  // YENİ: İnşa sesi
+  playSound('build');
   return tower;
 }
 
@@ -198,6 +201,63 @@ function prioritizeTarget(tower, enemies) {
   return best?.enemy || null;
 }
 
+// YENİ: Tesla için zincirleme saldırı fonksiyonu
+function fireTesla(tower, target, state, now) {
+  let currentTarget = target;
+  let remainingPierce = tower.pierce || 3;
+  const hitList = new Set();
+  const bounceRange = 150; // Sekme menzili
+
+  playSound('shoot-tesla');
+
+  while (currentTarget && remainingPierce > 0) {
+    hitList.add(currentTarget.id);
+    
+    // Efekt: Kule'den (veya önceki hedeften) mevcut hedefe şimşek
+    const sourceX = (hitList.size === 1) ? tower.x : currentTarget._prevX || tower.x;
+    const sourceY = (hitList.size === 1) ? tower.y : currentTarget._prevY || tower.y;
+    spawnLightning(sourceX, sourceY, currentTarget.x, currentTarget.y);
+    spawnParticles(currentTarget.x, currentTarget.y, 3, 'tesla');
+
+    // Hasar uygula
+    const dealt = applyDamage(currentTarget, tower.damage, 'energy', {
+       now, 
+       shatterLead: true // Enerji Lead'i kırar
+    });
+    
+    if (dealt > 0) {
+      tower.stats.damage += dealt;
+      if (state.stats) state.stats.damage += dealt;
+      if (currentTarget.hp <= 0) {
+        handleEnemyDeath(state, currentTarget);
+      }
+    }
+
+    remainingPierce--;
+    if (remainingPierce <= 0) break;
+
+    // Bir sonraki hedefi bul
+    let nextTarget = null;
+    let bestDist = Infinity;
+    currentTarget._prevX = currentTarget.x; // Zincir için pozisyon sakla
+    currentTarget._prevY = currentTarget.y;
+
+    for (const other of state.enemies) {
+       if (!other.alive || hitList.has(other.id)) continue;
+       const d2 = dist2(currentTarget.x, currentTarget.y, other.x, other.y);
+       if (d2 > bounceRange * bounceRange) continue;
+       if (d2 < bestDist) {
+         bestDist = d2;
+         nextTarget = other;
+       }
+    }
+    currentTarget = nextTarget;
+  }
+  
+  tower.cooldown += tower.fireRate;
+  tower.stats.shots++;
+}
+
 function buildBullet(tower, enemy, lane, now) {
   const lead = BALANCE.global.bulletLead;
   const future = projectAlongPolyline(lane, enemy.t + enemy.baseSpeed * lead);
@@ -235,6 +295,12 @@ function buildBullet(tower, enemy, lane, now) {
       bullet.damage *= aura.dmgMul;
     }
   }
+
+  // YENİ: Ateş sesi
+  if (tower.type === 'Archer') playSound('shoot-arrow');
+  else if (tower.type === 'Cannon') playSound('shoot-cannon');
+  else playSound('shoot-magic');
+
   return bullet;
 }
 
@@ -248,6 +314,12 @@ export function updateTowers(state, dt, now) {
     
     const target = prioritizeTarget(tower, state.enemies);
     if (!target) continue;
+    
+    // YENİ: Tesla kulesi özel mantık
+    if (tower.type === 'Tesla') {
+      fireTesla(tower, target, state, now);
+      continue;
+    }
     
     const dx = target.x - tower.x;
     const dy = target.y - tower.y;
@@ -268,6 +340,8 @@ export function updateTowers(state, dt, now) {
 
 function canDamage(enemy, damageType, shatterLead) {
   if (!enemy.traits?.lead) return true;
+  // Energy tipi de lead kırar
+  if (damageType === 'energy') return true;
   if (damageType === 'physical' && !shatterLead) return false;
   return true;
 }
@@ -282,17 +356,19 @@ export function applyDamage(enemy, rawDamage, damageType, { now, slowPct, slowDu
   }
   dmg = Math.max(1, dmg);
 
-  // YENİ: Flash (Parlamayı) Tetikle
-  enemy.flashTime = 0.15; // 0.15 saniye boyunca beyaz parlasın
+  enemy.flashTime = 0.15; 
 
-  // YENİ: Hasar yazısı ve küçük vuruş efekti
   let color = '#fff';
   let particleType = 'white';
   if (damageType === 'magic') { color = '#d1c4e9'; particleType = 'magic'; }
   if (damageType === 'explosive') { color = '#ffcc80'; particleType = 'explosion'; }
+  if (damageType === 'energy') { color = '#b2ebf2'; particleType = 'tesla'; }
   
   spawnFloatingText(enemy.x, enemy.y, Math.floor(dmg), color);
   spawnParticles(enemy.x, enemy.y, 2, particleType);
+  
+  // YENİ: Vurma sesi (hafif bir gürültü önlemek için her vuruşta çalmayabiliriz ama şimdilik çalsın)
+  if (Math.random() < 0.3) playSound('hit');
 
   enemy.hp -= dmg;
   enemy.lastHitAt = now;
@@ -300,7 +376,6 @@ export function applyDamage(enemy, rawDamage, damageType, { now, slowPct, slowDu
     const mult = 1 - slowPct;
     enemy.slowMul = Math.min(enemy.slowMul, mult);
     enemy.slowUntil = Math.max(enemy.slowUntil, now + (slowDuration || 1.5));
-    // YENİ: Buz efekti
     if (Math.random() < 0.3) spawnParticles(enemy.x, enemy.y, 2, 'frost');
   }
   return dmg;
@@ -380,7 +455,6 @@ export function updateBullets(state, dt, now, diff) {
               }
             }
           }
-          // YENİ: Alan hasarı efekti
           spawnParticles(bullet.x, bullet.y, 5, 'explosion');
         }
       }
@@ -401,7 +475,6 @@ export function advanceEnemies(state, dt, now, diff) {
       continue;
     }
     
-    // YENİ: Flash süresini azalt
     if (enemy.flashTime > 0) {
         enemy.flashTime -= dt;
     }
