@@ -10,9 +10,10 @@ const ASSETS = [
   './js/economy.js',
   './js/upgrades.js',
   './js/balance.js',
-  './js/entities.js', // AKTİF SİSTEM İÇİN EKLENDİ
-  './js/utils.js',    // util.js SİLİNDİ, BU EKLENDİ
-  './js/abilities.js',// AKTİF SİSTEM İÇİN EKLENDİ
+  './js/entities.js', 
+  './js/utils.js',    
+  './js/abilities.js',
+  './js/visualEffects.js', // YENİ DOSYA EKLENDİ
   './js/inCodeAssets.js',
   './maps/meadow.json',
   './maps/canyon.json',
