@@ -1,9 +1,0 @@
-{
-  "name": "KingShot TD",
-  "short_name": "KingShot",
-  "start_url": "./index.html",
-  "display": "standalone",
-  "background_color": "#7DBF85",
-  "theme_color": "#7DBF85",
-  "orientation": "portrait"
-}
