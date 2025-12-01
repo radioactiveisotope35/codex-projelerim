@@ -599,13 +599,48 @@ const deriveHtfTrend = (
   priceAboveEma200: boolean;
 } => {
   const parent = getParentHTF(tf);
+
+  // Bazı TF'lerin parent'ı yok (örn. 1d); bunlarda eski davranışı koruyoruz.
   if (!parent) {
-    return { trend: 'NEUTRAL', allowLong: true, allowShort: true, priceAboveEma200: true };
+    return {
+      trend: 'NEUTRAL',
+      allowLong: true,
+      allowShort: true,
+      priceAboveEma200: true
+    };
   }
+
   const hd = htfData[parent];
-  if (!hd) {
-    return { trend: 'NEUTRAL', allowLong: true, allowShort: true, priceAboveEma200: true };
+
+  // KRİTİK: Parent HTF datası yoksa, yönsel işlem açma.
+  if (!hd || !hd.history.length) {
+    return {
+      trend: 'NEUTRAL',
+      allowLong: false,
+      allowShort: false,
+      priceAboveEma200: true
+    };
   }
+
+  const idx = getHTFIndex(currentTs, hd.history);
+  const price = getPrice(hd.history[idx]);
+  const ema50 = hd.ema50[idx];
+  const ema200 = hd.ema200[idx];
+
+  const priceAboveEma200 = ema200 ? price > ema200 : true;
+  let trend: 'BULL' | 'BEAR' | 'NEUTRAL' = 'NEUTRAL';
+
+  if (ema50 && ema200) {
+    if (ema50 > ema200 && price > ema50) trend = 'BULL';
+    else if (ema50 < ema200 && price < ema50) trend = 'BEAR';
+  }
+
+  const allowLong = priceAboveEma200;
+  const allowShort = true;
+
+  return { trend, allowLong, allowShort, priceAboveEma200 };
+};
+
   const idx = getHTFIndex(currentTs, hd.history);
   const price = getPrice(hd.history[idx]);
   const ema50 = hd.ema50[idx];
@@ -639,14 +674,22 @@ const HTF_CONFIG: Record<TimeFrame, { htf: HTF; boost: number; requireBias: bool
 
 const getZoneTTL = (tf: TimeFrame): number => {
   switch (tf) {
-    case '1m': return 400;
-    case '5m': return 300;
-    case '15m': return 260;
-    case '30m': return 220;
-    case '1h': return 200;
-    case '4h': return 150;
-    case '1d': return 90;
-    default: return 250;
+    case '1m':
+      return 150;  // ~2.5 saat
+    case '5m':
+      return 120;  // ~10 saat
+    case '15m':
+      return 96;   // ~1 gün
+    case '30m':
+      return 80;   // ~1.5–2 gün
+    case '1h':
+      return 80;   // ~3–4 gün
+    case '4h':
+      return 60;   // ~10 gün civarı
+    case '1d':
+      return 45;   // ~1.5 ay civarı
+    default:
+      return 100;
   }
 };
 
