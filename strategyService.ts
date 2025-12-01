@@ -10,35 +10,29 @@ import {
   AssetType
 } from '../types';
 
+// ─── NEW TYPES FOR RISK ENGINE ───
+
+export type TradeMode = 'TREND' | 'SCALP' | 'REVERSAL';
+export type TrendRegime = 'STRONG_UP' | 'STRONG_DOWN' | 'RANGE' | 'NEUTRAL';
+
 export interface ExtendedTradeSetup extends TradeSetup {
   score?: number;
   zoneId?: string;
   session?: 'LONDON' | 'NY' | 'ASIAN' | 'SILVER_BULLET';
   sweep?: 'BULL' | 'BEAR' | null;
-  /**
-   * rr:
-   * - Live sinyallerde: planlanan RR (TP/SL’den hesaplanan teorik RR)
-   * - Backtest sonuçlarında: gerçekleşen R (komisyon düşüldükten sonra)
-   * Geriye dönük uyumluluk için korunuyor.
-   */
   rr?: number;
-  plannedRR?: number; // TP/SL’den hesaplanan teorik RR
-  realizedR?: number; // Backtest’te gerçekleşen R
-  exitPrice?: number; // For backtest visualization
-  durationBars?: number; // How many candles the trade lasted
+  plannedRR?: number;
+  realizedR?: number;
+  exitPrice?: number;
+  durationBars?: number;
   fee?: number;
   slippage?: number;
+  // New Fields
   tradeMode?: TradeMode;
-  trendRelation?: TrendRelation;
-  globalRegime?: TrendRegime;
-  directionBlockReason?: string | null;
+  regime?: TrendRegime;
 }
+
 type SessionName = 'LONDON' | 'NY' | 'ASIAN' | 'SILVER_BULLET';
-
-type TrendRegime = 'STRONG_UP' | 'STRONG_DOWN' | 'RANGE';
-type TradeMode = 'TREND' | 'HYBRID' | 'MEAN_REVERSION';
-type TrendRelation = 'WITH_TREND' | 'AGAINST_TREND' | 'FLAT';
-
 
 // ─── CORE TYPES ───
 
@@ -58,14 +52,14 @@ interface SmartZone {
   direction: 'BULLISH' | 'BEARISH';
   top: number;
   bottom: number;
-  index: number; // index in local history
+  index: number;
   strength: number;
   tapped: boolean;
   mitigated: boolean;
   partiallyMitigated: boolean;
   htfConfirmed?: boolean;
   biasAligned?: boolean;
-  availableFrom: number; // first index where it can be traded
+  availableFrom: number;
   active: boolean;
 }
 
@@ -82,9 +76,9 @@ export interface BacktestResult {
   wins: number;
   losses: number;
   winRate: number;
-  netPnL: number; // in R
+  netPnL: number;
   profitFactor: number;
-  maxDrawdown: number; // in R
+  maxDrawdown: number;
   trades: ExtendedTradeSetup[];
   startDate: number;
   endDate: number;
@@ -98,6 +92,7 @@ interface HTFData {
   swings: Swing[];
   zones: SmartZone[];
   biasSeries: ('BULLISH' | 'BEARISH' | 'NEUTRAL')[];
+  ema50: number[]; // Added for robust regime detection
 }
 
 // ─── SMALL HELPERS ───
@@ -105,7 +100,6 @@ interface HTFData {
 const getPrice = (c: Candle): number =>
   c.price ?? c.close ?? c.open ?? 0;
 
-// Session mapping (UTC based, simplified but consistent)
 const getSession = (
   ts: number
 ): 'LONDON' | 'NY' | 'ASIAN' | 'SILVER_BULLET' => {
@@ -120,10 +114,7 @@ const getSession = (
 
 // ─── INDICATORS ───
 
-export const calculateATR = (
-  history: Candle[],
-  period = 14
-): number[] => {
+export const calculateATR = (history: Candle[], period = 14): number[] => {
   const n = history.length;
   const atr = new Array(n).fill(0);
   if (n < period + 1) return atr;
@@ -133,11 +124,7 @@ export const calculateATR = (
     const h = history[i].high;
     const l = history[i].low;
     const pc = getPrice(history[i - 1]);
-    const trVal = Math.max(
-      h - l,
-      Math.abs(h - pc),
-      Math.abs(l - pc)
-    );
+    const trVal = Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc));
     tr[i] = trVal;
   }
 
@@ -151,10 +138,7 @@ export const calculateATR = (
   return atr;
 };
 
-export const calculateSMA = (
-  prices: number[],
-  period: number
-): number[] => {
+export const calculateSMA = (prices: number[], period: number): number[] => {
   const n = prices.length;
   const sma = new Array(n).fill(0);
   if (n < period) return sma;
@@ -162,20 +146,13 @@ export const calculateSMA = (
   let sum = 0;
   for (let i = 0; i < n; i++) {
     sum += prices[i];
-    if (i >= period) {
-      sum -= prices[i - period];
-    }
-    if (i >= period - 1) {
-      sma[i] = sum / period;
-    }
+    if (i >= period) sum -= prices[i - period];
+    if (i >= period - 1) sma[i] = sum / period;
   }
   return sma;
 };
 
-export const calculateRSI = (
-  prices: number[],
-  period = 14
-): number[] => {
+export const calculateRSI = (prices: number[], period = 14): number[] => {
   const n = prices.length;
   const rsi = new Array(n).fill(50);
   if (n < period + 1) return rsi;
@@ -191,16 +168,15 @@ export const calculateRSI = (
   let avgLoss = loss / period;
 
   const firstRsiIndex = period;
-  rsi[firstRsiIndex] =
-    avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  rsi[firstRsiIndex] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
 
   for (let i = period + 1; i < n; i++) {
     const diff = prices[i] - prices[i - 1];
     const curGain = diff > 0 ? diff : 0;
     const curLoss = diff < 0 ? -diff : 0;
 
-    avgGain = ((avgGain * (period - 1)) + curGain) / period;
-    avgLoss = ((avgLoss * (period - 1)) + curLoss) / period;
+    avgGain = (avgGain * (period - 1) + curGain) / period;
+    avgLoss = (avgLoss * (period - 1) + curLoss) / period;
 
     if (avgLoss === 0) rsi[i] = 100;
     else {
@@ -211,10 +187,7 @@ export const calculateRSI = (
   return rsi;
 };
 
-export const calculateADX = (
-  history: Candle[],
-  period = 14
-): number[] => {
+export const calculateADX = (history: Candle[], period = 14): number[] => {
   const n = history.length;
   const adx = new Array(n).fill(0);
   if (n < period + 2) return adx;
@@ -227,25 +200,17 @@ export const calculateADX = (
     const upMove = history[i].high - history[i - 1].high;
     const downMove = history[i - 1].low - history[i].low;
 
-    plusDM[i] =
-      upMove > downMove && upMove > 0 ? upMove : 0;
-    minusDM[i] =
-      downMove > upMove && downMove > 0 ? downMove : 0;
+    plusDM[i] = upMove > downMove && upMove > 0 ? upMove : 0;
+    minusDM[i] = downMove > upMove && downMove > 0 ? downMove : 0;
 
     const high = history[i].high;
     const low = history[i].low;
     const prevClose = getPrice(history[i - 1]);
 
-    tr[i] = Math.max(
-      high - low,
-      Math.abs(high - prevClose),
-      Math.abs(low - prevClose)
-    );
+    tr[i] = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
   }
 
-  let sumTR = 0,
-    sumPlusDM = 0,
-    sumMinusDM = 0;
+  let sumTR = 0, sumPlusDM = 0, sumMinusDM = 0;
   for (let i = 1; i <= period; i++) {
     sumTR += tr[i];
     sumPlusDM += plusDM[i];
@@ -262,24 +227,16 @@ export const calculateADX = (
 
   plusDI[period] = (smoothPlusDM / atr) * 100;
   minusDI[period] = (smoothMinusDM / atr) * 100;
-  dx[period] =
-    (Math.abs(plusDI[period] - minusDI[period]) /
-      Math.max(plusDI[period] + minusDI[period], 1e-9)) *
-    100;
+  dx[period] = (Math.abs(plusDI[period] - minusDI[period]) / Math.max(plusDI[period] + minusDI[period], 1e-9)) * 100;
 
   for (let i = period + 1; i < n; i++) {
     atr = atr - atr / period + tr[i];
-    smoothPlusDM =
-      smoothPlusDM - smoothPlusDM / period + plusDM[i];
-    smoothMinusDM =
-      smoothMinusDM - smoothMinusDM / period + minusDM[i];
+    smoothPlusDM = smoothPlusDM - smoothPlusDM / period + plusDM[i];
+    smoothMinusDM = smoothMinusDM - smoothMinusDM / period + minusDM[i];
 
     plusDI[i] = (smoothPlusDM / atr) * 100;
     minusDI[i] = (smoothMinusDM / atr) * 100;
-    dx[i] =
-      (Math.abs(plusDI[i] - minusDI[i]) /
-        Math.max(plusDI[i] + minusDI[i], 1e-9)) *
-      100;
+    dx[i] = (Math.abs(plusDI[i] - minusDI[i]) / Math.max(plusDI[i] + minusDI[i], 1e-9)) * 100;
   }
 
   let sumDX = 0;
@@ -292,8 +249,7 @@ export const calculateADX = (
   adx[firstAdxIndex] = sumDX / period;
 
   for (let i = firstAdxIndex + 1; i < n; i++) {
-    adx[i] =
-      (adx[i - 1] * (period - 1) + dx[i]) / period;
+    adx[i] = (adx[i - 1] * (period - 1) + dx[i]) / period;
   }
   return adx;
 };
@@ -313,10 +269,7 @@ const getSwingStrength = (tf: TimeFrame): number => {
   }
 };
 
-const findSwings = (
-  history: Candle[],
-  tf: TimeFrame | HTF
-): Swing[] => {
+const findSwings = (history: Candle[], tf: TimeFrame | HTF): Swing[] => {
   const strength = getSwingStrength(tf as TimeFrame);
   const n = history.length;
   const swings: Swing[] = [];
@@ -390,10 +343,7 @@ const detectFVGs = (history: Candle[]): SmartZone[] => {
   return zones;
 };
 
-const detectOrderBlocks = (
-  history: Candle[],
-  swings: Swing[]
-): SmartZone[] => {
+const detectOrderBlocks = (history: Candle[], swings: Swing[]): SmartZone[] => {
   const zones: SmartZone[] = [];
   for (const s of swings) {
     const c = history[s.index];
@@ -439,10 +389,7 @@ const detectOrderBlocks = (
   return zones;
 };
 
-const detectBreakerBlocks = (
-  history: Candle[],
-  obs: SmartZone[]
-): SmartZone[] => {
+const detectBreakerBlocks = (history: Candle[], obs: SmartZone[]): SmartZone[] => {
   const breakers: SmartZone[] = [];
   const n = history.length;
 
@@ -499,15 +446,12 @@ const detectBreakerBlocks = (
   return breakers;
 };
 
-// ─── HTF DATA ───
+// ─── HTF DATA & REGIME DETECTION ───
 
-const calculateHTFBiasSeries = (
-  history: Candle[]
-): ('BULLISH' | 'BEARISH' | 'NEUTRAL')[] => {
+const calculateHTFBiasSeries = (history: Candle[]): { bias: ('BULLISH' | 'BEARISH' | 'NEUTRAL')[], sma50: number[] } => {
   const closes = history.map(getPrice);
   const sma50 = calculateSMA(closes, 50);
-  const res: ('BULLISH' | 'BEARISH' | 'NEUTRAL')[] =
-    new Array(history.length).fill('NEUTRAL');
+  const res: ('BULLISH' | 'BEARISH' | 'NEUTRAL')[] = new Array(history.length).fill('NEUTRAL');
 
   for (let i = 0; i < history.length; i++) {
     const sma = sma50[i];
@@ -521,16 +465,12 @@ const calculateHTFBiasSeries = (
     else res[i] = 'NEUTRAL';
   }
 
-  return res;
+  return { bias: res, sma50 };
 };
 
-const prepareHTFData = (
-  asset: MarketData,
-  externalHTFData?: any
-): Record<HTF, HTFData> => {
+const prepareHTFData = (asset: MarketData, externalHTFData?: any): Record<HTF, HTFData> => {
   const result: Partial<Record<HTF, HTFData>> = {};
   const htfs: HTF[] = ['5m', '15m', '30m', '1h', '4h', '1d'];
-
   const source: any = externalHTFData || (asset as any).htf || {};
 
   for (const htf of htfs) {
@@ -538,38 +478,32 @@ const prepareHTFData = (
     let raw = source[htf] || source[mapKey];
 
     if (raw && !Array.isArray(raw)) {
-      if (Array.isArray(raw.history)) {
-        raw = raw.history;
-      } else if (Array.isArray(raw.data)) {
-        raw = raw.data;
-      }
+      if (Array.isArray(raw.history)) raw = raw.history;
+      else if (Array.isArray(raw.data)) raw = raw.data;
     }
 
-    if (!raw || !Array.isArray(raw) || raw.length < 50) continue; // Relaxed limit for HTF data
+    if (!raw || !Array.isArray(raw) || raw.length < 50) continue;
 
     const history = raw as Candle[];
     const swings = findSwings(history, htf);
     const fvgs = detectFVGs(history);
     const obs = detectOrderBlocks(history, swings);
     const brks = detectBreakerBlocks(history, obs);
-    const biasSeries = calculateHTFBiasSeries(history);
+    const { bias, sma50 } = calculateHTFBiasSeries(history);
 
     result[htf] = {
       history,
       swings,
       zones: [...fvgs, ...obs, ...brks],
-      biasSeries
+      biasSeries: bias,
+      ema50: sma50 // actually SMA50 used as trend baseline
     };
   }
 
   return result as Record<HTF, HTFData>;
 };
 
-// Binary search HTF index by timestamp
-const getHTFIndex = (
-  ts: number,
-  history: Candle[]
-): number => {
+const getHTFIndex = (ts: number, history: Candle[]): number => {
   let lo = 0;
   let hi = history.length - 1;
   let ans = hi;
@@ -586,160 +520,45 @@ const getHTFIndex = (
   return ans;
 };
 
-// Which HTFs to use as confluence for a given base TF
-const HTF_CONFIG: Record<
-  TimeFrame,
-  { htf: HTF; boost: number; requireBias: boolean }[]
-> = {
-  '1m': [
-    { htf: '5m', boost: 4, requireBias: true },
-    { htf: '15m', boost: 3, requireBias: false }
-  ],
-  '5m': [
-    { htf: '15m', boost: 5, requireBias: true },
-    { htf: '1h', boost: 3, requireBias: false }
-  ],
-  '15m': [
-    { htf: '1h', boost: 6, requireBias: true },
-    { htf: '4h', boost: 3, requireBias: false }
-  ],
-  '30m': [
-    { htf: '1h', boost: 6, requireBias: true },
-    { htf: '4h', boost: 4, requireBias: false }
-  ],
-  '1h': [
-    { htf: '4h', boost: 7, requireBias: true },
-    { htf: '1d', boost: 4, requireBias: false }
-  ],
-  '4h': [{ htf: '1d', boost: 8, requireBias: true }],
-  '1d': []
-};
+// ─── NEW: GLOBAL REGIME ENGINE ───
 
-const getHTFBiasForBaseTF = (
-  htfData: Record<HTF, HTFData> | undefined,
-  baseTF: TimeFrame,
+/**
+ * Determines the global market regime (STRONG_UP, STRONG_DOWN, RANGE)
+ * Uses 4H and 1H data to align trends.
+ */
+const determineTrendRegime = (
+  htfData: Record<HTF, HTFData>,
   currentTs: number
-): 'BULLISH' | 'BEARISH' | 'NEUTRAL' => {
-  if (!htfData) return 'NEUTRAL';
-  const configs = HTF_CONFIG[baseTF];
-  if (!configs || !configs.length) return 'NEUTRAL';
-  const primary = configs[0];
-  const hd = htfData[primary.htf];
-  if (!hd || !hd.biasSeries.length) return 'NEUTRAL';
-  const idx = getHTFIndex(currentTs, hd.history);
-  const bias = hd.biasSeries[idx];
-  return bias ?? 'NEUTRAL';
-};
+): TrendRegime => {
+  const h4 = htfData['4h'];
+  const h1 = htfData['1h'];
 
-// ─── GLOBAL TREND REGIME & DIRECTION CONFIG ───
+  if (!h4 || !h1) return 'NEUTRAL'; // Insufficient data
 
-type TfDirectionConfig = {
-  defaultMode: TradeMode;
-};
+  const idx4 = getHTFIndex(currentTs, h4.history);
+  const idx1 = getHTFIndex(currentTs, h1.history);
 
-const TF_DIRECTION_MATRIX: Partial<Record<string, Partial<Record<TimeFrame, TfDirectionConfig>>>> = {
-  'BTC-USD': {
-    '5m': { defaultMode: 'HYBRID' },
-    '15m': { defaultMode: 'HYBRID' },
-    '30m': { defaultMode: 'TREND' },
-    '1h': { defaultMode: 'TREND' },
-    '4h': { defaultMode: 'TREND' }
-  },
-  'SOL-USD': {
-    '5m': { defaultMode: 'HYBRID' },
-    '15m': { defaultMode: 'HYBRID' },
-    '30m': { defaultMode: 'HYBRID' },
-    '1h': { defaultMode: 'TREND' },
-    '4h': { defaultMode: 'MEAN_REVERSION' }
-  }
-};
+  const bias4 = h4.biasSeries[idx4] ?? 'NEUTRAL';
+  const bias1 = h1.biasSeries[idx1] ?? 'NEUTRAL';
 
-const DEFAULT_TF_DIRECTION: Partial<Record<TimeFrame, TfDirectionConfig>> = {
-  '1m': { defaultMode: 'HYBRID' },
-  '5m': { defaultMode: 'HYBRID' },
-  '15m': { defaultMode: 'HYBRID' },
-  '30m': { defaultMode: 'TREND' },
-  '1h': { defaultMode: 'TREND' },
-  '4h': { defaultMode: 'TREND' },
-  '1d': { defaultMode: 'TREND' }
-};
-
-const htfSmaCache: Record<string, number[]> = {};
-
-const getHtfSma = (key: string, history: Candle[]): number[] => {
-  if (!htfSmaCache[key]) {
-    const closes = history.map(getPrice);
-    htfSmaCache[key] = calculateSMA(closes, 50);
-  }
-  return htfSmaCache[key];
-};
-
-const getDominantBias = (
-  series: ('BULLISH' | 'BEARISH' | 'NEUTRAL')[],
-  idx: number,
-  window: number
-): 'BULLISH' | 'BEARISH' | 'NEUTRAL' => {
-  const start = Math.max(0, idx - window + 1);
-  const slice = series.slice(start, idx + 1);
-  const bull = slice.filter((b) => b === 'BULLISH').length;
-  const bear = slice.filter((b) => b === 'BEARISH').length;
-  if (bull >= bear * 1.4 && bull >= window * 0.5) return 'BULLISH';
-  if (bear >= bull * 1.4 && bear >= window * 0.5) return 'BEARISH';
+  if (bias4 === 'BULLISH' && bias1 === 'BULLISH') return 'STRONG_UP';
+  if (bias4 === 'BEARISH' && bias1 === 'BEARISH') return 'STRONG_DOWN';
+  
+  // Conflicting trends suggest range or transition
+  if (bias4 !== bias1) return 'RANGE';
+  
   return 'NEUTRAL';
 };
 
-const getGlobalTrendRegime = (
-  htfData: Record<HTF, HTFData> | undefined,
-  symbol: string,
-  baseTF: TimeFrame,
-  currentTs: number
-): TrendRegime => {
-  if (!htfData) return 'RANGE';
-
-  const h4 = htfData['4h'];
-  const h1 = htfData['1h'];
-  const h4Bias = h4 ? h4.biasSeries : [];
-  const h1Bias = h1 ? h1.biasSeries : [];
-  if (!h4 || !h1 || !h4Bias.length || !h1Bias.length) return 'RANGE';
-
-  const h4Idx = getHTFIndex(currentTs, h4.history);
-  const h1Idx = getHTFIndex(currentTs, h1.history);
-
-  const h4Dom = getDominantBias(h4Bias, h4Idx, 8);
-  const h1Dom = getDominantBias(h1Bias, h1Idx, 12);
-
-  const h4Sma = getHtfSma(`${symbol}-4h`, h4.history);
-  const h1Sma = getHtfSma(`${symbol}-1h`, h1.history);
-
-  const h4Price = getPrice(h4.history[h4Idx] || { close: 0, high: 0, low: 0, timestamp: 0 });
-  const h1Price = getPrice(h1.history[h1Idx] || { close: 0, high: 0, low: 0, timestamp: 0 });
-  const aboveH4Sma = h4Sma[h4Idx] ? h4Price > h4Sma[h4Idx] : false;
-  const aboveH1Sma = h1Sma[h1Idx] ? h1Price > h1Sma[h1Idx] : false;
-
-  if (h4Dom === 'BULLISH' && h1Dom === 'BULLISH' && aboveH4Sma && aboveH1Sma) return 'STRONG_UP';
-  if (h4Dom === 'BEARISH' && h1Dom === 'BEARISH' && !aboveH4Sma && !aboveH1Sma) return 'STRONG_DOWN';
-
-  return 'RANGE';
-};
-
-const getTradeModeForSymbol = (symbol: string | undefined, tf: TimeFrame): TradeMode => {
-  const symCfg = symbol ? TF_DIRECTION_MATRIX[symbol] : undefined;
-  const tfCfg = symCfg?.[tf] || DEFAULT_TF_DIRECTION[tf];
-  return tfCfg?.defaultMode ?? 'TREND';
-};
-
-const getTrendRelation = (
-  direction: 'LONG' | 'SHORT',
-  regime: TrendRegime,
-  biasDir: 'BULLISH' | 'BEARISH' | 'NEUTRAL'
-): TrendRelation => {
-  if (regime === 'STRONG_UP') return direction === 'LONG' ? 'WITH_TREND' : 'AGAINST_TREND';
-  if (regime === 'STRONG_DOWN') return direction === 'SHORT' ? 'WITH_TREND' : 'AGAINST_TREND';
-  if (biasDir !== 'NEUTRAL') {
-    const withBias = (biasDir === 'BULLISH' && direction === 'LONG') || (biasDir === 'BEARISH' && direction === 'SHORT');
-    return withBias ? 'WITH_TREND' : 'AGAINST_TREND';
-  }
-  return 'FLAT';
+// Which HTFs to use as confluence for a given base TF (existing logic maintained for scoring)
+const HTF_CONFIG: Record<TimeFrame, { htf: HTF; boost: number; requireBias: boolean }[] > = {
+  '1m': [{ htf: '5m', boost: 4, requireBias: true }, { htf: '15m', boost: 3, requireBias: false }],
+  '5m': [{ htf: '15m', boost: 5, requireBias: true }, { htf: '1h', boost: 3, requireBias: false }],
+  '15m': [{ htf: '1h', boost: 6, requireBias: true }, { htf: '4h', boost: 3, requireBias: false }],
+  '30m': [{ htf: '1h', boost: 6, requireBias: true }, { htf: '4h', boost: 4, requireBias: false }],
+  '1h': [{ htf: '4h', boost: 7, requireBias: true }, { htf: '1d', boost: 4, requireBias: false }],
+  '4h': [{ htf: '1d', boost: 8, requireBias: true }],
+  '1d': []
 };
 
 // ─── ZONE TTL & SCORE CONFIG ───
@@ -851,11 +670,6 @@ interface RrBounds {
   max: number;
 }
 
-/**
- * Timeframe & enstrüman bazlı RR bandı.
- * Alt zaman dilimlerinde (1m–15m) scalp işlemler için daha küçük RR'lere izin verir,
- * yüksek TF'lerde ise daha geniş RR aralığı kullanılır.
- */
 const RR_BOUNDS: Record<TimeFrame, RrBounds> = {
   '1m':  { min: 1.0, max: 4.0 },
   '5m':  { min: 1.0, max: 4.0 },
@@ -872,50 +686,10 @@ const getRrBounds = (
   assetType: AssetType
 ): RrBounds => {
   const base = RR_BOUNDS[tf] ?? { min: 1.0, max: 12.0 };
-
-  // Forex scalp'lerinde (1m–15m) küçük RR'li işlemlere izin ver
-  if (
-    assetType === AssetType.FOREX &&
-    (tf === '1m' || tf === '5m' || tf === '15m')
-  ) {
+  if (assetType === AssetType.FOREX && (tf === '1m' || tf === '5m' || tf === '15m')) {
     return { min: 1.0, max: base.max };
   }
-
   return base;
-};
-
-const applyDirectionalRrBounds = (
-  base: RrBounds,
-  tf: TimeFrame,
-  trendRelation: TrendRelation,
-  tradeMode: TradeMode
-): RrBounds => {
-  if (trendRelation !== 'AGAINST_TREND') return base;
-
-  let max = base.max;
-  let min = Math.min(base.min, 1.0);
-
-  if (tf === '1h' || tf === '4h') {
-    max = Math.min(max, tradeMode === 'TREND' ? 2.0 : 2.5);
-  } else if (tf === '30m') {
-    max = Math.min(max, tradeMode === 'TREND' ? 2.3 : 2.7);
-  } else {
-    max = Math.min(max, 3.0);
-  }
-
-  return { min, max };
-};
-
-const adjustTargetRRForTrend = (
-  targetRR: number,
-  tf: TimeFrame,
-  trendRelation: TrendRelation,
-  tradeMode: TradeMode
-): number => {
-  if (trendRelation !== 'AGAINST_TREND') return targetRR;
-  if (tf === '1h' || tf === '4h') return Math.min(targetRR, tradeMode === 'TREND' ? 1.6 : 2.0);
-  if (tf === '30m') return Math.min(targetRR, 2.2);
-  return Math.min(targetRR, 2.5);
 };
 
 // ─── SWEEP / STRUCTURE / VOLUME ───
@@ -930,33 +704,23 @@ const detectLiquiditySweep = (
   );
   const c = history[i];
   if (!c) return null;
-
   const close = getPrice(c);
 
-  const sweptHigh = window.find(
-    (s) => s.type === 'HIGH' && c.high > s.price && close < s.price
-  );
+  const sweptHigh = window.find((s) => s.type === 'HIGH' && c.high > s.price && close < s.price);
   if (sweptHigh) return 'BEAR';
 
-  const sweptLow = window.find(
-    (s) => s.type === 'LOW' && c.low < s.price && close > s.price
-  );
+  const sweptLow = window.find((s) => s.type === 'LOW' && c.low < s.price && close > s.price);
   if (sweptLow) return 'BULL';
 
   return null;
 };
 
-const isMSS = (
-  history: Candle[],
-  i: number,
-  dir: 'BULL' | 'BEAR'
-): boolean => {
+const isMSS = (history: Candle[], i: number, dir: 'BULL' | 'BEAR'): boolean => {
   if (i < 3) return false;
   const c0 = history[i - 3];
   const c1 = history[i - 2];
   const c2 = history[i - 1];
   const c3 = history[i];
-
   if (!c0 || !c1 || !c2 || !c3) return false;
   const c3Close = getPrice(c3);
 
@@ -967,11 +731,7 @@ const isMSS = (
   }
 };
 
-const isVolumeSpikeAtIndex = (
-  idx: number,
-  history: Candle[],
-  lookback = 20
-): boolean => {
+const isVolumeSpikeAtIndex = (idx: number, history: Candle[], lookback = 20): boolean => {
   const c = history[idx];
   if (!c || c.volume == null) return false;
   const start = Math.max(0, idx - lookback);
@@ -981,10 +741,7 @@ const isVolumeSpikeAtIndex = (
   return c.volume > avg * 2.2;
 };
 
-const checkVolumeConfirmation = (
-  idx: number,
-  volumeSpikes: boolean[]
-): boolean => {
+const checkVolumeConfirmation = (idx: number, volumeSpikes: boolean[]): boolean => {
   if (idx < 0) return false;
   if (volumeSpikes[idx]) return true;
   if (idx - 1 >= 0 && volumeSpikes[idx - 1]) return true;
@@ -994,17 +751,11 @@ const checkVolumeConfirmation = (
 
 // ─── SCORING HELPERS ───
 
-const getImpulseScore = (
-  zone: SmartZone,
-  history: Candle[],
-  atr: number
-): number => {
+const getImpulseScore = (zone: SmartZone, history: Candle[], atr: number): number => {
   const c = history[zone.index];
   if (!c) return 0;
-
   const close = getPrice(c);
   const open = c.open ?? close;
-
   const body = Math.abs(close - open);
   const range = Math.max(c.high - c.low, 1e-9);
   const atrSafe = Math.max(atr, 1e-9);
@@ -1012,7 +763,6 @@ const getImpulseScore = (
   const closePos = (close - c.low) / range;
 
   let score = 0;
-
   if (zone.direction === 'BULLISH') {
     if (bodyAtr >= 1.2 && closePos >= 0.7) score += 3;
     else if (bodyAtr >= 0.8 && closePos >= 0.6) score += 2;
@@ -1024,7 +774,6 @@ const getImpulseScore = (
     else if (bodyAtr >= 0.4) score += 1;
     else score -= 2;
   }
-
   return score;
 };
 
@@ -1037,18 +786,14 @@ const getPremiumDiscountScore = (
 ): number => {
   const hd = htfData[htf];
   if (!hd || hd.swings.length < 2) return 0;
-
   const idx = getHTFIndex(currentTs, hd.history);
   const swingsBefore = hd.swings.filter((s) => s.index <= idx);
   if (swingsBefore.length < 2) return 0;
-
   const lastSwing = swingsBefore[swingsBefore.length - 1];
   const prevSwing = swingsBefore[swingsBefore.length - 2];
-
   const low = Math.min(lastSwing.price, prevSwing.price);
   const high = Math.max(lastSwing.price, prevSwing.price);
   if (high <= low) return 0;
-
   const posRaw = (price - low) / (high - low);
   const pos = Math.max(0, Math.min(1, posRaw));
 
@@ -1064,10 +809,8 @@ const getPremiumDiscountScore = (
     else if (pos >= 0.35) score += 0;
     else score -= 2;
   }
-
   return score;
 };
-
 
 const TP_LOOKBACK: Record<TimeFrame, number> = {
   '1m': 300, '5m': 260, '15m': 220, '30m': 180, '1h': 140, '4h': 100, '1d': 80
@@ -1075,15 +818,23 @@ const TP_LOOKBACK: Record<TimeFrame, number> = {
 
 const getTpLookbackBars = (tf: TimeFrame): number => TP_LOOKBACK[tf] ?? 200;
 
-// Renamed from getRrBounds to avoid conflict
+// UPDATED: Adaptive RR Bounds now accounts for Scalp Mode
 const getAdaptiveRrBounds = (
   baseTarget: number,
   zoneType: ZoneKind,
   score?: number,
-  session?: SessionName
+  session?: SessionName,
+  tradeMode: TradeMode = 'TREND'
 ): { minRR: number; maxRR: number } => {
   let minRR = Math.max(2.5, baseTarget * 0.7);
   let maxRR = Math.min(8, baseTarget * 1.6);
+
+  if (tradeMode === 'SCALP') {
+    // Aggressive limit for scalp/counter-trend trades
+    minRR = 1.5;
+    maxRR = 2.5; 
+    return { minRR, maxRR };
+  }
 
   if (zoneType === 'BREAKER') {
     minRR = Math.max(minRR, 3);
@@ -1119,14 +870,14 @@ const snapTpToNearestLiquidity = (
   timeframe: TimeFrame,
   zoneType: ZoneKind,
   score?: number,
-  session?: SessionName
+  session?: SessionName,
+  tradeMode: TradeMode = 'TREND'
 ): { tp: number; rr: number } => {
   const risk = Math.abs(entry - sl);
   if (risk < 1e-9) return { tp: entry, rr: 0 };
 
   const rrTarget = Math.max(0, targetRR);
-  // Use adaptive bounds
-  const { minRR, maxRR } = getAdaptiveRrBounds(rrTarget, zoneType, score, session);
+  const { minRR, maxRR } = getAdaptiveRrBounds(rrTarget, zoneType, score, session, tradeMode);
 
   const lookback = getTpLookbackBars(timeframe);
   const windowStart = Math.max(0, currentIndex - lookback);
@@ -1172,7 +923,7 @@ const snapTpToNearestLiquidity = (
       const candidate = c.high;
       const rr = (candidate - entry) / risk;
       if (!Number.isFinite(rr) || rr < minRR || rr > maxRR) continue;
-
+      
       const rrDiff = Math.abs(rr - rrTarget);
       const distInR = Math.abs(candidate - entry) / risk;
       const compositeScore = rrDiff * 1.0 + distInR * 0.2;
@@ -1209,7 +960,6 @@ const snapTpToNearestLiquidity = (
   const fallbackTp = direction === 'LONG' ? entry + fallbackRr * risk : entry - fallbackRr * risk;
   return { tp: fallbackTp, rr: fallbackRr };
 };
-
 
 // ─── SCORING (BASE SCORE) ───
 
@@ -1255,18 +1005,9 @@ const calculateScore = (
       const primaryConf = configs[0];
       const hdPrimary = htfData[primaryConf.htf];
       const direction: 'LONG' | 'SHORT' = zone.direction === 'BULLISH' ? 'LONG' : 'SHORT';
-      let bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL';
-
-      if (hdPrimary) {
-        const idxP = getHTFIndex(currentTs, hdPrimary.history);
-        bias = hdPrimary.biasSeries[idxP] ?? 'NEUTRAL';
-        if (bias === 'BULLISH') {
-          if (direction === 'LONG') score += 3; else score -= 2;
-        } else if (bias === 'BEARISH') {
-          if (direction === 'SHORT') score += 3; else score -= 2;
-        }
-        score += getPremiumDiscountScore(direction, price, primaryConf.htf, htfData, currentTs);
-      }
+      
+      // Removed simple bias calculation here, relying on Regime Logic in Scanner
+      score += getPremiumDiscountScore(direction, price, primaryConf.htf, htfData, currentTs);
 
       for (const conf of configs) {
         const hd = htfData[conf.htf];
@@ -1279,10 +1020,6 @@ const calculateScore = (
         if (htfZone) {
           score += conf.boost;
           zone.htfConfirmed = true;
-          if (conf.requireBias && bias !== 'NEUTRAL') {
-            const sameDir = (zone.direction === 'BULLISH' && bias === 'BULLISH') || (zone.direction === 'BEARISH' && bias === 'BEARISH');
-            if (sameDir) { score += 2; zone.biasAligned = true; } else { score -= 2; }
-          }
         }
       }
     }
@@ -1293,8 +1030,6 @@ const calculateScore = (
 
 // ─── TRADE LIFECYCLE (BACKTEST) ───
 
-// STRICT MATCHING TO SIGNAL: Removed complex partial logic to ensure
-// execution exactly matches what is seen in the "Signal Dashboard"
 const checkTradeLifecycle = (
   direction: 'LONG' | 'SHORT',
   signal: ExtendedTradeSetup,
@@ -1322,47 +1057,39 @@ const checkTradeLifecycle = (
     const close = c.close ?? c.price ?? entry;
 
     if (direction === 'LONG') {
-      // Check SL hit
       if (low <= sl) {
-        realizedR = -1; // Full loss
+        realizedR = -1;
         status = 'LOST';
         exitPrice = sl;
         exitIndex = i;
         break;
       }
-      // Check TP hit
       if (high >= tp) {
-        realizedR = (tp - entry) / risk; // Full win
+        realizedR = (tp - entry) / risk;
         status = 'WON';
         exitPrice = tp;
         exitIndex = i;
         break;
       }
     } else {
-      // Check SL hit (Short)
       if (high >= sl) {
-        realizedR = -1; // Full loss
+        realizedR = -1;
         status = 'LOST';
         exitPrice = sl;
         exitIndex = i;
         break;
       }
-      // Check TP hit (Short)
       if (low <= tp) {
-        realizedR = (entry - tp) / risk; // Full win
+        realizedR = (entry - tp) / risk;
         status = 'WON';
         exitPrice = tp;
         exitIndex = i;
         break;
       }
     }
-    
-    // Update close price for Expired status if loop ends
     exitPrice = close;
   }
   
-  // If loop finished without SL/TP, it's open/expired. 
-  // We calculate current floating PnL.
   if (status === 'EXPIRED') {
       const finalPrice = exitPrice;
       if (direction === 'LONG') {
@@ -1372,39 +1099,8 @@ const checkTradeLifecycle = (
       }
   }
 
-  return {
-    status,
-    exitPrice,
-    exitIndex,
-    realizedR
-  };
+  return { status, exitPrice, exitIndex, realizedR };
 };
-
-const shouldBlockDirection = (
-  direction: 'LONG' | 'SHORT',
-  timeframe: TimeFrame,
-  regime: TrendRegime,
-  directionalPnL: number
-): boolean => {
-  if (regime === 'RANGE') return false;
-
-  const isHighTf = timeframe === '1h' || timeframe === '4h';
-  const isMidTf = timeframe === '30m';
-
-  // Soft caps to avoid spamming counter-trend losses
-  if (regime === 'STRONG_UP' && direction === 'SHORT') {
-    if (isHighTf && directionalPnL <= -3) return true;
-    if (isMidTf && directionalPnL <= -4) return true;
-  }
-
-  if (regime === 'STRONG_DOWN' && direction === 'LONG') {
-    if (isHighTf && directionalPnL <= -3) return true;
-    if (isMidTf && directionalPnL <= -4) return true;
-  }
-
-  return false;
-};
-
 
 // ─── LIVE SCANNER ───
 
@@ -1418,14 +1114,13 @@ export const analyzeMarket = (
   }
   
   const lastCandle = asset.history[asset.history.length - 1];
+  // Basic staleness check
   if (lastCandle) {
     const now = Date.now();
     const diff = now - lastCandle.timestamp;
     const tfMinutes: Record<string, number> = { '1m': 1, '5m': 5, '15m': 15, '30m': 30, '1h': 60, '4h': 240, '1d': 1440 };
     const durationMs = (tfMinutes[timeframe] || 60) * 60 * 1000;
-    const allowedDelay = durationMs * 3.5;
-    
-    if (diff > allowedDelay) {
+    if (diff > durationMs * 3.5) {
       return { signals: [], technicals: { rsi: null, sma50: 0, atr: 0, adx: 0 } };
     }
   }
@@ -1439,16 +1134,11 @@ export const analyzeMarket = (
   const candle = history[i];
   const price = getPrice(candle);
 
-  const tradeMode = getTradeModeForSymbol(asset.symbol, timeframe);
-  const globalRegime = getGlobalTrendRegime(htfData, asset.symbol || 'UNKNOWN', timeframe, candle.timestamp);
-
   const closes = history.map(getPrice);
   const atrArr = calculateATR(history);
   const rsiArr = calculateRSI(closes);
   const sma50Arr = calculateSMA(closes, 50);
   const adxArr = calculateADX(history);
-
-  const htfData = prepareHTFData(asset, htfDataExternal);
 
   const atr = atrArr[i] || 1;
   const rsi = rsiArr[i] || 50;
@@ -1468,6 +1158,9 @@ export const analyzeMarket = (
   const tfConfig = TF_SCORE_CONFIG[timeframe];
   const minScore = tfConfig?.minScore ?? getMinScore(timeframe);
 
+  // 1. DETERMINE GLOBAL REGIME
+  const regime = determineTrendRegime(htfData, candle.timestamp);
+  
   const signals: ExtendedTradeSetup[] = [];
   applyZoneLifecycle(allZones, history, i, ttlBars);
   const activeZones = allZones.filter((z) => z.active && z.availableFrom <= i);
@@ -1483,16 +1176,18 @@ export const analyzeMarket = (
     let finalScore = baseScore;
     const isLowerTF = timeframe === '1m' || timeframe === '5m' || timeframe === '15m';
 
+    // ADX Filters
     if (isLowerTF) {
       if (adx < 5) finalScore -= 4; else if (adx < 10) finalScore -= 2;
     } else {
       if (adx < 10) finalScore -= 2;
     }
 
+    // RSI Extreme Filters
     if (direction === 'LONG' && rsi > 80 && !sweep) finalScore -= 3;
     if (direction === 'SHORT' && rsi < 20 && !sweep) finalScore -= 3;
 
-        const volumeConfirmed = checkVolumeConfirmation(i, volumeSpikes);
+    const volumeConfirmed = checkVolumeConfirmation(i, volumeSpikes);
     const mss = isMSS(history, i, direction === 'LONG' ? 'BULL' : 'BEAR');
 
     if (tfConfig) {
@@ -1500,88 +1195,51 @@ export const analyzeMarket = (
       finalScore += mss ? tfConfig.mssBonus : tfConfig.mssPenalty;
     }
 
-    // HTF bias'ı tek sefer hesaplayalım
-    const biasDir = getHTFBiasForBaseTF(htfData, timeframe, candle.timestamp);
-    const trendRelation = getTrendRelation(direction, globalRegime, biasDir);
-
-    if (trendRelation === 'WITH_TREND') finalScore += 1;
-    if (trendRelation === 'AGAINST_TREND') {
-      const extraPenalty = tradeMode === 'TREND' ? 4 : 2;
-      finalScore -= extraPenalty;
-      if ((timeframe === '1h' || timeframe === '4h') && globalRegime !== 'RANGE') finalScore -= 2;
-    }
-
-    // ── KRİPTO ÖZEL KONFLUENS KATMANI ──
-    if (asset.type === AssetType.CRYPTO) {
-      const withBias =
-        (biasDir === 'BULLISH' && direction === 'LONG') ||
-        (biasDir === 'BEARISH' && direction === 'SHORT');
-      const againstBias =
-        (biasDir === 'BULLISH' && direction === 'SHORT') ||
-        (biasDir === 'BEARISH' && direction === 'LONG');
-
-      const isLowCryptoTf = timeframe === '5m' || timeframe === '15m';
-      const isMidHighTf = timeframe === '30m' || timeframe === '1h' || timeframe === '4h';
-
-      // 1) 5m–15m kripto gürültü filtresi:
-      // Hem volume yok, hem MSS yok, hem sweep yoksa sinyali biraz cezalandır.
-      if (isLowCryptoTf && !volumeConfirmed && !mss && !sweep) {
-        finalScore -= 3;
-      }
-
-      // 2) Bias'a uyumlu kripto sinyallerini ödüllendir
-      if (withBias) {
-        if (mss) finalScore += 2;           // MSS varsa ekstra
-        if (volumeConfirmed) finalScore += 1; // volume confluence bonus
-      }
-
-      // 3) Bias'a ters kripto sinyallerini sıkı süz
-      if (againstBias) {
-        if (!mss) finalScore -= 3;          // MSS yoksa sert ceza
-        if (!volumeConfirmed) finalScore -= 2;
-
-        // Orta/Yüksek TF'de (30m–4h) bias'a ters trade'ler
-        // ancak çok yüksek skorluysa geçsin.
-        const biasThreshold = isMidHighTf ? minScore + 4 : minScore + 2;
-        if (finalScore < biasThreshold) continue;
+    // ─── CRITICAL: REGIME & TRADE MODE LOGIC ───
+    
+    let tradeMode: TradeMode = 'TREND';
+    const isAgainstTrend = 
+      (regime === 'STRONG_UP' && direction === 'SHORT') || 
+      (regime === 'STRONG_DOWN' && direction === 'LONG');
+    
+    // LAYER 1: HTF (30m, 1h, 4h) Kill-Switch
+    // If we are on a higher timeframe and fighting a STRONG trend, KILL IT.
+    if (!isLowerTF && isAgainstTrend) {
+      // Exception: Only if Extreme Reversal potential (Sweep + MSS + High Score)
+      if (sweep && mss && finalScore >= 28) {
+        tradeMode = 'REVERSAL';
+      } else {
+        continue; // BLOCKED
       }
     }
 
-    // Kripto konfluens ayarlarından SONRA minScore kontrolü
+    // LAYER 2: LTF (1m, 5m, 15m) Scalp Mode
+    // If we are on LTF and fighting a STRONG trend, force SCALP mode.
+    if (isLowerTF && isAgainstTrend) {
+      tradeMode = 'SCALP';
+      finalScore -= 2; // Penalize score slightly for risk
+      // Force higher standard for entry if scalping against trend
+      if (finalScore < minScore + 2) continue;
+    }
+
+    // Base Score Filter
     if (finalScore < minScore) continue;
 
-    // Düşük TF için mevcut bias filtresi aynen kalsın
-    if (isLowerTF) {
-      if (biasDir !== 'NEUTRAL') {
-        const withBiasLower =
-          (biasDir === 'BULLISH' && direction === 'LONG') ||
-          (biasDir === 'BEARISH' && direction === 'SHORT');
-        if (!withBiasLower && finalScore < minScore + 2) continue;
-      }
-    }
-
-    if (trendRelation === 'AGAINST_TREND' && tradeMode === 'TREND') {
-      if (finalScore < minScore + 4) continue;
-    }
-
-    if (trendRelation === 'AGAINST_TREND' && (timeframe === '1h' || timeframe === '4h') && globalRegime !== 'RANGE') {
-      if (finalScore < minScore + 3) continue;
-    }
-
-    const rp = getRiskProfile(timeframe, zone.type);
-    const slAtrMultiplier = rp.slAtrMultiplier;
-    const targetRR = adjustTargetRRForTrend(rp.targetRR, timeframe, trendRelation, tradeMode);
+    const { slAtrMultiplier, targetRR } = getRiskProfile(timeframe, zone.type);
     const sl = direction === 'LONG' ? zone.bottom - atr * slAtrMultiplier : zone.top + atr * slAtrMultiplier;
     const risk = Math.abs(price - sl);
     if (risk < 1e-9) continue;
 
-    const snapped = snapTpToNearestLiquidity(direction, price, sl, targetRR, history, i, swings, timeframe, zone.type, finalScore, session);
+    // Pass tradeMode to snapper to adjust Targets for Scalps
+    const snapped = snapTpToNearestLiquidity(direction, price, sl, targetRR, history, i, swings, timeframe, zone.type, finalScore, session, tradeMode);
     const tp = snapped.tp;
     const rrRaw = snapped.rr;
 
-    const baseBounds = getRrBounds(timeframe, direction, asset.type);
-    const rrBounds = applyDirectionalRrBounds(baseBounds, timeframe, trendRelation, tradeMode);
-    if (rrRaw < rrBounds.min || rrRaw > rrBounds.max) continue;
+    const rrBounds = getRrBounds(timeframe, direction, asset.type);
+    // Relaxed lower bound check for scalps (allow 1.5R)
+    const activeMinRR = tradeMode === 'SCALP' ? 1.5 : rrBounds.min;
+    
+    if (rrRaw < activeMinRR || rrRaw > rrBounds.max) continue;
 
     let quality: SignalQuality;
     if (finalScore >= 28) quality = 'ELITE';
@@ -1592,11 +1250,11 @@ export const analyzeMarket = (
     const rrRounded = Number(rrRaw.toFixed(2));
     const scoreRounded = Number(finalScore.toFixed(1));
 
-      signals.push({
-        id: `LIVE-${zone.id}-${candle.timestamp}`,
-        symbol: asset.symbol || 'UNKNOWN',
-        setupType: `${zone.type}[${session}]${zone.htfConfirmed ? '+HTF' : ''}`,
-        direction,
+    signals.push({
+      id: `LIVE-${zone.id}-${candle.timestamp}`,
+      symbol: asset.symbol || 'UNKNOWN',
+      setupType: `${zone.type}[${session}]`,
+      direction,
       entry: Number(price.toFixed(precision)),
       stopLoss: Number(sl.toFixed(precision)),
       takeProfit: Number(tp.toFixed(precision)),
@@ -1604,28 +1262,27 @@ export const analyzeMarket = (
       timeframe,
       status: 'PENDING',
       quality,
-        rr: rrRounded,
-        plannedRR: rrRounded,
-        score: scoreRounded,
-        zoneId: zone.id,
-        session,
-        sweep: sweep ?? null,
-        tradeMode,
-        trendRelation,
-        globalRegime
-      });
-    }
+      rr: rrRounded,
+      plannedRR: rrRounded,
+      score: scoreRounded,
+      zoneId: zone.id,
+      session,
+      sweep: sweep ?? null,
+      tradeMode, // Expose to bot
+      regime     // Expose for logs
+    });
+  }
 
   return { signals: signals.sort((a, b) => (b.score ?? 0) - (a.score ?? 0)), technicals: { rsi, sma50, atr, adx } };
 };
 
-// ─── BACKTEST (STRICT CONCURRENCY) ───
+// ─── BACKTEST (WITH REGIME LOGIC) ───
 
 export const runBacktest = (
   asset: MarketData,
   timeframe: TimeFrame,
   qualityFilter: SignalQuality | 'ALL' = 'ALL',
-  useConcurrency: boolean = true // Toggle for Cool-down logic
+  useConcurrency: boolean = true
 ): BacktestResult => {
   const history = (asset.history as any[]).map((h) => ({
     timestamp: h.timestamp, open: h.open, high: h.high, low: h.low, close: h.close ?? h.price, price: h.price, volume: h.volume
@@ -1655,19 +1312,14 @@ export const runBacktest = (
 
   const trades: ExtendedTradeSetup[] = [];
   
-  // Equity & Drawdown Variables
   let equity = 0;
   let peakEquity = 0;
-  let maxDrawdown = 0; // Positive number representing the drop
-
+  let maxDrawdown = 0;
   let wins = 0;
   let losses = 0;
   let netPnL = 0;
   let grossProfitR = 0;
   let grossLossR = 0;
-
-  let longPnL = 0;
-  let shortPnL = 0;
   
   let lastExitIndex = -1;
 
@@ -1678,23 +1330,22 @@ export const runBacktest = (
     const entryIndex = i + 1;
     const triggerCandle = history[triggerIndex];
     const entryCandle = history[entryIndex];
-    
-    // REALITY: Entry is at Open of the candle AFTER the signal
     const entryPrice = entryCandle.open ?? getPrice(entryCandle);
     const atr = atrArr[entryIndex] || atrArr[triggerIndex] || 1;
     const session = getSession(triggerCandle.timestamp);
     const sweep = detectLiquiditySweep(history, swings, triggerIndex);
     const rsi = rsiArr[triggerIndex] || 50;
     const adx = adxArr[triggerIndex] || 0;
-    const tradeMode = getTradeModeForSymbol(asset.symbol, timeframe);
-    const globalRegime = getGlobalTrendRegime(htfData, asset.symbol || 'UNKNOWN', timeframe, triggerCandle.timestamp);
 
     applyZoneLifecycle(allZones, history, triggerIndex, ttlBars);
+
+    // 1. DETERMINE REGIME
+    const regime = determineTrendRegime(htfData, triggerCandle.timestamp);
 
     const activeZones = allZones.filter((z) => z.active && z.availableFrom <= triggerIndex);
     if (!activeZones.length) continue;
 
-    const candidates: { zone: SmartZone; finalScore: number; biasDir: 'BULLISH' | 'BEARISH' | 'NEUTRAL'; trendRelation: TrendRelation; }[] = [];
+    const candidates: { zone: SmartZone; finalScore: number; tradeMode: TradeMode }[] = [];
 
     for (const zone of activeZones) {
       const inZone = zone.direction === 'BULLISH' ? triggerCandle.low <= zone.top && triggerCandle.high >= zone.bottom : triggerCandle.high >= zone.bottom && triggerCandle.low <= zone.top;
@@ -1713,7 +1364,7 @@ export const runBacktest = (
       if (direction === 'LONG' && rsi > 80 && !sweep) finalScore -= 3;
       if (direction === 'SHORT' && rsi < 20 && !sweep) finalScore -= 3;
 
-            const volumeConfirmed = checkVolumeConfirmation(triggerIndex, volumeSpikes);
+      const volumeConfirmed = checkVolumeConfirmation(triggerIndex, volumeSpikes);
       const mss = isMSS(history, triggerIndex, direction === 'LONG' ? 'BULL' : 'BEAR');
 
       if (tfConfig) {
@@ -1721,97 +1372,47 @@ export const runBacktest = (
         finalScore += mss ? tfConfig.mssBonus : tfConfig.mssPenalty;
       }
 
-      // HTF bias'ı tek sefer hesapla
-      const biasDir = getHTFBiasForBaseTF(htfData, timeframe, triggerCandle.timestamp);
-      const trendRelation = getTrendRelation(direction, globalRegime, biasDir);
-
-      const directionalPnL = direction === 'LONG' ? longPnL : shortPnL;
-      if (shouldBlockDirection(direction, timeframe, globalRegime, directionalPnL)) {
-        continue;
+      // ─── BACKTEST: REGIME LOGIC ───
+      let tradeMode: TradeMode = 'TREND';
+      const isAgainstTrend = 
+        (regime === 'STRONG_UP' && direction === 'SHORT') || 
+        (regime === 'STRONG_DOWN' && direction === 'LONG');
+      
+      // HTF Kill Switch
+      if (!isLowerTF && isAgainstTrend) {
+        if (sweep && mss && finalScore >= 28) tradeMode = 'REVERSAL';
+        else continue; 
       }
 
-      if (trendRelation === 'WITH_TREND') finalScore += 1;
-      if (trendRelation === 'AGAINST_TREND') {
-        const extraPenalty = tradeMode === 'TREND' ? 4 : 2;
-        finalScore -= extraPenalty;
-        if ((timeframe === '1h' || timeframe === '4h') && globalRegime !== 'RANGE') finalScore -= 2;
+      // LTF Scalp Mode
+      if (isLowerTF && isAgainstTrend) {
+        tradeMode = 'SCALP';
+        finalScore -= 2;
+        if (finalScore < minScore + 2) continue;
       }
 
-      // ── KRİPTO ÖZEL KONFLUENS KATMANI (BACKTEST) ──
-      if (asset.type === AssetType.CRYPTO) {
-        const withBias =
-          (biasDir === 'BULLISH' && direction === 'LONG') ||
-          (biasDir === 'BEARISH' && direction === 'SHORT');
-        const againstBias =
-          (biasDir === 'BULLISH' && direction === 'SHORT') ||
-          (biasDir === 'BEARISH' && direction === 'LONG');
-
-        const isLowCryptoTf = timeframe === '5m' || timeframe === '15m';
-        const isMidHighTf = timeframe === '30m' || timeframe === '1h' || timeframe === '4h';
-
-        // 1) 5m–15m kripto gürültü filtresi
-        if (isLowCryptoTf && !volumeConfirmed && !mss && !sweep) {
-          finalScore -= 3;
-        }
-
-        // 2) Bias'a uyumlu işlemler ödüllensin
-        if (withBias) {
-          if (mss) finalScore += 2;
-          if (volumeConfirmed) finalScore += 1;
-        }
-
-        // 3) Bias'a ters işlemler sıkı süzülsün
-        if (againstBias) {
-          if (!mss) finalScore -= 3;
-          if (!volumeConfirmed) finalScore -= 2;
-
-          const biasThreshold = isMidHighTf ? minScore + 4 : minScore + 2;
-          if (finalScore < biasThreshold) continue;
-        }
-      }
-
-      // Global minScore check her şeyden sonra
       if (finalScore < minScore) continue;
-
-      // Düşük TF bias filtresi aynen devam
-      if (isLowerTF) {
-        if (biasDir !== 'NEUTRAL') {
-          const withBiasLower =
-            (biasDir === 'BULLISH' && direction === 'LONG') ||
-            (biasDir === 'BEARISH' && direction === 'SHORT');
-          if (!withBiasLower && finalScore < minScore + 2) continue;
-        }
-      }
-
-      if (trendRelation === 'AGAINST_TREND' && tradeMode === 'TREND') {
-        if (finalScore < minScore + 4) continue;
-      }
-
-      if (trendRelation === 'AGAINST_TREND' && (timeframe === '1h' || timeframe === '4h') && globalRegime !== 'RANGE') {
-        if (finalScore < minScore + 3) continue;
-      }
-
-      candidates.push({ zone, finalScore, biasDir, trendRelation });
+      candidates.push({ zone, finalScore, tradeMode });
     }
 
     if (!candidates.length) continue;
     candidates.sort((a, b) => b.finalScore - a.finalScore || b.zone.index - a.zone.index);
 
-    for (const { zone, finalScore, biasDir, trendRelation } of candidates) {
+    for (const { zone, finalScore, tradeMode } of candidates) {
       const direction: 'LONG' | 'SHORT' = zone.direction === 'BULLISH' ? 'LONG' : 'SHORT';
-      const rp = getRiskProfile(timeframe, zone.type);
-      const slAtrMultiplier = rp.slAtrMultiplier;
-      let targetRR = adjustTargetRRForTrend(rp.targetRR, timeframe, trendRelation, tradeMode);
+      const { slAtrMultiplier, targetRR } = getRiskProfile(timeframe, zone.type);
       const sl = direction === 'LONG' ? zone.bottom - atr * slAtrMultiplier : zone.top + atr * slAtrMultiplier;
       const risk = Math.abs(entryPrice - sl);
       if (risk < 1e-9) continue;
 
-      const snapped = snapTpToNearestLiquidity(direction, entryPrice, sl, targetRR, history, entryIndex, swings, timeframe, zone.type, finalScore, session);
+      // Pass tradeMode to snapper
+      const snapped = snapTpToNearestLiquidity(direction, entryPrice, sl, targetRR, history, entryIndex, swings, timeframe, zone.type, finalScore, session, tradeMode);
       const tp = snapped.tp;
       const rrRaw = snapped.rr;
-      const baseBounds = getRrBounds(timeframe, direction, asset.type);
-      const rrBounds = applyDirectionalRrBounds(baseBounds, timeframe, trendRelation, tradeMode);
-      if (rrRaw < rrBounds.min || rrRaw > rrBounds.max) continue;
+      
+      const rrBounds = getRrBounds(timeframe, direction, asset.type);
+      const activeMinRR = tradeMode === 'SCALP' ? 1.5 : rrBounds.min;
+      if (rrRaw < activeMinRR || rrRaw > rrBounds.max) continue;
 
       const volumeConfirmed = checkVolumeConfirmation(triggerIndex, volumeSpikes);
       const mss = isMSS(history, triggerIndex, direction === 'LONG' ? 'BULL' : 'BEAR');
@@ -1832,7 +1433,7 @@ export const runBacktest = (
       const signal: ExtendedTradeSetup = {
         id: `BT-${zone.id}-${triggerCandle.timestamp}`,
         symbol: asset.symbol || 'UNKNOWN',
-        setupType: `${zone.type}[${session}]${zone.htfConfirmed ? '+HTF' : ''}`,
+        setupType: `${zone.type}[${session}]`,
         direction,
         entry: Number(entryPrice.toFixed(precision)),
         stopLoss: Number(sl.toFixed(precision)),
@@ -1848,12 +1449,9 @@ export const runBacktest = (
         session,
         sweep: sweep ?? null,
         tradeMode,
-        trendRelation,
-        globalRegime,
-        directionBlockReason: null
+        regime
       };
 
-      // REALITY: Trade includes the entry candle itself because high volatility can stop us out immediately at open
       const futureHistory = history.slice(entryIndex);
       if (!futureHistory.length) continue;
 
@@ -1861,19 +1459,14 @@ export const runBacktest = (
 
       if (result.status === 'WON' || result.status === 'LOST') {
         const rawR = result.realizedR;
-        const slippage = 0.02; // Slippage approximation
-        const fee = 0.04;      // Taker Fee approximation
+        const slippage = 0.02;
+        const fee = 0.04; 
         const tradeR = rawR - (slippage + fee); 
 
-        // Update Equity & DD
         equity += tradeR;
-        if (equity > peakEquity) {
-            peakEquity = equity;
-        }
-        const currentDD = peakEquity - equity; // Always positive
-        if (currentDD > maxDrawdown) {
-            maxDrawdown = currentDD;
-        }
+        if (equity > peakEquity) peakEquity = equity;
+        const currentDD = peakEquity - equity;
+        if (currentDD > maxDrawdown) maxDrawdown = currentDD;
 
         if (tradeR > 0) {
           wins++;
@@ -1884,11 +1477,9 @@ export const runBacktest = (
         }
 
         netPnL += tradeR;
-
-        if (direction === 'LONG') longPnL += tradeR; else shortPnL += tradeR;
-
+        
         const realizedRounded = Number(tradeR.toFixed(2));
-        const duration = (result.exitIndex + 1);
+        const duration = (result.exitIndex + 1); 
 
         trades.push({
           ...signal,
@@ -1905,8 +1496,6 @@ export const runBacktest = (
         });
 
         if (useConcurrency) {
-            // result.exitIndex is relative to the futureHistory slice (which started at entryIndex)
-            // So if exitIndex is 0 (immediate exit on entry candle), absolute index is entryIndex.
             lastExitIndex = entryIndex + result.exitIndex;
         }
       }
